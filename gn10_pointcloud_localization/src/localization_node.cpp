@@ -1,31 +1,38 @@
 #include "gn10_pointcloud_localization/localization_node.hpp"
-#include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
+
+#include <tf2_ros/transform_broadcaster.h>
+
+#include <cmath>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
-#include <tf2_ros/transform_broadcaster.h>
-#include <cmath>
 #include <vector>
+
+#include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
 
 void uploadFieldMapToGPU(const std::vector<FieldObject>& host_map);
 bool launchFieldSDFMatcher(
-    const float* d_obstacle_cloud, int num_points,
+    const float* d_obstacle_cloud,
+    int num_points,
     const PoseCandidate& base_pose,
-    float range_xy, float step_xy,
-    float range_yaw, float step_yaw,
+    float range_xy,
+    float step_xy,
+    float range_yaw,
+    float step_yaw,
     float max_dist_thresh,
     PoseCandidate& out_best_pose,
     float& out_best_cost
 );
 
 // Python スクリプトと完全に一致させたフィールドマップ構築関数
-std::vector<FieldObject> createNHK2026FieldMap() {
+std::vector<FieldObject> createNHK2026FieldMap()
+{
     std::vector<FieldObject> map;
 
     // 1. 外壁 (10.5m x 11.4m, H=0.15m) -> X: [-5.25, 5.25], Y: [-5.7, 5.7]
-    map.push_back({BOX, 0.000f,  5.700f, 0.000f, 0.150f, 5.250f, 0.050f}); // 上壁
-    map.push_back({BOX, 0.000f, -5.700f, 0.000f, 0.150f, 5.250f, 0.050f}); // 下壁
-    map.push_back({BOX, -5.250f, 0.000f, 0.000f, 0.150f, 0.050f, 5.700f}); // 左壁
-    map.push_back({BOX,  5.250f, 0.000f, 0.000f, 0.150f, 0.050f, 5.700f}); // 右壁
+    map.push_back({BOX, 0.000f, 5.700f, 0.000f, 0.150f, 5.250f, 0.050f});   // 上壁
+    map.push_back({BOX, 0.000f, -5.700f, 0.000f, 0.150f, 5.250f, 0.050f});  // 下壁
+    map.push_back({BOX, -5.250f, 0.000f, 0.000f, 0.150f, 0.050f, 5.700f});  // 左壁
+    map.push_back({BOX, 5.250f, 0.000f, 0.000f, 0.150f, 0.050f, 5.700f});   // 右壁
 
     // 2. 教壇 (X: -5.25~5.25m, Y: -0.3~0.3m, H: 0.2m)
     map.push_back({BOX, 0.000f, 0.000f, 0.000f, 0.200f, 5.250f, 0.300f});
@@ -34,11 +41,11 @@ std::vector<FieldObject> createNHK2026FieldMap() {
     struct ObjectSpec {
         ObjectType type;
         float x, y;
-        float param1, param2; // CYL: radius, 0 / BOX: half_w, half_d
+        float param1, param2;  // CYL: radius, 0 / BOX: half_w, half_d
         float z_min, z_max;
     };
 
-    const float b1_r = 0.273f / 2.0f; // バケツ半径 0.1365m
+    const float b1_r = 0.273f / 2.0f;  // バケツ半径 0.1365m
     std::vector<ObjectSpec> base_specs;
 
     // バケツ① (φ0.273 x H0.255)
@@ -63,7 +70,9 @@ std::vector<FieldObject> createNHK2026FieldMap() {
         {-4.750f, 1.105f}
     };
     for (int i = 0; i < 4; ++i) {
-        base_specs.push_back({BOX, desk_coords[i][0], desk_coords[i][1], 0.325f, 0.225f, 0.000f, 0.760f});
+        base_specs.push_back(
+            {BOX, desk_coords[i][0], desk_coords[i][1], 0.325f, 0.225f, 0.000f, 0.760f}
+        );
     }
 
     // 旗 (土台 0.39x0.39xH0.18 + 支柱 φ0.06 x H3.0)
@@ -73,69 +82,69 @@ std::vector<FieldObject> createNHK2026FieldMap() {
     // 領域A (+Y) と 領域B (-Y) に対称展開
     for (const auto& spec : base_specs) {
         for (float y_sign : {1.0f, -1.0f}) {
-            map.push_back({
-                spec.type,
-                spec.x,
-                spec.y * y_sign,
-                spec.z_min,
-                spec.z_max,
-                spec.param1,
-                spec.param2
-            });
+            map.push_back(
+                {spec.type,
+                 spec.x,
+                 spec.y * y_sign,
+                 spec.z_min,
+                 spec.z_max,
+                 spec.param1,
+                 spec.param2}
+            );
         }
     }
 
     return map;
 }
 
-LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_points_(200000) {
-    tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
-    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_points_(200000)
+{
+    // TF
+    tf_buffer_      = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+    tf_listener_    = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
-
-    // Livox LIDAR トピック
+    // サブスクライバ
     sub_cloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "/livox/lidar", rclcpp::SensorDataQoS(),
-        std::bind(&LocalizationNode::cloudCallback, this, std::placeholders::_1));
-
-    // Livox 内部 IMU トピックを追加
+        "/livox/lidar",
+        rclcpp::SensorDataQoS(),
+        std::bind(&LocalizationNode::cloudCallback, this, std::placeholders::_1)
+    );
     sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
-        "/livox/imu", rclcpp::SensorDataQoS(),
-        std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1));
-
-    sub_cloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "/livox/lidar", rclcpp::SensorDataQoS(),
-        std::bind(&LocalizationNode::cloudCallback, this, std::placeholders::_1));
-
-    pub_ground_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/ground_cloud", 10);
+        "/livox/imu",
+        rclcpp::SensorDataQoS(),
+        std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1)
+    );
+    // パブリッシャ
+    pub_ground_   = this->create_publisher<sensor_msgs::msg::PointCloud2>("/ground_cloud", 10);
     pub_obstacle_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/obstacle_cloud", 10);
-    pub_platform_pose_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/platform_constraint", 10);
-
-    pub_map_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/field_map_markers", rclcpp::QoS(1).transient_local());
-
+    pub_platform_pose_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        "/platform_constraint", 10
+    );
+    pub_map_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+        "/field_map_markers", rclcpp::QoS(1).transient_local()
+    );
     // 1秒周期でマップマーカーを配信
     marker_timer_ = this->create_wall_timer(
-        std::chrono::seconds(1),
-        std::bind(&LocalizationNode::publishFieldMapMarkers, this)
+        std::chrono::seconds(1), std::bind(&LocalizationNode::publishFieldMapMarkers, this)
     );
-
+    // CUDA メモリ確保
     cudaMalloc(&d_in_, max_points_ * 3 * sizeof(float));
     cudaMalloc(&d_ground_, max_points_ * 3 * sizeof(float));
     cudaMalloc(&d_obstacle_, max_points_ * 3 * sizeof(float));
     cudaMalloc(&d_ground_count_, sizeof(int));
     cudaMalloc(&d_obstacle_count_, sizeof(int));
     cudaMalloc(&d_transform_, 12 * sizeof(float));
+    // Pinned Memory の使用で転送を高速化
+    cudaMallocHost(&h_in_, max_points_ * 3 * sizeof(float));
+    cudaMallocHost(&h_out_ground_, max_points_ * 3 * sizeof(float));
+    cudaMallocHost(&h_out_obstacle_, max_points_ * 3 * sizeof(float));
 
-    h_in_ = new float[max_points_ * 3];
-    h_out_ground_ = new float[max_points_ * 3];
-    h_out_obstacle_ = new float[max_points_ * 3];
+    // マップ保持と転送（メンバ変数に保存して再構築を防ぐ）
+    map_objects_ = createNHK2026FieldMap();
+    uploadFieldMapToGPU(map_objects_);
 
-    // 新しいマップ作成関数の呼び出し
-    std::vector<FieldObject> map_objects = createNHK2026FieldMap();
-    uploadFieldMapToGPU(map_objects);
-
-    last_known_pose_ = {-4.0f, -4.0f, -1.5708f}; // 初期位置を左下隅に設定
-    predicted_pose_ = last_known_pose_;           // ★ IMU予測姿勢も同じ初期位置で同期！
+    last_known_pose_ = {-4.0f, -4.0f, -1.5708f};  // 初期位置を左下隅に設定
+    predicted_pose_  = last_known_pose_;          // ★ IMU予測姿勢も同じ初期位置で同期！
 
     is_initialized_ = false;
 
@@ -143,20 +152,35 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_point
     publishFieldMapMarkers();
 }
 
-LocalizationNode::~LocalizationNode() {
-    cudaFree(d_in_); cudaFree(d_ground_); cudaFree(d_obstacle_);
-    cudaFree(d_ground_count_); cudaFree(d_obstacle_count_); cudaFree(d_transform_);
-    delete[] h_in_; delete[] h_out_ground_; delete[] h_out_obstacle_;
+LocalizationNode::~LocalizationNode()
+{
+    cudaFree(d_in_);
+    cudaFree(d_ground_);
+    cudaFree(d_obstacle_);
+    cudaFree(d_ground_count_);
+    cudaFree(d_obstacle_count_);
+    cudaFree(d_transform_);
+    cudaFreeHost(h_in_);
+    cudaFreeHost(h_out_ground_);
+    cudaFreeHost(h_out_obstacle_);
 }
 
-void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+{
     int num_points = msg->width * msg->height;
     if (num_points == 0 || num_points > max_points_) return;
 
     geometry_msgs::msg::TransformStamped transform_stamped;
     try {
-        transform_stamped = tf_buffer_->lookupTransform("base_link", msg->header.frame_id, msg->header.stamp, rclcpp::Duration::from_seconds(0.03));
-    } catch (const tf2::TransformException &ex) { return; }
+        transform_stamped = tf_buffer_->lookupTransform(
+            "base_link",
+            msg->header.frame_id,
+            msg->header.stamp,
+            rclcpp::Duration::from_seconds(0.03)
+        );
+    } catch (const tf2::TransformException& ex) {
+        return;
+    }
 
     Eigen::Affine3d eigen_tf = tf2::transformToEigen(transform_stamped);
     float h_transform[12];
@@ -164,7 +188,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         for (int c = 0; c < 4; ++c)
             h_transform[r * 4 + c] = static_cast<float>(eigen_tf.matrix()(r, c));
 
-    sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x"), iter_y(*msg, "y"), iter_z(*msg, "z");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x"), iter_y(*msg, "y"),
+        iter_z(*msg, "z");
     int valid_pts = 0;
     for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
         if (std::isnan(*iter_x)) continue;
@@ -178,9 +203,22 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     cudaMemcpy(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice);
 
     int h_ground_count = 0, h_obstacle_count = 0;
-    launchGroundFilter(d_in_, d_ground_, d_obstacle_, d_transform_, valid_pts,
-                       12.0f, 0.6f, 0.0f, 1.2f, 0.08f,
-                       d_ground_count_, d_obstacle_count_, &h_ground_count, &h_obstacle_count);
+    launchGroundFilter(
+        d_in_,
+        d_ground_,
+        d_obstacle_,
+        d_transform_,
+        valid_pts,
+        12.0f,
+        0.6f,
+        0.0f,
+        1.2f,
+        0.08f,
+        d_ground_count_,
+        d_obstacle_count_,
+        &h_ground_count,
+        &h_obstacle_count
+    );
 
     if (h_obstacle_count > 50) {
         PoseCandidate search_base_pose;
@@ -195,89 +233,117 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
         // IMU予測により起点精度が高いため、探索範囲(range)を小さく絞り込んで計算速度を向上させる
         bool matched = launchFieldSDFMatcher(
-            d_obstacle_, h_obstacle_count,
+            d_obstacle_,
+            h_obstacle_count,
             search_base_pose,
-            0.30f, 0.03f,
-            0.15f, 0.02f,
-            0.20f,          // max_dist_thresh
-            best_pose, best_cost
+            0.30f,
+            0.03f,
+            0.15f,
+            0.02f,
+            0.20f,  // max_dist_thresh
+            best_pose,
+            best_cost
         );
 
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        RCLCPP_INFO_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            1000,
             "[SDF Match] points: %d, best_cost: %.4f, pose: (%.2f, %.2f, %.2f)",
-            h_obstacle_count, best_cost, best_pose.x, best_pose.y, best_pose.yaw);
+            h_obstacle_count,
+            best_cost,
+            best_pose.x,
+            best_pose.y,
+            best_pose.yaw
+        );
 
         if (matched && best_cost < 0.20f) {
             {
                 std::lock_guard<std::mutex> lock(pose_mutex_);
                 // 正確な SDF Match 結果で IMU 予測姿勢のドリフトを補正
                 last_known_pose_ = best_pose;
-                predicted_pose_ = best_pose; 
+                predicted_pose_  = best_pose;
             }
 
             // 1. Topic Publish
             auto pose_msg = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
-            pose_msg->header.stamp = msg->header.stamp;
-            pose_msg->header.frame_id = "map";
-            pose_msg->pose.pose.position.x = best_pose.x;
-            pose_msg->pose.pose.position.y = best_pose.y;
-            pose_msg->pose.pose.position.z = 0.0f;
+            pose_msg->header.stamp            = msg->header.stamp;
+            pose_msg->header.frame_id         = "map";
+            pose_msg->pose.pose.position.x    = best_pose.x;
+            pose_msg->pose.pose.position.y    = best_pose.y;
+            pose_msg->pose.pose.position.z    = 0.0f;
             pose_msg->pose.pose.orientation.z = std::sin(best_pose.yaw / 2.0f);
             pose_msg->pose.pose.orientation.w = std::cos(best_pose.yaw / 2.0f);
-            pose_msg->pose.covariance[0]  = 0.005;
-            pose_msg->pose.covariance[7]  = 0.005;
-            pose_msg->pose.covariance[35] = 0.002;
+            pose_msg->pose.covariance[0]      = 0.005;
+            pose_msg->pose.covariance[7]      = 0.005;
+            pose_msg->pose.covariance[35]     = 0.002;
             pub_platform_pose_->publish(std::move(pose_msg));
 
             // 2. TF (map -> base_link) ブロードキャスト
             geometry_msgs::msg::TransformStamped tf_msg;
-            tf_msg.header.stamp = msg->header.stamp;
-            tf_msg.header.frame_id = "map";
-            tf_msg.child_frame_id = "base_link";
+            tf_msg.header.stamp            = msg->header.stamp;
+            tf_msg.header.frame_id         = "map";
+            tf_msg.child_frame_id          = "base_link";
             tf_msg.transform.translation.x = best_pose.x;
             tf_msg.transform.translation.y = best_pose.y;
             tf_msg.transform.translation.z = 0.0f;
-            tf_msg.transform.rotation.z = std::sin(best_pose.yaw / 2.0f);
-            tf_msg.transform.rotation.w = std::cos(best_pose.yaw / 2.0f);
+            tf_msg.transform.rotation.z    = std::sin(best_pose.yaw / 2.0f);
+            tf_msg.transform.rotation.w    = std::cos(best_pose.yaw / 2.0f);
             tf_broadcaster_->sendTransform(tf_msg);
         }
     }
 
-    cudaMemcpy(h_out_ground_, d_ground_, h_ground_count * 3 * sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_out_obstacle_, d_obstacle_, h_obstacle_count * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(
+        h_out_ground_, d_ground_, h_ground_count * 3 * sizeof(float), cudaMemcpyDeviceToHost
+    );
+    cudaMemcpy(
+        h_out_obstacle_, d_obstacle_, h_obstacle_count * 3 * sizeof(float), cudaMemcpyDeviceToHost
+    );
 
     std_msgs::msg::Header out_header = msg->header;
-    out_header.frame_id = "base_link";
+    out_header.frame_id              = "base_link";
     publishCloud(pub_ground_, out_header, h_out_ground_, h_ground_count);
     publishCloud(pub_obstacle_, out_header, h_out_obstacle_, h_obstacle_count);
 }
 
-void LocalizationNode::publishCloud(const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub, const std_msgs::msg::Header& header, const float* data, int count) {
-    auto out_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
-    out_msg->header = header; out_msg->height = 1; out_msg->width = count;
-    out_msg->is_dense = true; out_msg->is_bigendian = false;
+void LocalizationNode::publishCloud(
+    const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub,
+    const std_msgs::msg::Header& header,
+    const float* data,
+    int count
+)
+{
+    auto out_msg          = std::make_unique<sensor_msgs::msg::PointCloud2>();
+    out_msg->header       = header;
+    out_msg->height       = 1;
+    out_msg->width        = count;
+    out_msg->is_dense     = true;
+    out_msg->is_bigendian = false;
     sensor_msgs::PointCloud2Modifier modifier(*out_msg);
     modifier.setPointCloud2FieldsByString(1, "xyz");
     modifier.resize(count);
-    sensor_msgs::PointCloud2Iterator<float> iter_x(*out_msg, "x"), iter_y(*out_msg, "y"), iter_z(*out_msg, "z");
+    sensor_msgs::PointCloud2Iterator<float> iter_x(*out_msg, "x"), iter_y(*out_msg, "y"),
+        iter_z(*out_msg, "z");
     for (int i = 0; i < count; ++i, ++iter_x, ++iter_y, ++iter_z) {
-        *iter_x = data[i * 3 + 0]; *iter_y = data[i * 3 + 1]; *iter_z = data[i * 3 + 2];
+        *iter_x = data[i * 3 + 0];
+        *iter_y = data[i * 3 + 1];
+        *iter_z = data[i * 3 + 2];
     }
     pub->publish(std::move(out_msg));
 }
 
-void LocalizationNode::publishFieldMapMarkers() {
-    auto map_objects = createNHK2026FieldMap();
+void LocalizationNode::publishFieldMapMarkers()
+{
     visualization_msgs::msg::MarkerArray marker_array;
 
     int id = 0;
-    for (const auto& obj : map_objects) {
+    for (const auto& obj : map_objects_) {
         visualization_msgs::msg::Marker marker;
         marker.header.frame_id = "map";
-        marker.header.stamp = this->now();
-        marker.ns = "field_objects";
-        marker.id = id++;
-        marker.action = visualization_msgs::msg::Marker::ADD;
+        marker.header.stamp    = this->now();
+        marker.ns              = "field_objects";
+        marker.id              = id++;
+        marker.action          = visualization_msgs::msg::Marker::ADD;
 
         // 色・透過度の共通設定 (緑系の半透明)
         marker.color.r = 0.1f;
@@ -286,9 +352,9 @@ void LocalizationNode::publishFieldMapMarkers() {
         marker.color.a = 0.6f;
 
         if (obj.type == BOX) {
-            marker.type = visualization_msgs::msg::Marker::CUBE;
-            float width = obj.param1 * 2.0f;
-            float depth = obj.param2 * 2.0f;
+            marker.type  = visualization_msgs::msg::Marker::CUBE;
+            float width  = obj.param1 * 2.0f;
+            float depth  = obj.param2 * 2.0f;
             float height = obj.z_max - obj.z_min;
 
             // obj.x -> obj.center_x, obj.y -> obj.center_y に修正
@@ -301,7 +367,7 @@ void LocalizationNode::publishFieldMapMarkers() {
             marker.scale.z = height;
 
         } else if (obj.type == CYLINDER) {
-            marker.type = visualization_msgs::msg::Marker::CYLINDER;
+            marker.type  = visualization_msgs::msg::Marker::CYLINDER;
             float radius = obj.param1;
             float height = obj.z_max - obj.z_min;
 
@@ -326,38 +392,40 @@ void LocalizationNode::publishFieldMapMarkers() {
     pub_map_markers_->publish(marker_array);
 }
 
-void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
+void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
+{
     std::lock_guard<std::mutex> lock(pose_mutex_);
 
     // 1. base_link -> livox_frame (または msg->header.frame_id) の回転TFを取得
     geometry_msgs::msg::TransformStamped transform_stamped;
     try {
         transform_stamped = tf_buffer_->lookupTransform(
-            "base_link", msg->header.frame_id, 
-            msg->header.stamp, rclcpp::Duration::from_seconds(0.01));
-    } catch (const tf2::TransformException &ex) {
-        return; // TF取得未完了時は処理スキップ
+            "base_link",
+            msg->header.frame_id,
+            msg->header.stamp,
+            rclcpp::Duration::from_seconds(0.01)
+        );
+    } catch (const tf2::TransformException& ex) {
+        return;  // TF取得未完了時は処理スキップ
     }
 
-    Eigen::Affine3d eigen_tf = tf2::transformToEigen(transform_stamped);
+    Eigen::Affine3d eigen_tf   = tf2::transformToEigen(transform_stamped);
     Eigen::Matrix3d R_base_imu = eigen_tf.rotation();
 
     if (!imu_initialized_) {
-        last_imu_stamp_ = msg->header.stamp;
+        last_imu_stamp_  = msg->header.stamp;
         imu_initialized_ = true;
         return;
     }
 
-    double dt = (rclcpp::Time(msg->header.stamp) - last_imu_stamp_).seconds();
+    double dt       = (rclcpp::Time(msg->header.stamp) - last_imu_stamp_).seconds();
     last_imu_stamp_ = msg->header.stamp;
 
     if (dt <= 0.0 || dt > 0.5) return;
 
     // 2. IMUローカル角速度を base_link 座標系へ回転変換
     Eigen::Vector3d omega_imu(
-        msg->angular_velocity.x,
-        msg->angular_velocity.y,
-        msg->angular_velocity.z
+        msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z
     );
     Eigen::Vector3d omega_base = R_base_imu * omega_imu;
 
@@ -366,6 +434,6 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
     predicted_pose_.yaw += gz_base * static_cast<float>(dt);
 
     // 正規化 [-PI, PI]
-    while (predicted_pose_.yaw > M_PI)  predicted_pose_.yaw -= 2.0f * M_PI;
+    while (predicted_pose_.yaw > M_PI) predicted_pose_.yaw -= 2.0f * M_PI;
     while (predicted_pose_.yaw < -M_PI) predicted_pose_.yaw += 2.0f * M_PI;
 }
