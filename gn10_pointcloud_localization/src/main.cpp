@@ -8,7 +8,7 @@ class GroundFilterNode : public rclcpp::Node {
 public:
     GroundFilterNode() : Node("gn10_ground_filter_node") {
         sub_cloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-            "/input_cloud", rclcpp::SensorDataQoS(),
+            "/livox/lidar", rclcpp::SensorDataQoS(),
             std::bind(&GroundFilterNode::cloudCallback, this, std::placeholders::_1));
 
         pub_ground_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/ground_cloud", 10);
