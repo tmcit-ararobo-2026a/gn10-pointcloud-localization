@@ -13,6 +13,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -32,6 +33,8 @@ include_directories(
 # CUDA ライブラリ
 add_library(gn10_cuda_lib
   src/cuda/ground_filter.cu
+  src/cuda/platform_detector.cu
+  src/cuda/field_objects.cu
 )
 set_target_properties(gn10_cuda_lib PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
@@ -44,8 +47,6 @@ target_compile_options(gn10_cuda_lib PRIVATE
 
 # C++ ノードのビルド
 add_executable(gn10_pointcloud_localization_node
-  src/map_loader.cpp
-  src/pose_solver.cpp
   src/localization_node.cpp
   src/main.cpp
 )
@@ -67,8 +68,8 @@ ament_target_dependencies(gn10_pointcloud_localization_node
   geometry_msgs
   tf2
   tf2_ros
-  tf2_geometry_msgs
   tf2_eigen
+  visualization_msgs
 )
 
 # インストール設定 (Launch, Config, Node)
