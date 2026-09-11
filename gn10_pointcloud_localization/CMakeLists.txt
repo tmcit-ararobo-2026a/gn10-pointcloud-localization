@@ -5,14 +5,8 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 87 89)
 endif()
 
-project(gn10_pointcloud_localization LANGUAGES CXX CUDA)
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
@@ -25,18 +19,26 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(Eigen3 REQUIRED)
 
+find_package(CUDAToolkit REQUIRED)
+
 include_directories(
   include
   ${EIGEN3_INCLUDE_DIRS}
   ${CERES_INCLUDE_DIRS}
+  ${CUDAToolkit_INCLUDE_DIRS}
 )
 
-# CUDA ライブラリのビルド
+# CUDA ライブラリ
 add_library(gn10_cuda_lib
   src/cuda/ground_filter.cu
 )
 set_target_properties(gn10_cuda_lib PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
+)
+
+# nvcc 内部で生成されるコードの -Wpedantic 警告を抑制
+target_compile_options(gn10_cuda_lib PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>
 )
 
 # C++ ノードのビルド
@@ -47,9 +49,15 @@ add_executable(gn10_pointcloud_localization_node
   src/main.cpp
 )
 
+# C++ (g++) 側のみにコンパイルオプションを適用
+target_compile_options(gn10_pointcloud_localization_node PRIVATE
+  $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>
+)
+
 target_link_libraries(gn10_pointcloud_localization_node
   gn10_cuda_lib
   ${CERES_LIBRARIES}
+  CUDA::cudart
 )
 
 ament_target_dependencies(gn10_pointcloud_localization_node
