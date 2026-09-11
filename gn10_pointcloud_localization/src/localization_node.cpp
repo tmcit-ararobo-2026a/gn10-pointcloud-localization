@@ -93,6 +93,16 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_point
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
+    // Livox LIDAR トピック
+    sub_cloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "/livox/lidar", rclcpp::SensorDataQoS(),
+        std::bind(&LocalizationNode::cloudCallback, this, std::placeholders::_1));
+
+    // Livox 内部 IMU トピックを追加
+    sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
+        "/livox/imu", rclcpp::SensorDataQoS(),
+        std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1));
+
     sub_cloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
         "/livox/lidar", rclcpp::SensorDataQoS(),
         std::bind(&LocalizationNode::cloudCallback, this, std::placeholders::_1));
@@ -125,6 +135,7 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_point
     uploadFieldMapToGPU(map_objects);
 
     last_known_pose_ = {-4.0f, -4.0f, -1.5708f}; // 初期位置を左下隅に設定
+    predicted_pose_ = last_known_pose_;           // ★ IMU予測姿勢も同じ初期位置で同期！
 
     is_initialized_ = false;
 
@@ -172,43 +183,37 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                        d_ground_count_, d_obstacle_count_, &h_ground_count, &h_obstacle_count);
 
     if (h_obstacle_count > 50) {
-        PoseCandidate search_base_pose = last_known_pose_;
-        try {
-            auto map_tf = tf_buffer_->lookupTransform("map", "base_link", tf2::TimePointZero);
-            search_base_pose.x = static_cast<float>(map_tf.transform.translation.x);
-            search_base_pose.y = static_cast<float>(map_tf.transform.translation.y);
-            
-            tf2::Quaternion q(
-                map_tf.transform.rotation.x, map_tf.transform.rotation.y,
-                map_tf.transform.rotation.z, map_tf.transform.rotation.w);
-            tf2::Matrix3x3 m(q);
-            double roll, pitch, yaw;
-            m.getRPY(roll, pitch, yaw);
-            search_base_pose.yaw = static_cast<float>(yaw);
-        } catch (const tf2::TransformException &ex) {
-            // TF取得失敗時は前回の推測値を使用
-            search_base_pose = last_known_pose_;
+        PoseCandidate search_base_pose;
+        {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            // IMU で先回りして予測した姿勢を探索の原点にする
+            search_base_pose = predicted_pose_;
         }
 
         PoseCandidate best_pose;
         float best_cost = 0.0f;
 
+        // IMU予測により起点精度が高いため、探索範囲(range)を小さく絞り込んで計算速度を向上させる
         bool matched = launchFieldSDFMatcher(
             d_obstacle_, h_obstacle_count,
             search_base_pose,
-            0.40f, 0.04f,   // range_xy を若干拡大
-            0.20f, 0.035f,  // range_yaw
+            0.30f, 0.03f,
+            0.15f, 0.02f,
             0.20f,          // max_dist_thresh
             best_pose, best_cost
         );
 
-        // デバッグ用コスト表示 (1秒おき)
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
             "[SDF Match] points: %d, best_cost: %.4f, pose: (%.2f, %.2f, %.2f)",
             h_obstacle_count, best_cost, best_pose.x, best_pose.y, best_pose.yaw);
 
-        if (matched && best_cost < 0.20f) { // 閾値を 0.10f から 0.20f に緩和
-            last_known_pose_ = best_pose;
+        if (matched && best_cost < 0.20f) {
+            {
+                std::lock_guard<std::mutex> lock(pose_mutex_);
+                // 正確な SDF Match 結果で IMU 予測姿勢のドリフトを補正
+                last_known_pose_ = best_pose;
+                predicted_pose_ = best_pose; 
+            }
 
             // 1. Topic Publish
             auto pose_msg = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
@@ -224,7 +229,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             pose_msg->pose.covariance[35] = 0.002;
             pub_platform_pose_->publish(std::move(pose_msg));
 
-            // 2. TF (map -> base_link) 直接ブロードキャスト
+            // 2. TF (map -> base_link) ブロードキャスト
             geometry_msgs::msg::TransformStamped tf_msg;
             tf_msg.header.stamp = msg->header.stamp;
             tf_msg.header.frame_id = "map";
@@ -319,4 +324,48 @@ void LocalizationNode::publishFieldMapMarkers() {
     }
 
     pub_map_markers_->publish(marker_array);
+}
+
+void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(pose_mutex_);
+
+    // 1. base_link -> livox_frame (または msg->header.frame_id) の回転TFを取得
+    geometry_msgs::msg::TransformStamped transform_stamped;
+    try {
+        transform_stamped = tf_buffer_->lookupTransform(
+            "base_link", msg->header.frame_id, 
+            msg->header.stamp, rclcpp::Duration::from_seconds(0.01));
+    } catch (const tf2::TransformException &ex) {
+        return; // TF取得未完了時は処理スキップ
+    }
+
+    Eigen::Affine3d eigen_tf = tf2::transformToEigen(transform_stamped);
+    Eigen::Matrix3d R_base_imu = eigen_tf.rotation();
+
+    if (!imu_initialized_) {
+        last_imu_stamp_ = msg->header.stamp;
+        imu_initialized_ = true;
+        return;
+    }
+
+    double dt = (rclcpp::Time(msg->header.stamp) - last_imu_stamp_).seconds();
+    last_imu_stamp_ = msg->header.stamp;
+
+    if (dt <= 0.0 || dt > 0.5) return;
+
+    // 2. IMUローカル角速度を base_link 座標系へ回転変換
+    Eigen::Vector3d omega_imu(
+        msg->angular_velocity.x,
+        msg->angular_velocity.y,
+        msg->angular_velocity.z
+    );
+    Eigen::Vector3d omega_base = R_base_imu * omega_imu;
+
+    // 3. base_link の Z 軸角速度 (Yaw レート) で積分
+    float gz_base = static_cast<float>(omega_base.z());
+    predicted_pose_.yaw += gz_base * static_cast<float>(dt);
+
+    // 正規化 [-PI, PI]
+    while (predicted_pose_.yaw > M_PI)  predicted_pose_.yaw -= 2.0f * M_PI;
+    while (predicted_pose_.yaw < -M_PI) predicted_pose_.yaw += 2.0f * M_PI;
 }

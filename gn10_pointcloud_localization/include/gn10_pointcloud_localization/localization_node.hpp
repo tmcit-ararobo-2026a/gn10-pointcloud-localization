@@ -7,6 +7,7 @@
 #include <cuda_runtime.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <visualization_msgs/msg/marker_array.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 
 #include "gn10_pointcloud_localization/cuda/field_objects.cuh"
 
@@ -44,4 +45,13 @@ private:
     rclcpp::TimerBase::SharedPtr marker_timer_;
 
     bool is_initialized_{false};
+
+    void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
+    
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
+    
+    PoseCandidate predicted_pose_;
+    rclcpp::Time last_imu_stamp_;
+    bool imu_initialized_{false};
+    std::mutex pose_mutex_; // 点群コールバックとIMUコールバックの同期用
 };
