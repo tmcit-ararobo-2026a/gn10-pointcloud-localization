@@ -228,14 +228,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     if (is_lost_) {
         best_pose = global_searcher_->search(
-            *solver_,
-            h_raw_cloud,
-            h_transform,
-            filter_params_,
-            match_params_,
-            ground_pts,
-            obstacle_pts,
-            best_cost
+            *solver_, h_raw_cloud, h_transform, filter_params_, match_params_, best_cost
         );
 
         if (best_cost < match_params_.cost_threshold) {
@@ -259,8 +252,6 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             filter_params_,
             match_params_,
             search_base_pose,
-            ground_pts,
-            obstacle_pts,
             dynamic_pts,
             best_pose,
             best_cost
@@ -276,7 +267,6 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     std_msgs::msg::Header out_header = msg->header;
     out_header.frame_id              = base_frame_;
     publishCloud(pub_dynamic_, out_header, dynamic_pts);
-    publishCloud(pub_obstacle_, out_header, obstacle_pts);
 }
 
 void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)

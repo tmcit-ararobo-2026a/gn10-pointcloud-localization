@@ -27,8 +27,6 @@ public:
         const float* h_transform,
         const GroundFilterParams& filter_params,
         const MatchingParams& match_params,
-        std::vector<float>& out_ground_pts,
-        std::vector<float>& out_obstacle_pts,
         float& out_best_cost
     );
 

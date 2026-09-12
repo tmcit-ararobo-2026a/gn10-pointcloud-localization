@@ -42,8 +42,6 @@ public:
         const GroundFilterParams& filter_params,
         const MatchingParams& match_params,
         const PoseCandidate& search_base_pose,
-        std::vector<float>& out_ground_pts,
-        std::vector<float>& out_obstacle_pts,
         std::vector<float>& out_dynamic_pts,
         PoseCandidate& out_best_pose,
         float& out_best_cost

@@ -52,8 +52,6 @@ bool PoseSolver::processPointCloud(
     const GroundFilterParams& filter_params,
     const MatchingParams& match_params,
     const PoseCandidate& search_base_pose,
-    std::vector<float>& out_ground_pts,
-    std::vector<float>& out_obstacle_pts,
     std::vector<float>& out_dynamic_pts,
     PoseCandidate& out_best_pose,
     float& out_best_cost
@@ -118,25 +116,6 @@ bool PoseSolver::processPointCloud(
         out_best_cost = std::numeric_limits<float>::max();
         out_dynamic_pts.clear();
     }
-
-    cudaMemcpyAsync(
-        h_out_ground_,
-        d_ground_,
-        h_ground_count * 3 * sizeof(float),
-        cudaMemcpyDeviceToHost,
-        stream_
-    );
-    cudaMemcpyAsync(
-        h_out_obstacle_,
-        d_obstacle_,
-        h_obstacle_count * 3 * sizeof(float),
-        cudaMemcpyDeviceToHost,
-        stream_
-    );
-    cudaStreamSynchronize(stream_);
-
-    out_ground_pts.assign(h_out_ground_, h_out_ground_ + h_ground_count * 3);
-    out_obstacle_pts.assign(h_out_obstacle_, h_out_obstacle_ + h_obstacle_count * 3);
 
     return pose_matched;
 }
