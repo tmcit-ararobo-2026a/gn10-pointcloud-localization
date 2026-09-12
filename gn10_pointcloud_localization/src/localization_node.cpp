@@ -42,7 +42,7 @@ void LocalizationNode::declareAndGetParameters()
 
     this->declare_parameter("topics.input_cloud", "/livox/lidar");
     this->declare_parameter("topics.input_imu", "/livox/imu");
-    this->declare_parameter("topics.output_dynamic", "/dynamic_obstacle_cloud");
+    this->declare_parameter("topics.output_dynamic", "/dynamic_cloud");
     this->declare_parameter("topics.output_obstacle", "/obstacle_cloud");
     this->declare_parameter("topics.output_pose", "/platform_constraint");
     this->declare_parameter("topics.output_markers", "/field_map_markers");

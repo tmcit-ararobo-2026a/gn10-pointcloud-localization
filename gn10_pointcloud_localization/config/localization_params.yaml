@@ -13,6 +13,7 @@
     topics:
       input_cloud: "/livox/lidar"
       input_imu: "/livox/imu"
+      output_dynamic: "/dynamic_cloud"
       output_ground: "/ground_cloud"
       output_obstacle: "/obstacle_cloud"
       output_pose: "/platform_constraint"
@@ -29,7 +30,7 @@
     matching_params:
       search_range_xy: 0.30
       search_step_xy: 0.03
-      search_range_yaw: 0.15
+      search_range_yaw: 0.3
       search_step_yaw: 0.02
       max_dist_thresh: 0.20
       cost_threshold: 0.18
