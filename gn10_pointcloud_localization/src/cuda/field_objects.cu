@@ -206,7 +206,7 @@ bool launchFieldSDFMatcher(
 {
     if (num_points <= 0 || g_num_map_objects <= 0) return false;
 
-    // 1. 姿勢候補の生成 (Host)
+    // 姿勢候補の生成 (Host)
     std::vector<PoseCandidate> h_candidates;
     for (float dx = -range_xy; dx <= range_xy + 1e-5f; dx += step_xy) {
         for (float dy = -range_xy; dy <= range_xy + 1e-5f; dy += step_xy) {
@@ -254,7 +254,7 @@ bool launchFieldSDFMatcher(
         stream
     );
 
-    // 2. 全姿勢候補のSDF評価 (GPU)
+    // 全姿勢候補のSDF評価 (GPU)
     int sdf_threads = 256;
     int sdf_blocks  = num_candidates;
     evaluateFieldSDFKernel<<<sdf_blocks, sdf_threads, 0, stream>>>(
@@ -270,12 +270,12 @@ bool launchFieldSDFMatcher(
         field_max_y
     );
 
-    // 3. GPU内で最小コストとそのインデックス（ArgMin）を算出 (GPU)
+    // GPU内で最小コストとそのインデックス（ArgMin）を算出 (GPU)
     cub::DeviceReduce::ArgMin(
         d_temp_storage, temp_storage_bytes, d_costs, d_out_argmin, num_candidates, stream
     );
 
-    // 4. 最小結果（KeyValuePair 1つだけ）をホストへ転送
+    // 最小結果をホストへ転送
     cub::KeyValuePair<int, float> h_argmin;
     cudaMemcpyAsync(
         &h_argmin,
@@ -285,14 +285,14 @@ bool launchFieldSDFMatcher(
         stream
     );
 
-    // D2H 転送完了を待機（全コスト配列の同期処理が無くなる）
+    // D2H転送完了を待機
     cudaStreamSynchronize(stream);
 
     int best_idx  = h_argmin.key;
     out_best_cost = h_argmin.value;
     out_best_pose = h_candidates[best_idx];
 
-    // 5. 動的点群のフィルタリング (GPU)
+    // 動的点群のフィルタリング(GPU)
     out_dynamic_pts.clear();
 
     if (extract_dynamic) {

@@ -28,17 +28,17 @@ __global__ void filterGroundKernel(
     float yb = transform[4] * xs + transform[5] * ys + transform[6] * zs + transform[7];
     float zb = transform[8] * xs + transform[9] * ys + transform[10] * zs + transform[11];
 
-    // 1. 最大検出範囲外（base_link 原点からの水平距離）を無視
+    // 最大検出範囲外（base_link 原点からの水平距離）を無視
     float dist_sq = xb * xb + yb * yb;
     if (dist_sq > range_max * range_max) return;
 
-    // 2. ロボット本体の除去 (半径 0.6m かつ 高さ 0.0m ~ 1.2m 領域)
+    // ロボット本体の除去 (半径 0.6m かつ 高さ 0.0m ~ 1.2m 領域)
     if (dist_sq <= robot_radius * robot_radius && zb >= robot_height_min &&
         zb <= robot_height_max) {
         return;
     }
 
-    // 3. 地面 / 障害物の分離 (base_link 基準の Z 閾値)
+    // 地面 / 障害物の分離 (base_link 基準の Z 閾値)
     if (zb <= ground_z_thresh) {
         int g_idx                 = atomicAdd(ground_count, 1);
         out_ground[g_idx * 3 + 0] = xb;
