@@ -40,16 +40,29 @@ jobs:
 
           source /opt/ros/humble/setup.bash
 
-          # CUDA Toolkit と開発ツールを追加インストール
+          # 1. 必要な標準ツールおよび依存ライブラリのインストール
           DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y \
             git \
             ccache \
-            nvidia-cuda-toolkit \
-            nvidia-cuda-dev \
+            wget \
+            gnupg \
             nlohmann-json3-dev \
             libceres-dev \
             libeigen3-dev
 
+          # 2. NVIDIA 公式 CUDA リポジトリの登録
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          dpkg -i cuda-keyring_1.1-1_all.deb
+          rm cuda-keyring_1.1-1_all.deb
+          apt-get update
+
+          # 3. CMake が探索可能な標準配置の CUDA Toolkit をインストール
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            cuda-nvcc-12-2 \
+            cuda-cudart-dev-12-2
+
+          # パスおよび CCACHE の設定
+          export PATH="/usr/local/cuda/bin:$PATH"
           export CCACHE_DIR=${{ github.workspace }}/.ccache
           export PATH="/usr/lib/ccache:$PATH"
           mkdir -p $CCACHE_DIR
@@ -58,10 +71,9 @@ jobs:
           rosdep update --rosdistro humble
           rosdep install --from-paths . --ignore-src -y --rosdistro humble
 
-          # C/C++ に加えて CUDA コンパイルも ccache の対象に指定
           colcon build \
             --cmake-args \
-              -DCUDAToolkit_ROOT=/usr \
+              -DCUDAToolkit_ROOT=/usr/local/cuda \
               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
