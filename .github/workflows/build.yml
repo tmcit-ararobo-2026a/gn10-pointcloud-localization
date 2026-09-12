@@ -40,7 +40,11 @@ jobs:
 
           source /opt/ros/humble/setup.bash
 
-          DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y git ccache
+          # CUDA Toolkit と開発ツールを追加インストール
+          DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y \
+            git \
+            ccache \
+            nvidia-cuda-toolkit
 
           export CCACHE_DIR=${{ github.workspace }}/.ccache
           export PATH="/usr/lib/ccache:$PATH"
@@ -50,7 +54,9 @@ jobs:
           rosdep update --rosdistro humble
           rosdep install --from-paths . --ignore-src -y --rosdistro humble
 
+          # C/C++ に加えて CUDA コンパイルも ccache の対象に指定
           colcon build \
             --cmake-args \
               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
