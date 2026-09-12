@@ -3,108 +3,45 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/create_timer_ros.h>
 
-#include <cmath>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <vector>
 
-#include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
-
-// CUDA 関数の前方宣言
-void uploadFieldMapToGPU(const std::vector<FieldObject>& host_map);
-bool launchFieldSDFMatcher(
-    const float* d_obstacle_cloud,
-    int num_points,
-    const PoseCandidate& base_pose,
-    float range_xy,
-    float step_xy,
-    float range_yaw,
-    float step_yaw,
-    float max_dist_thresh,
-    PoseCandidate& out_best_pose,
-    float& out_best_cost
-);
-
-// NHK2026 フィールドマップ構築関数
-std::vector<FieldObject> createNHK2026FieldMap()
+LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
 {
-    std::vector<FieldObject> map;
+    declareAndGetParameters();
 
-    // 1. 外壁 (10.5m x 11.4m, H=0.15m) -> X: [-5.25, 5.25], Y: [-5.7, 5.7]
-    map.push_back({BOX, 0.000f, 5.700f, 0.000f, 0.150f, 5.250f, 0.050f});   // 上壁
-    map.push_back({BOX, 0.000f, -5.700f, 0.000f, 0.150f, 5.250f, 0.050f});  // 下壁
-    map.push_back({BOX, -5.250f, 0.000f, 0.000f, 0.150f, 0.050f, 5.700f});  // 左壁
-    map.push_back({BOX, 5.250f, 0.000f, 0.000f, 0.150f, 0.050f, 5.700f});   // 右壁
+    solver_ =
+        std::make_unique<PoseSolver>(this->get_parameter("filter_params.max_points").as_int());
 
-    // 2. 教壇 (X: -5.25~5.25m, Y: -0.3~0.3m, H: 0.2m)
-    map.push_back({BOX, 0.000f, 0.000f, 0.000f, 0.200f, 5.250f, 0.300f});
-
-    struct ObjectSpec {
-        ObjectType type;
-        float x, y;
-        float param1, param2;  // CYL: radius, 0 / BOX: half_w, half_d
-        float z_min, z_max;
-    };
-
-    constexpr float bucket_radius = 0.273f / 2.0f;  // バケツ半径 0.1365m
-    std::vector<ObjectSpec> base_specs;
-
-    // バケツ① (φ0.273 x H0.255)
-    base_specs.push_back({CYLINDER, 0.550f, 0.870f, bucket_radius, 0.000f, 0.000f, 0.255f});
-
-    // バケツ② (台座 0.3x0.3xH0.6 + バケツ①)
-    base_specs.push_back({BOX, -1.270f, 1.480f, 0.150f, 0.150f, 0.000f, 0.600f});
-    base_specs.push_back({CYLINDER, -1.270f, 1.480f, bucket_radius, 0.000f, 0.600f, 0.855f});
-
-    // バケツ③ (台座 0.3x0.3xH0.3 + バケツ①)
-    base_specs.push_back({BOX, 2.370f, 1.480f, 0.150f, 0.150f, 0.000f, 0.300f});
-    base_specs.push_back({CYLINDER, 2.370f, 1.480f, bucket_radius, 0.000f, 0.300f, 0.555f});
-
-    // 椅子 (W0.36 x D0.40, H0.807)
-    base_specs.push_back({BOX, 0.550f, 4.980f, 0.180f, 0.200f, 0.000f, 0.807f});
-
-    // 机 (W0.65 x D0.45 x H0.76) - 4台
-    constexpr float desk_coords[4][2] = {
-        {-2.295f, 3.855f},
-        { 3.395f, 3.855f},
-        {-4.895f, 5.445f},
-        {-4.750f, 1.105f}
-    };
-    for (const auto& coord : desk_coords) {
-        base_specs.push_back({BOX, coord[0], coord[1], 0.325f, 0.225f, 0.000f, 0.760f});
-    }
-
-    // 旗 (土台 0.39x0.39xH0.18 + 支柱 φ0.06 x H3.0)
-    base_specs.push_back({BOX, 0.550f, 3.025f, 0.195f, 0.195f, 0.000f, 0.180f});
-    base_specs.push_back({CYLINDER, 0.550f, 3.025f, 0.030f, 0.000f, 0.180f, 3.000f});
-
-    // 領域A (+Y) と 領域B (-Y) に対称展開
-    for (const auto& spec : base_specs) {
-        for (const float y_sign : {1.0f, -1.0f}) {
-            map.push_back(
-                {spec.type,
-                 spec.x,
-                 spec.y * y_sign,
-                 spec.z_min,
-                 spec.z_max,
-                 spec.param1,
-                 spec.param2}
-            );
+    // --- Map Data Loading ---
+    std::string map_source = this->get_parameter("map_source_type").as_string();
+    if (map_source == "json") {
+        std::string json_path = this->get_parameter("map_file_path").as_string();
+        if (json_path.empty()) {
+            json_path =
+                ament_index_cpp::get_package_share_directory("gn10_pointcloud_localization") +
+                "/config/nhk2026_map.json";
         }
+        map_objects_ = MapLoader::loadFromJSON(json_path);
+    } else if (map_source == "ros2_param") {
+        auto param_list = this->get_parameter("map_objects").as_string_array();
+        map_objects_    = MapLoader::loadFromParams(param_list);
     }
 
-    return map;
-}
+    if (map_objects_.empty()) {
+        RCLCPP_WARN(
+            this->get_logger(), "Map is empty or failed to load. Falling back to default map."
+        );
+        map_objects_ = MapLoader::createNHK2026FieldMap();
+    }
 
-LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_points_(200000)
-{
-    // CUDA ストリームの作成
-    cudaStreamCreate(&stream_);
-    // TF 関連の初期化
-    auto clock = this->get_clock();
-    tf_buffer_ = std::make_unique<tf2_ros::Buffer>(clock);
-    // タイマーインターフェースを登録する
+    solver_->setMap(map_objects_);
+
+    // --- TF & MessageFilters ---
+    auto clock           = this->get_clock();
+    tf_buffer_           = std::make_unique<tf2_ros::Buffer>(clock);
     auto timer_interface = std::make_shared<tf2_ros::CreateTimerROS>(
         this->get_node_base_interface(), this->get_node_timers_interface()
     );
@@ -112,12 +49,12 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_point
     tf_listener_    = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-    // PointCloud2 Subscriber (MessageFilter 経由)
-    sub_cloud_filter_.subscribe(this, "/livox/lidar", rmw_qos_profile_sensor_data);
+    std::string topic_cloud = this->get_parameter("topics.input_cloud").as_string();
+    sub_cloud_filter_.subscribe(this, topic_cloud, rmw_qos_profile_sensor_data);
     tf_filter_ = std::make_shared<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>>(
         sub_cloud_filter_,
         *tf_buffer_,
-        "base_link",
+        base_frame_,
         10,
         this->get_node_logging_interface(),
         this->get_node_clock_interface(),
@@ -125,82 +62,107 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_point
     );
     tf_filter_->registerCallback(&LocalizationNode::cloudCallback, this);
 
-    // IMU Subscriber
-    sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
-        "/livox/imu",
+    std::string topic_imu = this->get_parameter("topics.input_imu").as_string();
+    sub_imu_              = this->create_subscription<sensor_msgs::msg::Imu>(
+        topic_imu,
         rclcpp::SensorDataQoS(),
         std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1)
     );
 
-    // Publishers
-    pub_ground_   = this->create_publisher<sensor_msgs::msg::PointCloud2>("/ground_cloud", 10);
-    pub_obstacle_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/obstacle_cloud", 10);
+    // --- Publishers ---
+    pub_ground_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        this->get_parameter("topics.output_ground").as_string(), 10
+    );
+    pub_obstacle_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        this->get_parameter("topics.output_obstacle").as_string(), 10
+    );
     pub_platform_pose_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-        "/platform_constraint", 10
+        this->get_parameter("topics.output_pose").as_string(), 10
     );
     pub_map_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-        "/field_map_markers", rclcpp::QoS(1).transient_local()
+        this->get_parameter("topics.output_markers").as_string(), rclcpp::QoS(1).transient_local()
     );
 
-    // CUDA デバイスメモリの確保
-    cudaMalloc(&d_in_, max_points_ * 3 * sizeof(float));
-    cudaMalloc(&d_ground_, max_points_ * 3 * sizeof(float));
-    cudaMalloc(&d_obstacle_, max_points_ * 3 * sizeof(float));
-    cudaMalloc(&d_ground_count_, sizeof(int));
-    cudaMalloc(&d_obstacle_count_, sizeof(int));
-    cudaMalloc(&d_transform_, 12 * sizeof(float));
-
-    // ホスト側 Pinned Memory の確保（転送速度の最適化）
-    cudaMallocHost(&h_in_, max_points_ * 3 * sizeof(float));
-    cudaMallocHost(&h_out_ground_, max_points_ * 3 * sizeof(float));
-    cudaMallocHost(&h_out_obstacle_, max_points_ * 3 * sizeof(float));
-
-    // 初期姿勢およびマップの初期化
-    last_known_pose_ = {-4.0f, -4.0f, -1.5708f};
-    predicted_pose_  = last_known_pose_;
-    is_initialized_  = false;
-
-    map_objects_ = createNHK2026FieldMap();
-    uploadFieldMapToGPU(map_objects_);
-    publishFieldMapMarkers();
-
-    // 1秒周期で静的マップマーカーを配信するタイマーの設定
     using namespace std::chrono_literals;
     map_timer_ =
         this->create_wall_timer(1s, std::bind(&LocalizationNode::publishFieldMapMarkers, this));
 }
 
-LocalizationNode::~LocalizationNode()
+void LocalizationNode::declareAndGetParameters()
 {
-    if (stream_) {
-        cudaStreamSynchronize(stream_);
-        cudaStreamDestroy(stream_);
-    }
+    this->declare_parameter("map_source_type", "json");
+    this->declare_parameter("map_file_path", "");
+    this->declare_parameter("map_objects", std::vector<std::string>{});
 
-    cudaFree(d_in_);
-    cudaFree(d_ground_);
-    cudaFree(d_obstacle_);
-    cudaFree(d_ground_count_);
-    cudaFree(d_obstacle_count_);
-    cudaFree(d_transform_);
+    this->declare_parameter("frames.map_frame", "map");
+    this->declare_parameter("frames.base_frame", "base_link");
 
-    cudaFreeHost(h_in_);
-    cudaFreeHost(h_out_ground_);
-    cudaFreeHost(h_out_obstacle_);
+    this->declare_parameter("topics.input_cloud", "/livox/lidar");
+    this->declare_parameter("topics.input_imu", "/livox/imu");
+    this->declare_parameter("topics.output_ground", "/ground_cloud");
+    this->declare_parameter("topics.output_obstacle", "/obstacle_cloud");
+    this->declare_parameter("topics.output_pose", "/platform_constraint");
+    this->declare_parameter("topics.output_markers", "/field_map_markers");
+
+    this->declare_parameter("filter_params.max_range", 12.0);
+    this->declare_parameter("filter_params.robot_radius", 0.6);
+    this->declare_parameter("filter_params.robot_height_min", 0.0);
+    this->declare_parameter("filter_params.robot_height_max", 1.2);
+    this->declare_parameter("filter_params.ground_z_thresh", 0.08);
+    this->declare_parameter("filter_params.max_points", 200000);
+
+    this->declare_parameter("matching_params.search_range_xy", 0.30);
+    this->declare_parameter("matching_params.search_step_xy", 0.03);
+    this->declare_parameter("matching_params.search_range_yaw", 0.15);
+    this->declare_parameter("matching_params.search_step_yaw", 0.02);
+    this->declare_parameter("matching_params.max_dist_thresh", 0.20);
+    this->declare_parameter("matching_params.cost_threshold", 0.20);
+
+    this->declare_parameter("initial_pose.x", -4.0);
+    this->declare_parameter("initial_pose.y", -4.0);
+    this->declare_parameter("initial_pose.yaw", -1.5708);
+
+    map_frame_  = this->get_parameter("frames.map_frame").as_string();
+    base_frame_ = this->get_parameter("frames.base_frame").as_string();
+
+    filter_params_.range_max =
+        static_cast<float>(this->get_parameter("filter_params.max_range").as_double());
+    filter_params_.robot_radius =
+        static_cast<float>(this->get_parameter("filter_params.robot_radius").as_double());
+    filter_params_.robot_height_min =
+        static_cast<float>(this->get_parameter("filter_params.robot_height_min").as_double());
+    filter_params_.robot_height_max =
+        static_cast<float>(this->get_parameter("filter_params.robot_height_max").as_double());
+    filter_params_.ground_z_thresh =
+        static_cast<float>(this->get_parameter("filter_params.ground_z_thresh").as_double());
+
+    match_params_.range_xy =
+        static_cast<float>(this->get_parameter("matching_params.search_range_xy").as_double());
+    match_params_.step_xy =
+        static_cast<float>(this->get_parameter("matching_params.search_step_xy").as_double());
+    match_params_.range_yaw =
+        static_cast<float>(this->get_parameter("matching_params.search_range_yaw").as_double());
+    match_params_.step_yaw =
+        static_cast<float>(this->get_parameter("matching_params.search_step_yaw").as_double());
+    match_params_.max_dist_thresh =
+        static_cast<float>(this->get_parameter("matching_params.max_dist_thresh").as_double());
+    match_params_.cost_threshold =
+        static_cast<float>(this->get_parameter("matching_params.cost_threshold").as_double());
+
+    last_known_pose_.x   = static_cast<float>(this->get_parameter("initial_pose.x").as_double());
+    last_known_pose_.y   = static_cast<float>(this->get_parameter("initial_pose.y").as_double());
+    last_known_pose_.yaw = static_cast<float>(this->get_parameter("initial_pose.yaw").as_double());
+    predicted_pose_      = last_known_pose_;
 }
 
 void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
-    const int num_points = msg->width * msg->height;
-    if (num_points == 0 || num_points > max_points_) return;
-
-    // MessageFilter 経由で呼び出されるため、ブロッキングなしで TF 取得可能
     geometry_msgs::msg::TransformStamped transform_stamped;
     try {
         transform_stamped =
-            tf_buffer_->lookupTransform("base_link", msg->header.frame_id, msg->header.stamp);
+            tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, msg->header.stamp);
     } catch (const tf2::TransformException& ex) {
-        RCLCPP_WARN(this->get_logger(), "TF lookup failed despite MessageFilter: %s", ex.what());
+        RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
         return;
     }
 
@@ -214,143 +176,126 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x"), iter_y(*msg, "y"),
         iter_z(*msg, "z");
-    int valid_pts = 0;
-    for (; iter_x != iter_x.end() && valid_pts < max_points_; ++iter_x, ++iter_y, ++iter_z) {
+    std::vector<float> h_raw_cloud;
+    h_raw_cloud.reserve(msg->width * msg->height * 3);
+
+    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
         if (std::isnan(*iter_x)) continue;
-        h_in_[valid_pts * 3 + 0] = *iter_x;
-        h_in_[valid_pts * 3 + 1] = *iter_y;
-        h_in_[valid_pts * 3 + 2] = *iter_z;
-        valid_pts++;
+        h_raw_cloud.push_back(*iter_x);
+        h_raw_cloud.push_back(*iter_y);
+        h_raw_cloud.push_back(*iter_z);
     }
 
-    cudaMemcpyAsync(d_in_, h_in_, valid_pts * 3 * sizeof(float), cudaMemcpyHostToDevice, stream_);
-    cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
+    PoseCandidate search_base_pose;
+    {
+        std::lock_guard<std::mutex> lock(pose_mutex_);
+        search_base_pose = predicted_pose_;
+    }
 
-    int h_ground_count   = 0;
-    int h_obstacle_count = 0;
-    launchGroundFilter(
-        stream_,
-        d_in_,
-        d_ground_,
-        d_obstacle_,
-        d_transform_,
-        valid_pts,
-        12.0f,
-        0.6f,
-        0.0f,
-        1.2f,
-        0.08f,
-        d_ground_count_,
-        d_obstacle_count_,
-        &h_ground_count,
-        &h_obstacle_count
+    std::vector<float> ground_pts, obstacle_pts;
+    PoseCandidate best_pose;
+    float best_cost = 0.0f;
+
+    bool matched = solver_->processPointCloud(
+        h_raw_cloud,
+        h_transform,
+        filter_params_,
+        match_params_,
+        search_base_pose,
+        ground_pts,
+        obstacle_pts,
+        best_pose,
+        best_cost
     );
 
-    cudaStreamSynchronize(stream_);
-
-    if (h_obstacle_count > 50) {
-        PoseCandidate search_base_pose;
+    if (matched && best_cost < match_params_.cost_threshold) {
         {
             std::lock_guard<std::mutex> lock(pose_mutex_);
-            search_base_pose = predicted_pose_;
+            last_known_pose_ = best_pose;
+            predicted_pose_  = best_pose;
         }
 
-        PoseCandidate best_pose;
-        float best_cost = 0.0f;
+        tf2::Quaternion q;
+        q.setRPY(0.0, 0.0, best_pose.yaw);
 
-        const bool matched = launchFieldSDFMatcher(
-            stream_,
-            d_obstacle_,
-            h_obstacle_count,
-            search_base_pose,
-            0.30f,
-            0.03f,
-            0.15f,
-            0.02f,
-            0.20f,
-            best_pose,
-            best_cost
-        );
+        auto pose_msg          = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
+        pose_msg->header.stamp = msg->header.stamp;
+        pose_msg->header.frame_id       = map_frame_;
+        pose_msg->pose.pose.position.x  = best_pose.x;
+        pose_msg->pose.pose.position.y  = best_pose.y;
+        pose_msg->pose.pose.position.z  = 0.0f;
+        pose_msg->pose.pose.orientation = tf2::toMsg(q);
+        pose_msg->pose.covariance[0]    = 0.005;
+        pose_msg->pose.covariance[7]    = 0.005;
+        pose_msg->pose.covariance[35]   = 0.002;
+        pub_platform_pose_->publish(std::move(pose_msg));
 
-        RCLCPP_INFO_THROTTLE(
-            this->get_logger(),
-            *this->get_clock(),
-            1000,
-            "[SDF Match] points: %d, best_cost: %.4f, pose: (%.2f, %.2f, %.2f)",
-            h_obstacle_count,
-            best_cost,
-            best_pose.x,
-            best_pose.y,
-            best_pose.yaw
-        );
+        geometry_msgs::msg::TransformStamped tf_msg;
+        tf_msg.header.stamp            = msg->header.stamp;
+        tf_msg.header.frame_id         = map_frame_;
+        tf_msg.child_frame_id          = base_frame_;
+        tf_msg.transform.translation.x = best_pose.x;
+        tf_msg.transform.translation.y = best_pose.y;
+        tf_msg.transform.translation.z = 0.0f;
+        tf_msg.transform.rotation      = tf2::toMsg(q);
+        tf_broadcaster_->sendTransform(tf_msg);
+    }
 
-        if (matched && best_cost < 0.20f) {
-            {
-                std::lock_guard<std::mutex> lock(pose_mutex_);
-                last_known_pose_ = best_pose;
-                predicted_pose_  = best_pose;
-            }
+    std_msgs::msg::Header out_header = msg->header;
+    out_header.frame_id              = base_frame_;
+    publishCloud(pub_ground_, out_header, ground_pts);
+    publishCloud(pub_obstacle_, out_header, obstacle_pts);
+}
 
-            // Quat 計算
-            tf2::Quaternion q;
-            q.setRPY(0.0, 0.0, best_pose.yaw);
+void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
+{
+    std::lock_guard<std::mutex> lock(pose_mutex_);
 
-            // 1. Pose With Covariance Message Publish
-            auto pose_msg = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
-            pose_msg->header.stamp          = msg->header.stamp;
-            pose_msg->header.frame_id       = "map";
-            pose_msg->pose.pose.position.x  = best_pose.x;
-            pose_msg->pose.pose.position.y  = best_pose.y;
-            pose_msg->pose.pose.position.z  = 0.0f;
-            pose_msg->pose.pose.orientation = tf2::toMsg(q);
-            pose_msg->pose.covariance[0]    = 0.005;
-            pose_msg->pose.covariance[7]    = 0.005;
-            pose_msg->pose.covariance[35]   = 0.002;
-            pub_platform_pose_->publish(std::move(pose_msg));
+    static Eigen::Matrix3d R_base_imu = Eigen::Matrix3d::Identity();
+    static bool tf_initialized        = false;
 
-            // 2. TF Broadcast (map -> base_link)
-            geometry_msgs::msg::TransformStamped tf_msg;
-            tf_msg.header.stamp            = msg->header.stamp;
-            tf_msg.header.frame_id         = "map";
-            tf_msg.child_frame_id          = "base_link";
-            tf_msg.transform.translation.x = best_pose.x;
-            tf_msg.transform.translation.y = best_pose.y;
-            tf_msg.transform.translation.z = 0.0f;
-            tf_msg.transform.rotation      = tf2::toMsg(q);
-            tf_broadcaster_->sendTransform(tf_msg);
+    if (!tf_initialized) {
+        try {
+            geometry_msgs::msg::TransformStamped transform_stamped =
+                tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, tf2::TimePointZero);
+            const Eigen::Affine3d eigen_tf = tf2::transformToEigen(transform_stamped);
+            R_base_imu                     = eigen_tf.rotation();
+            tf_initialized                 = true;
+        } catch (const tf2::TransformException&) {
+            return;
         }
     }
 
-    cudaMemcpyAsync(
-        h_out_ground_,
-        d_ground_,
-        h_ground_count * 3 * sizeof(float),
-        cudaMemcpyDeviceToHost,
-        stream_
-    );
-    cudaMemcpyAsync(
-        h_out_obstacle_,
-        d_obstacle_,
-        h_obstacle_count * 3 * sizeof(float),
-        cudaMemcpyDeviceToHost,
-        stream_
-    );
+    if (!imu_initialized_) {
+        last_imu_stamp_  = msg->header.stamp;
+        imu_initialized_ = true;
+        return;
+    }
 
-    cudaStreamSynchronize(stream_);
+    const double dt = (rclcpp::Time(msg->header.stamp) - last_imu_stamp_).seconds();
+    last_imu_stamp_ = msg->header.stamp;
 
-    std_msgs::msg::Header out_header = msg->header;
-    out_header.frame_id              = "base_link";
-    publishCloud(pub_ground_, out_header, h_out_ground_, h_ground_count);
-    publishCloud(pub_obstacle_, out_header, h_out_obstacle_, h_obstacle_count);
+    if (dt <= 0.0 || dt > 0.5) {
+        imu_initialized_ = false;
+        return;
+    }
+
+    const Eigen::Vector3d omega_imu(
+        msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z
+    );
+    const Eigen::Vector3d omega_base = R_base_imu * omega_imu;
+
+    predicted_pose_.yaw += static_cast<float>(omega_base.z() * dt);
+    predicted_pose_.yaw = std::atan2(std::sin(predicted_pose_.yaw), std::cos(predicted_pose_.yaw));
 }
 
 void LocalizationNode::publishCloud(
     const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub,
     const std_msgs::msg::Header& header,
-    const float* data,
-    const int count
+    const std::vector<float>& pts
 )
 {
+    int count             = static_cast<int>(pts.size() / 3);
     auto out_msg          = std::make_unique<sensor_msgs::msg::PointCloud2>();
     out_msg->header       = header;
     out_msg->height       = 1;
@@ -365,9 +310,9 @@ void LocalizationNode::publishCloud(
     sensor_msgs::PointCloud2Iterator<float> iter_x(*out_msg, "x"), iter_y(*out_msg, "y"),
         iter_z(*out_msg, "z");
     for (int i = 0; i < count; ++i, ++iter_x, ++iter_y, ++iter_z) {
-        *iter_x = data[i * 3 + 0];
-        *iter_y = data[i * 3 + 1];
-        *iter_z = data[i * 3 + 2];
+        *iter_x = pts[i * 3 + 0];
+        *iter_y = pts[i * 3 + 1];
+        *iter_z = pts[i * 3 + 2];
     }
     pub->publish(std::move(out_msg));
 }
@@ -375,11 +320,10 @@ void LocalizationNode::publishCloud(
 void LocalizationNode::publishFieldMapMarkers()
 {
     visualization_msgs::msg::MarkerArray marker_array;
-
     int id = 0;
     for (const auto& obj : map_objects_) {
         visualization_msgs::msg::Marker marker;
-        marker.header.frame_id = "map";
+        marker.header.frame_id = map_frame_;
         marker.header.stamp    = this->now();
         marker.ns              = "field_objects";
         marker.id              = id++;
@@ -405,64 +349,11 @@ void LocalizationNode::publishFieldMapMarkers()
             marker.scale.x = obj.param1 * 2.0f;
             marker.scale.y = obj.param1 * 2.0f;
             marker.scale.z = height;
-
-            // 円柱オブジェクトの色指定
             marker.color.r = 0.9f;
             marker.color.g = 0.3f;
             marker.color.b = 0.1f;
         }
-
         marker_array.markers.push_back(marker);
     }
-
     pub_map_markers_->publish(marker_array);
-}
-
-void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
-{
-    std::lock_guard<std::mutex> lock(pose_mutex_);
-
-    // 1. base_link -> IMU の回転行列を取得（初回またはキャッシュ更新）
-    static Eigen::Matrix3d R_base_imu = Eigen::Matrix3d::Identity();
-    static bool tf_initialized        = false;
-
-    if (!tf_initialized) {
-        try {
-            geometry_msgs::msg::TransformStamped transform_stamped =
-                tf_buffer_->lookupTransform("base_link", msg->header.frame_id, tf2::TimePointZero);
-            const Eigen::Affine3d eigen_tf = tf2::transformToEigen(transform_stamped);
-            R_base_imu                     = eigen_tf.rotation();
-            tf_initialized                 = true;
-        } catch (const tf2::TransformException& ex) {
-            // TFがまだ利用可能でない場合はスキップ
-            return;
-        }
-    }
-
-    // 2. 時刻の初期化チェック
-    if (!imu_initialized_) {
-        last_imu_stamp_  = msg->header.stamp;
-        imu_initialized_ = true;
-        return;
-    }
-
-    const double dt = (rclcpp::Time(msg->header.stamp) - last_imu_stamp_).seconds();
-    last_imu_stamp_ = msg->header.stamp;
-
-    if (dt <= 0.0 || dt > 0.5) {
-        imu_initialized_ = false;
-        return;
-    }
-
-    // 3. 角速度を base_link 座標系へ変換して Yaw 積分
-    const Eigen::Vector3d omega_imu(
-        msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z
-    );
-    const Eigen::Vector3d omega_base = R_base_imu * omega_imu;
-
-    const float gz_base = static_cast<float>(omega_base.z());
-    predicted_pose_.yaw += gz_base * static_cast<float>(dt);
-
-    // 4. 角度の正規化 [-PI, PI]
-    predicted_pose_.yaw = std::atan2(std::sin(predicted_pose_.yaw), std::cos(predicted_pose_.yaw));
 }

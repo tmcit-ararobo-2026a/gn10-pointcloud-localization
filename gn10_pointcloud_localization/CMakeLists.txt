@@ -20,6 +20,7 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 find_package(CUDAToolkit REQUIRED)
 
@@ -46,6 +47,8 @@ target_compile_options(gn10_cuda_lib PRIVATE
 
 # C++ ノードのビルド
 add_executable(gn10_pointcloud_localization_node
+  src/map_loader.cpp
+  src/pose_solver.cpp
   src/localization_node.cpp
   src/main.cpp
 )
@@ -70,6 +73,7 @@ ament_target_dependencies(gn10_pointcloud_localization_node
   tf2_eigen
   tf2_geometry_msgs
   visualization_msgs
+  nlohmann_json
 )
 
 # インストール設定 (Launch, Config, Node)
