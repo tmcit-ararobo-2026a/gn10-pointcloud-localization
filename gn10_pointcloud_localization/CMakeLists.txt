@@ -21,7 +21,6 @@ find_package(tf2_eigen REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(nlohmann_json REQUIRED)
-find_package(OpenMP REQUIRED)
 
 find_package(CUDAToolkit REQUIRED)
 
@@ -63,7 +62,6 @@ target_link_libraries(gn10_pointcloud_localization_node
   gn10_cuda_lib
   ${CERES_LIBRARIES}
   CUDA::cudart
-  OpenMP::OpenMP_CXX
 )
 
 ament_target_dependencies(gn10_pointcloud_localization_node

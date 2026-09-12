@@ -1,6 +1,5 @@
 #include "gn10_pointcloud_localization/localization_node.hpp"
 
-#include <omp.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/create_timer_ros.h>
 
@@ -195,6 +194,7 @@ PoseCandidate LocalizationNode::executeGlobalSearch(
     const auto start_time = this->now();
 
     // 品質を維持した間引き（インターリーブ抽出）
+    // 点群配列構造 [x0, y0, z0, x1, y1, z1, ...] を保持しつつ間引く
     std::vector<float> search_cloud;
     const size_t total_points = h_raw_cloud.size() / 3;
     search_cloud.reserve((total_points / global_downsample_stride_) * 3);
@@ -205,64 +205,44 @@ PoseCandidate LocalizationNode::executeGlobalSearch(
         search_cloud.push_back(h_raw_cloud[i * 3 + 2]);
     }
 
-    MatchingParams global_match_params = match_params_;
-    global_match_params.range_xy       = 0.00f;
-    global_match_params.range_yaw      = 0.00f;
-
-    // 探索座標リストをフラットに事前生成 (OpenMP 並列化のため)
-    std::vector<PoseCandidate> candidates;
-    for (float x = global_range_min_x_; x <= global_range_max_x_; x += global_step_xy_) {
-        for (float y = global_range_min_y_; y <= global_range_max_y_; y += global_step_xy_) {
-            for (float yaw = -M_PI; yaw < M_PI; yaw += global_step_yaw_) {
-                candidates.push_back({x, y, yaw});
-            }
-        }
-    }
-
     float min_cost = std::numeric_limits<float>::max();
     PoseCandidate best_coarse_pose{0.0f, 0.0f, 0.0f};
 
-    // 2. OpenMP によるマルチスレッドグリッドスキャン
-#pragma omp parallel
-    {
-        float local_min_cost = std::numeric_limits<float>::max();
-        PoseCandidate local_best_pose{0.0f, 0.0f, 0.0f};
+    MatchingParams global_match_params = match_params_;
+    global_match_params.range_xy       = 0.00f;  // グリッド点でのピンポイント評価
+    global_match_params.range_yaw      = 0.00f;
 
-        std::vector<float> tmp_ground, tmp_obstacle;
-        PoseCandidate tmp_pose;
-        float tmp_cost = 0.0f;
+    std::vector<float> tmp_ground, tmp_obstacle;
+    PoseCandidate tmp_pose;
+    float tmp_cost = 0.0f;
 
-#pragma omp for nowait
-        for (size_t i = 0; i < candidates.size(); ++i) {
-            bool ok = solver_->processPointCloud(
-                search_cloud,
-                h_transform,
-                filter_params_,
-                global_match_params,
-                candidates[i],
-                tmp_ground,
-                tmp_obstacle,
-                tmp_pose,
-                tmp_cost
-            );
+    // 指定範囲での全域グリッドスキャン
+    for (float x = global_range_min_x_; x <= global_range_max_x_; x += global_step_xy_) {
+        for (float y = global_range_min_y_; y <= global_range_max_y_; y += global_step_xy_) {
+            for (float yaw = -M_PI; yaw < M_PI; yaw += global_step_yaw_) {
+                PoseCandidate candidate_pose{x, y, yaw};
+                bool ok = solver_->processPointCloud(
+                    search_cloud,
+                    h_transform,
+                    filter_params_,
+                    global_match_params,
+                    candidate_pose,
+                    tmp_ground,
+                    tmp_obstacle,
+                    tmp_pose,
+                    tmp_cost
+                );
 
-            if (ok && tmp_cost < local_min_cost) {
-                local_min_cost  = tmp_cost;
-                local_best_pose = candidates[i];
-            }
-        }
-
-#pragma omp critical
-        {
-            if (local_min_cost < min_cost) {
-                min_cost         = local_min_cost;
-                best_coarse_pose = local_best_pose;
+                if (ok && tmp_cost < min_cost) {
+                    min_cost         = tmp_cost;
+                    best_coarse_pose = candidate_pose;
+                }
             }
         }
     }
 
-    // 3. ベスト領域の精密リファイン
-    PoseCandidate refined_pose;
+    // 抽出したベスト領域に対し、元のRaw点群(h_raw_cloud) を使用して精密リファイン
+    PoseCandidate refined_pose;  // <-- ここを追加
     solver_->processPointCloud(
         h_raw_cloud,
         h_transform,
