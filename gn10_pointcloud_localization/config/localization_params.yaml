@@ -32,7 +32,7 @@
       search_range_yaw: 0.15
       search_step_yaw: 0.01
       max_dist_thresh: 0.20
-      cost_threshold: 0.20
+      cost_threshold: 0.18
 
     initial_pose:
       x: -4.0
@@ -40,6 +40,11 @@
       yaw: -1.5708
     
     global_search:
-      step_xy: 0.30
-      step_yaw: 0.15
-      lost_count_thresh: 5
+      range_min_x: -5.25        # 探索範囲 X 最小値 [m]
+      range_max_x:  5.25        # 探索範囲 X 最大値 [m]
+      range_min_y: -5.70        # 探索範囲 Y 最小値 [m]
+      range_max_y:  5.70        # 探索範囲 Y 最大値 [m]
+      step_xy: 0.30            # グローバルサーチのXY検索ピッチ [m]
+      step_yaw: 0.15           # グローバルサーチのYaw検索ピッチ [rad]
+      downsample_stride: 5     # グローバル探索時の点群抽出ピッチ (2: 50%間引き, 1: 完全RAW)
+      lost_count_thresh: 5     # ロスト確定までの連続判定フレーム数

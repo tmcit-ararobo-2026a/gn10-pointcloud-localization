@@ -120,8 +120,13 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.max_dist_thresh", 0.20);
     this->declare_parameter("matching_params.cost_threshold", 0.20);
 
+    this->declare_parameter("global_search.range_min_x", -5.25);
+    this->declare_parameter("global_search.range_max_x", 5.25);
+    this->declare_parameter("global_search.range_min_y", -5.70);
+    this->declare_parameter("global_search.range_max_y", 5.70);
     this->declare_parameter("global_search.step_xy", 0.30);
     this->declare_parameter("global_search.step_yaw", 0.2618);
+    this->declare_parameter("global_search.downsample_stride", 2);
     this->declare_parameter("global_search.lost_count_thresh", 5);
 
     this->declare_parameter("initial_pose.x", -4.0);
@@ -155,9 +160,20 @@ void LocalizationNode::declareAndGetParameters()
     match_params_.cost_threshold =
         static_cast<float>(this->get_parameter("matching_params.cost_threshold").as_double());
 
+    global_range_min_x_ =
+        static_cast<float>(this->get_parameter("global_search.range_min_x").as_double());
+    global_range_max_x_ =
+        static_cast<float>(this->get_parameter("global_search.range_max_x").as_double());
+    global_range_min_y_ =
+        static_cast<float>(this->get_parameter("global_search.range_min_y").as_double());
+    global_range_max_y_ =
+        static_cast<float>(this->get_parameter("global_search.range_max_y").as_double());
     global_step_xy_ = static_cast<float>(this->get_parameter("global_search.step_xy").as_double());
     global_step_yaw_ =
         static_cast<float>(this->get_parameter("global_search.step_yaw").as_double());
+    global_downsample_stride_ = std::max(
+        1, static_cast<int>(this->get_parameter("global_search.downsample_stride").as_int())
+    );
     lost_threshold_count_ = this->get_parameter("global_search.lost_count_thresh").as_int();
 
     last_known_pose_.x   = static_cast<float>(this->get_parameter("initial_pose.x").as_double());
@@ -174,31 +190,39 @@ PoseCandidate LocalizationNode::executeGlobalSearch(
     float& best_cost
 )
 {
-    RCLCPP_INFO(
-        this->get_logger(),
-        "[GlobalSearch] Executing sync global localization without downsampling..."
-    );
+    RCLCPP_INFO(this->get_logger(), "[GlobalSearch] Executing sync global localization...");
     const auto start_time = this->now();
+
+    // 品質を維持した間引き（インターリーブ抽出）
+    // 点群配列構造 [x0, y0, z0, x1, y1, z1, ...] を保持しつつ間引く
+    std::vector<float> search_cloud;
+    const size_t total_points = h_raw_cloud.size() / 3;
+    search_cloud.reserve((total_points / global_downsample_stride_) * 3);
+
+    for (size_t i = 0; i < total_points; i += global_downsample_stride_) {
+        search_cloud.push_back(h_raw_cloud[i * 3 + 0]);
+        search_cloud.push_back(h_raw_cloud[i * 3 + 1]);
+        search_cloud.push_back(h_raw_cloud[i * 3 + 2]);
+    }
 
     float min_cost = std::numeric_limits<float>::max();
     PoseCandidate best_coarse_pose{0.0f, 0.0f, 0.0f};
 
-    // グローバルサーチ用の軽量パラメータ (探索ステップを粗く設定)
     MatchingParams global_match_params = match_params_;
-    global_match_params.range_xy       = 0.00f;  // 指定座標ピンポイント評価
+    global_match_params.range_xy       = 0.00f;  // グリッド点でのピンポイント評価
     global_match_params.range_yaw      = 0.00f;
 
     std::vector<float> tmp_ground, tmp_obstacle;
     PoseCandidate tmp_pose;
     float tmp_cost = 0.0f;
 
-    // NHK2026 フィールド全体範囲 (X: [-5.25, 5.25], Y: [-5.70, 5.70]) を生の点群のまま探索
-    for (float x = -5.0f; x <= 5.0f; x += global_step_xy_) {
-        for (float y = -5.4f; y <= 5.4f; y += global_step_xy_) {
+    // 指定範囲での全域グリッドスキャン
+    for (float x = global_range_min_x_; x <= global_range_max_x_; x += global_step_xy_) {
+        for (float y = global_range_min_y_; y <= global_range_max_y_; y += global_step_xy_) {
             for (float yaw = -M_PI; yaw < M_PI; yaw += global_step_yaw_) {
                 PoseCandidate candidate_pose{x, y, yaw};
                 bool ok = solver_->processPointCloud(
-                    h_raw_cloud,
+                    search_cloud,
                     h_transform,
                     filter_params_,
                     global_match_params,
@@ -217,8 +241,8 @@ PoseCandidate LocalizationNode::executeGlobalSearch(
         }
     }
 
-    // 抽出した最良地点から通常パラメータで精密局所探索 (Refine)
-    PoseCandidate refined_pose;
+    // 抽出したベスト領域に対し、元のRaw点群(h_raw_cloud) を使用して精密リファイン
+    PoseCandidate refined_pose;  // <-- ここを追加
     solver_->processPointCloud(
         h_raw_cloud,
         h_transform,
