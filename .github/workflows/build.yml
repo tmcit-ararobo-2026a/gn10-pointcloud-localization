@@ -50,10 +50,6 @@ jobs:
             libceres-dev \
             libeigen3-dev
 
-          export CUDA_PATH=/usr/usr/local/cuda
-          export PATH=/usr/local/cuda/bin:$PATH
-          export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-          
           export CCACHE_DIR=${{ github.workspace }}/.ccache
           export PATH="/usr/lib/ccache:$PATH"
           mkdir -p $CCACHE_DIR
@@ -65,6 +61,7 @@ jobs:
           # C/C++ に加えて CUDA コンパイルも ccache の対象に指定
           colcon build \
             --cmake-args \
+              -DCUDAToolkit_ROOT=/usr \
               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
