@@ -22,6 +22,10 @@ struct MatchingParams {
     float max_dist_thresh{0.20f};
     float cost_threshold{0.20f};
     float dynamic_dist_thresh{0.15f};
+    float field_min_x{-5.5f};
+    float field_max_x{5.5f};
+    float field_min_y{-6.0f};
+    float field_max_y{6.0f};
 };
 
 class PoseSolver

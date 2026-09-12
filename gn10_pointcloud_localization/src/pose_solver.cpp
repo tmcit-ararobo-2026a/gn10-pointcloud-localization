@@ -106,17 +106,19 @@ bool PoseSolver::processPointCloud(
             match_params.step_yaw,
             match_params.max_dist_thresh,
             match_params.dynamic_dist_thresh,
+            match_params.field_min_x,
+            match_params.field_max_x,
+            match_params.field_min_y,
+            match_params.field_max_y,
             out_best_pose,
             out_best_cost,
             out_dynamic_pts
         );
     } else {
-        // 点群数が不十分な場合は明確に最大コストをセット
         out_best_cost = std::numeric_limits<float>::max();
         out_dynamic_pts.clear();
     }
 
-    // デバッグ出力用の参照が渡されている場合のみ Host へコピー
     cudaMemcpyAsync(
         h_out_ground_,
         d_ground_,

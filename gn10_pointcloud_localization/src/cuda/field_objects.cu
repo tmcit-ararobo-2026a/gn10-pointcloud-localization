@@ -7,20 +7,16 @@
 
 #include "gn10_pointcloud_localization/cuda/field_objects.cuh"
 
-// GPU 定数メモリの定義
 __constant__ FieldObject c_map_objects[128];
 static int g_num_map_objects = 0;
 
-// GPU グローバルバッファ（ファイルスコープで定義）
 static PoseCandidate* d_candidates = nullptr;
 static float* d_costs              = nullptr;
 static int g_max_candidates        = 0;
 
-// ★ 動的判定用バッファの定義を追加
 static uint8_t* d_is_dynamic = nullptr;
 static int g_max_dynamic_pts = 0;
 
-// 点 (px, py) と 軸平行ボックスの2D最短距離
 __device__ float distToBox2D(float px, float py, float cx, float cy, float half_w, float half_d)
 {
     float dx = fabsf(px - cx) - half_w;
@@ -30,7 +26,6 @@ __device__ float distToBox2D(float px, float py, float cx, float cy, float half_
     return sqrtf(ax * ax + ay * ay) + fminf(fmaxf(dx, dy), 0.0f);
 }
 
-// 点 (px, py) と 円筒の2D最短距離
 __device__ float distToCylinder2D(float px, float py, float cx, float cy, float radius)
 {
     float dx          = px - cx;
@@ -46,7 +41,11 @@ __global__ void evaluateFieldSDFKernel(
     int num_objects,
     const PoseCandidate* __restrict__ candidates,
     float* __restrict__ out_costs,
-    float max_dist_thresh
+    float max_dist_thresh,
+    float field_min_x,
+    float field_max_x,
+    float field_min_y,
+    float field_max_y
 )
 {
     int pose_idx = blockIdx.x;
@@ -60,17 +59,25 @@ __global__ void evaluateFieldSDFKernel(
     float sin_y = sinf(ryaw);
 
     __shared__ float s_cost[256];
-    s_cost[tid] = 0.0f;
+    __shared__ int s_valid_count[256];
+    s_cost[tid]        = 0.0f;
+    s_valid_count[tid] = 0;
 
     for (int i = tid; i < num_points; i += blockDim.x) {
         float lx = cloud[i * 3 + 0];
         float ly = cloud[i * 3 + 1];
         float lz = cloud[i * 3 + 2];
 
+        // map 座標系へ変換
         float wx = cos_y * lx - sin_y * ly + rx;
         float wy = sin_y * lx + cos_y * ly + ry;
         float wz = lz;
 
+        if (wx < field_min_x || wx > field_max_x || wy < field_min_y || wy > field_max_y) {
+            continue;
+        }
+
+        s_valid_count[tid] += 1;
         float min_d = max_dist_thresh;
 
         for (int o = 0; o < num_objects; ++o) {
@@ -92,22 +99,28 @@ __global__ void evaluateFieldSDFKernel(
     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
         if (tid < s) {
             s_cost[tid] += s_cost[tid + s];
+            s_valid_count[tid] += s_valid_count[tid + s];
         }
         __syncthreads();
     }
 
     if (tid == 0) {
-        out_costs[pose_idx] = s_cost[0] / static_cast<float>(num_points);
+        int total_valid = s_valid_count[0];
+        out_costs[pose_idx] =
+            (total_valid > 0) ? (s_cost[0] / static_cast<float>(total_valid)) : max_dist_thresh;
     }
 }
 
-// 確定姿勢に対する動的障害物判定カーネル
 __global__ void filterDynamicPointsKernel(
     const float* __restrict__ cloud,
     int num_points,
     int num_objects,
     PoseCandidate best_pose,
     float dynamic_dist_thresh,
+    float field_min_x,
+    float field_max_x,
+    float field_min_y,
+    float field_max_y,
     uint8_t* __restrict__ out_is_dynamic
 )
 {
@@ -125,9 +138,16 @@ __global__ void filterDynamicPointsKernel(
     float ly = cloud[i * 3 + 1];
     float lz = cloud[i * 3 + 2];
 
+    // map 座標系へ変換
     float wx = cos_y * lx - sin_y * ly + rx;
     float wy = sin_y * lx + cos_y * ly + ry;
     float wz = lz;
+
+    // フィールド境界外の点は動的障害物としても扱わない
+    if (wx < field_min_x || wx > field_max_x || wy < field_min_y || wy > field_max_y) {
+        out_is_dynamic[i] = 0;
+        return;
+    }
 
     float min_d = dynamic_dist_thresh;
 
@@ -169,6 +189,10 @@ bool launchFieldSDFMatcher(
     float step_yaw,
     float max_dist_thresh,
     float dynamic_dist_thresh,
+    float field_min_x,
+    float field_max_x,
+    float field_min_y,
+    float field_max_y,
     PoseCandidate& out_best_pose,
     float& out_best_cost,
     std::vector<float>& out_dynamic_pts
@@ -176,7 +200,6 @@ bool launchFieldSDFMatcher(
 {
     if (num_points <= 0 || g_num_map_objects <= 0) return false;
 
-    // グリッド候補姿勢の生成
     std::vector<PoseCandidate> h_candidates;
     for (float dx = -range_xy; dx <= range_xy + 1e-5f; dx += step_xy) {
         for (float dy = -range_xy; dy <= range_xy + 1e-5f; dy += step_xy) {
@@ -189,7 +212,6 @@ bool launchFieldSDFMatcher(
     int num_candidates = static_cast<int>(h_candidates.size());
     if (num_candidates == 0) return false;
 
-    // GPU メモリバッファの再確保判定
     if (num_candidates > g_max_candidates) {
         if (d_candidates) cudaFree(d_candidates);
         if (d_costs) cudaFree(d_costs);
@@ -212,12 +234,20 @@ bool launchFieldSDFMatcher(
         stream
     );
 
-    // SDF Matching カーネル実行
     int sdf_threads = 256;
     int sdf_blocks  = num_candidates;
 
     evaluateFieldSDFKernel<<<sdf_blocks, sdf_threads, 0, stream>>>(
-        d_obstacle_cloud, num_points, g_num_map_objects, d_candidates, d_costs, max_dist_thresh
+        d_obstacle_cloud,
+        num_points,
+        g_num_map_objects,
+        d_candidates,
+        d_costs,
+        max_dist_thresh,
+        field_min_x,
+        field_max_x,
+        field_min_y,
+        field_max_y
     );
 
     std::vector<float> h_costs(num_candidates);
@@ -225,7 +255,6 @@ bool launchFieldSDFMatcher(
         h_costs.data(), d_costs, num_candidates * sizeof(float), cudaMemcpyDeviceToHost, stream
     );
 
-    // コスト比較のために同期（必要最小限の同期）
     cudaStreamSynchronize(stream);
 
     int best_idx   = 0;
@@ -240,7 +269,6 @@ bool launchFieldSDFMatcher(
     out_best_pose = h_candidates[best_idx];
     out_best_cost = min_cost;
 
-    // 最良姿勢をもとに動的点群をフィルタリング
     int dyn_threads = 256;
     int dyn_blocks  = (num_points + dyn_threads - 1) / dyn_threads;
 
@@ -250,6 +278,10 @@ bool launchFieldSDFMatcher(
         g_num_map_objects,
         out_best_pose,
         dynamic_dist_thresh,
+        field_min_x,
+        field_max_x,
+        field_min_y,
+        field_max_y,
         d_is_dynamic
     );
 

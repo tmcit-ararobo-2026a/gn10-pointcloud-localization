@@ -16,7 +16,6 @@ struct PoseCandidate {
     float x, y, yaw;
 };
 
-// C++ / NVCC 間のシンボル不一致を防ぐための extern "C" 宣言
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -34,6 +33,10 @@ bool launchFieldSDFMatcher(
     float step_yaw,
     float max_dist_thresh,
     float dynamic_dist_thresh,
+    float field_min_x,
+    float field_max_x,
+    float field_min_y,
+    float field_max_y,
     PoseCandidate& out_best_pose,
     float& out_best_cost,
     std::vector<float>& out_dynamic_pts

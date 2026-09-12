@@ -60,6 +60,11 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.search_step_yaw", 0.02);
     this->declare_parameter("matching_params.max_dist_thresh", 0.20);
     this->declare_parameter("matching_params.cost_threshold", 0.20);
+    this->declare_parameter("matching_params.dynamic_dist_thresh", 0.15);
+    this->declare_parameter("matching_params.field_min_x", -5.5);
+    this->declare_parameter("matching_params.field_max_x", 5.5);
+    this->declare_parameter("matching_params.field_min_y", -6.0);
+    this->declare_parameter("matching_params.field_max_y", 6.0);
 
     this->declare_parameter("global_search.range_min_x", -5.25);
     this->declare_parameter("global_search.range_max_x", 5.25);
@@ -100,6 +105,16 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("matching_params.max_dist_thresh").as_double());
     match_params_.cost_threshold =
         static_cast<float>(this->get_parameter("matching_params.cost_threshold").as_double());
+    match_params_.dynamic_dist_thresh =
+        static_cast<float>(this->get_parameter("matching_params.dynamic_dist_thresh").as_double());
+    match_params_.field_min_x =
+        static_cast<float>(this->get_parameter("matching_params.field_min_x").as_double());
+    match_params_.field_max_x =
+        static_cast<float>(this->get_parameter("matching_params.field_max_x").as_double());
+    match_params_.field_min_y =
+        static_cast<float>(this->get_parameter("matching_params.field_min_y").as_double());
+    match_params_.field_max_y =
+        static_cast<float>(this->get_parameter("matching_params.field_max_y").as_double());
 
     global_range_min_x_ =
         static_cast<float>(this->get_parameter("global_search.range_min_x").as_double());
