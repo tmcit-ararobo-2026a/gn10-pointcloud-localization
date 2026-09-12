@@ -32,8 +32,8 @@
       search_step_xy: 0.03
       search_range_yaw: 0.3
       search_step_yaw: 0.02
-      max_dist_thresh: 0.20
-      cost_threshold: 0.18
+      max_dist_thresh: 0.25
+      cost_threshold: 0.1
 
     initial_pose:
       x: 0.0
