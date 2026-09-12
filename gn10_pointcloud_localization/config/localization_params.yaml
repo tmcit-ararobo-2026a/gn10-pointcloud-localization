@@ -38,3 +38,8 @@
       x: -4.0
       y: -4.0
       yaw: -1.5708
+    
+    global_search:
+      step_xy: 0.30
+      step_yaw: 0.15
+      lost_count_thresh: 5

@@ -4,6 +4,8 @@
 #include <tf2_ros/create_timer_ros.h>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <cmath>
+#include <limits>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -118,6 +120,10 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.max_dist_thresh", 0.20);
     this->declare_parameter("matching_params.cost_threshold", 0.20);
 
+    this->declare_parameter("global_search.step_xy", 0.30);
+    this->declare_parameter("global_search.step_yaw", 0.2618);
+    this->declare_parameter("global_search.lost_count_thresh", 5);
+
     this->declare_parameter("initial_pose.x", -4.0);
     this->declare_parameter("initial_pose.y", -4.0);
     this->declare_parameter("initial_pose.yaw", -1.5708);
@@ -149,10 +155,94 @@ void LocalizationNode::declareAndGetParameters()
     match_params_.cost_threshold =
         static_cast<float>(this->get_parameter("matching_params.cost_threshold").as_double());
 
+    global_step_xy_ = static_cast<float>(this->get_parameter("global_search.step_xy").as_double());
+    global_step_yaw_ =
+        static_cast<float>(this->get_parameter("global_search.step_yaw").as_double());
+    lost_threshold_count_ = this->get_parameter("global_search.lost_count_thresh").as_int();
+
     last_known_pose_.x   = static_cast<float>(this->get_parameter("initial_pose.x").as_double());
     last_known_pose_.y   = static_cast<float>(this->get_parameter("initial_pose.y").as_double());
     last_known_pose_.yaw = static_cast<float>(this->get_parameter("initial_pose.yaw").as_double());
     predicted_pose_      = last_known_pose_;
+}
+
+PoseCandidate LocalizationNode::executeGlobalSearch(
+    const std::vector<float>& h_raw_cloud,
+    const float* h_transform,
+    std::vector<float>& ground_pts,
+    std::vector<float>& obstacle_pts,
+    float& best_cost
+)
+{
+    RCLCPP_INFO(
+        this->get_logger(),
+        "[GlobalSearch] Executing sync global localization without downsampling..."
+    );
+    const auto start_time = this->now();
+
+    float min_cost = std::numeric_limits<float>::max();
+    PoseCandidate best_coarse_pose{0.0f, 0.0f, 0.0f};
+
+    // グローバルサーチ用の軽量パラメータ (探索ステップを粗く設定)
+    MatchingParams global_match_params = match_params_;
+    global_match_params.range_xy       = 0.00f;  // 指定座標ピンポイント評価
+    global_match_params.range_yaw      = 0.00f;
+
+    std::vector<float> tmp_ground, tmp_obstacle;
+    PoseCandidate tmp_pose;
+    float tmp_cost = 0.0f;
+
+    // NHK2026 フィールド全体範囲 (X: [-5.25, 5.25], Y: [-5.70, 5.70]) を生の点群のまま探索
+    for (float x = -5.0f; x <= 5.0f; x += global_step_xy_) {
+        for (float y = -5.4f; y <= 5.4f; y += global_step_xy_) {
+            for (float yaw = -M_PI; yaw < M_PI; yaw += global_step_yaw_) {
+                PoseCandidate candidate_pose{x, y, yaw};
+                bool ok = solver_->processPointCloud(
+                    h_raw_cloud,
+                    h_transform,
+                    filter_params_,
+                    global_match_params,
+                    candidate_pose,
+                    tmp_ground,
+                    tmp_obstacle,
+                    tmp_pose,
+                    tmp_cost
+                );
+
+                if (ok && tmp_cost < min_cost) {
+                    min_cost         = tmp_cost;
+                    best_coarse_pose = candidate_pose;
+                }
+            }
+        }
+    }
+
+    // 抽出した最良地点から通常パラメータで精密局所探索 (Refine)
+    PoseCandidate refined_pose;
+    solver_->processPointCloud(
+        h_raw_cloud,
+        h_transform,
+        filter_params_,
+        match_params_,
+        best_coarse_pose,
+        ground_pts,
+        obstacle_pts,
+        refined_pose,
+        best_cost
+    );
+
+    const double elapsed_ms = (this->now() - start_time).seconds() * 1000.0;
+    RCLCPP_INFO(
+        this->get_logger(),
+        "[GlobalSearch] Complete. Best Pose: (%.2f, %.2f, %.2f rad), Cost: %.4f, Elapsed: %.1f ms",
+        refined_pose.x,
+        refined_pose.y,
+        refined_pose.yaw,
+        best_cost,
+        elapsed_ms
+    );
+
+    return refined_pose;
 }
 
 void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
@@ -186,27 +276,72 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         h_raw_cloud.push_back(*iter_z);
     }
 
-    PoseCandidate search_base_pose;
-    {
-        std::lock_guard<std::mutex> lock(pose_mutex_);
-        search_base_pose = predicted_pose_;
-    }
-
     std::vector<float> ground_pts, obstacle_pts;
     PoseCandidate best_pose;
     float best_cost = 0.0f;
+    bool matched    = false;
 
-    bool matched = solver_->processPointCloud(
-        h_raw_cloud,
-        h_transform,
-        filter_params_,
-        match_params_,
-        search_base_pose,
-        ground_pts,
-        obstacle_pts,
-        best_pose,
-        best_cost
-    );
+    if (is_lost_) {
+        // --- ロスト状態 / 初期位置確定待ち ---
+        best_pose =
+            executeGlobalSearch(h_raw_cloud, h_transform, ground_pts, obstacle_pts, best_cost);
+
+        if (best_cost < match_params_.cost_threshold) {
+            is_lost_          = false;
+            lost_frame_count_ = 0;
+            matched           = true;
+            RCLCPP_INFO(
+                this->get_logger(), "[GlobalSearch] Successfully recovered from lost state."
+            );
+        } else {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "[GlobalSearch] Recovery failed. Cost (%.4f) > Threshold (%.4f)",
+                best_cost,
+                match_params_.cost_threshold
+            );
+        }
+    } else {
+        // --- 通常追従状態 ---
+        PoseCandidate search_base_pose;
+        {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            search_base_pose = predicted_pose_;
+        }
+
+        matched = solver_->processPointCloud(
+            h_raw_cloud,
+            h_transform,
+            filter_params_,
+            match_params_,
+            search_base_pose,
+            ground_pts,
+            obstacle_pts,
+            best_pose,
+            best_cost
+        );
+
+        // ロスト自動判定ロジック
+        if (!matched || best_cost >= match_params_.cost_threshold) {
+            lost_frame_count_++;
+            RCLCPP_WARN(
+                this->get_logger(),
+                "High matching cost detected (%.4f). Lost frame count: %d/%d",
+                best_cost,
+                lost_frame_count_,
+                lost_threshold_count_
+            );
+            if (lost_frame_count_ >= lost_threshold_count_) {
+                RCLCPP_ERROR(
+                    this->get_logger(),
+                    "Localization lost! Transitioning to Global Search on next frame."
+                );
+                is_lost_ = true;
+            }
+        } else {
+            lost_frame_count_ = 0;
+        }
+    }
 
     if (matched && best_cost < match_params_.cost_threshold) {
         {

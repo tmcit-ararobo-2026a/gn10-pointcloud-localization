@@ -29,6 +29,15 @@ private:
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
 
+    // ロスト時同期全域探索関数
+    PoseCandidate executeGlobalSearch(
+        const std::vector<float>& h_raw_cloud,
+        const float* h_transform,
+        std::vector<float>& ground_pts,
+        std::vector<float>& obstacle_pts,
+        float& best_cost
+    );
+
     void publishCloud(
         const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub,
         const std_msgs::msg::Header& header,
@@ -46,12 +55,19 @@ private:
     GroundFilterParams filter_params_;
     MatchingParams match_params_;
 
-    // Pose State
+    // Global Search Parameters
+    float global_step_xy_{0.30f};
+    float global_step_yaw_{0.2618f};  // ~15 deg
+    int lost_threshold_count_{5};
+
+    // Pose State & Recovery State
     std::mutex pose_mutex_;
     PoseCandidate last_known_pose_;
     PoseCandidate predicted_pose_;
     rclcpp::Time last_imu_stamp_;
     bool imu_initialized_{false};
+    bool is_lost_{true};  // 初期位置未確定時は true からスタート
+    int lost_frame_count_{0};
 
     // ROS 2 Interfaces
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
