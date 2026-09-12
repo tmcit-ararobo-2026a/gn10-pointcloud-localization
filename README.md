@@ -41,7 +41,30 @@ export PATH=/usr/local/cuda/bin:$PATH
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 ```
 
+rosdepで依存関係をインストール
 
+```bash
+rosdep update --rosdistro humble
+rosdep install --from-paths . --ignore-src -y --rosdistro humble
+```
+
+ビルド
+
+```bash
+colcon build --symlink-install --package-select gn10_pointcloud_localization
+```
+
+読み込み
+
+```bash
+source install/setup.bash
+```
+
+実行
+
+```bash
+ros2 launch gn10_pointcloud_localization localization.launch.py
+```
 
 ## 5. システム構成
 
