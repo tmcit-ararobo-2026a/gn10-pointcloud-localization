@@ -1,6 +1,8 @@
 #include "gn10_pointcloud_localization/pose_solver.hpp"
 
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 #include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
 
@@ -57,7 +59,10 @@ bool PoseSolver::processPointCloud(
 )
 {
     int num_points = static_cast<int>(h_raw_cloud.size() / 3);
-    if (num_points == 0 || num_points > max_points_) return false;
+    if (num_points == 0 || num_points > max_points_) {
+        out_best_cost = std::numeric_limits<float>::max();
+        return false;
+    }
 
     std::memcpy(h_in_, h_raw_cloud.data(), num_points * 3 * sizeof(float));
 
@@ -102,8 +107,12 @@ bool PoseSolver::processPointCloud(
             out_best_pose,
             out_best_cost
         );
+    } else {
+        // 点群数が不十分な場合は明確に最大コストをセット
+        out_best_cost = std::numeric_limits<float>::max();
     }
 
+    // デバッグ出力用の参照が渡されている場合のみ Host へコピー
     cudaMemcpyAsync(
         h_out_ground_,
         d_ground_,

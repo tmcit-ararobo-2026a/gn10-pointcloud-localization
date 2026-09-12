@@ -368,11 +368,12 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         );
 
         // ロスト自動判定ロジック
-        if (!matched || best_cost >= match_params_.cost_threshold) {
+        if (!matched || std::isnan(best_cost) || best_cost > match_params_.cost_threshold) {
             lost_frame_count_++;
             RCLCPP_WARN(
                 this->get_logger(),
-                "High matching cost detected (%.4f). Lost frame count: %d/%d",
+                "Matching failed or high cost (matched: %s, cost: %.4f). Lost count: %d/%d",
+                matched ? "true" : "false",
                 best_cost,
                 lost_frame_count_,
                 lost_threshold_count_
