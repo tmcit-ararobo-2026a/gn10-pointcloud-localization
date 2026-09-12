@@ -28,9 +28,9 @@
 
     matching_params:
       search_range_xy: 0.30
-      search_step_xy: 0.02
+      search_step_xy: 0.03
       search_range_yaw: 0.15
-      search_step_yaw: 0.01
+      search_step_yaw: 0.02
       max_dist_thresh: 0.20
       cost_threshold: 0.18
 

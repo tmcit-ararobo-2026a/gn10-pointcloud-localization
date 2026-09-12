@@ -5,7 +5,6 @@
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cmath>
-#include <limits>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -17,77 +16,19 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
     solver_ =
         std::make_unique<PoseSolver>(this->get_parameter("filter_params.max_points").as_int());
 
-    // --- Map Data Loading ---
-    std::string map_source = this->get_parameter("map_source_type").as_string();
-    if (map_source == "json") {
-        std::string json_path = this->get_parameter("map_file_path").as_string();
-        if (json_path.empty()) {
-            json_path =
-                ament_index_cpp::get_package_share_directory("gn10_pointcloud_localization") +
-                "/config/nhk2026_map.json";
-        }
-        map_objects_ = MapLoader::loadFromJSON(json_path);
-    } else if (map_source == "ros2_param") {
-        auto param_list = this->get_parameter("map_objects").as_string_array();
-        map_objects_    = MapLoader::loadFromParams(param_list);
-    }
+    GlobalSearchConfig search_config;
+    search_config.range_min_x       = global_range_min_x_;
+    search_config.range_max_x       = global_range_max_x_;
+    search_config.range_min_y       = global_range_min_y_;
+    search_config.range_max_y       = global_range_max_y_;
+    search_config.step_xy           = global_step_xy_;
+    search_config.step_yaw          = global_step_yaw_;
+    search_config.downsample_stride = global_downsample_stride_;
 
-    if (map_objects_.empty()) {
-        RCLCPP_WARN(
-            this->get_logger(), "Map is empty or failed to load. Falling back to default map."
-        );
-        map_objects_ = MapLoader::createNHK2026FieldMap();
-    }
+    global_searcher_ = std::make_unique<GlobalSearcher>(search_config, this->get_logger());
 
-    solver_->setMap(map_objects_);
-
-    // --- TF & MessageFilters ---
-    auto clock           = this->get_clock();
-    tf_buffer_           = std::make_unique<tf2_ros::Buffer>(clock);
-    auto timer_interface = std::make_shared<tf2_ros::CreateTimerROS>(
-        this->get_node_base_interface(), this->get_node_timers_interface()
-    );
-    tf_buffer_->setCreateTimerInterface(timer_interface);
-    tf_listener_    = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
-    tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
-
-    std::string topic_cloud = this->get_parameter("topics.input_cloud").as_string();
-    sub_cloud_filter_.subscribe(this, topic_cloud, rmw_qos_profile_sensor_data);
-    tf_filter_ = std::make_shared<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>>(
-        sub_cloud_filter_,
-        *tf_buffer_,
-        base_frame_,
-        10,
-        this->get_node_logging_interface(),
-        this->get_node_clock_interface(),
-        std::chrono::milliseconds(100)
-    );
-    tf_filter_->registerCallback(&LocalizationNode::cloudCallback, this);
-
-    std::string topic_imu = this->get_parameter("topics.input_imu").as_string();
-    sub_imu_              = this->create_subscription<sensor_msgs::msg::Imu>(
-        topic_imu,
-        rclcpp::SensorDataQoS(),
-        std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1)
-    );
-
-    // --- Publishers ---
-    pub_ground_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        this->get_parameter("topics.output_ground").as_string(), 10
-    );
-    pub_obstacle_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        this->get_parameter("topics.output_obstacle").as_string(), 10
-    );
-    pub_platform_pose_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-        this->get_parameter("topics.output_pose").as_string(), 10
-    );
-    pub_map_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-        this->get_parameter("topics.output_markers").as_string(), rclcpp::QoS(1).transient_local()
-    );
-
-    using namespace std::chrono_literals;
-    map_timer_ =
-        this->create_wall_timer(1s, std::bind(&LocalizationNode::publishFieldMapMarkers, this));
+    setupMapData();
+    setupROSInterfaces();
 }
 
 void LocalizationNode::declareAndGetParameters()
@@ -182,135 +123,105 @@ void LocalizationNode::declareAndGetParameters()
     predicted_pose_      = last_known_pose_;
 }
 
-PoseCandidate LocalizationNode::executeGlobalSearch(
-    const std::vector<float>& h_raw_cloud,
-    const float* h_transform,
-    std::vector<float>& ground_pts,
-    std::vector<float>& obstacle_pts,
-    float& best_cost
-)
+void LocalizationNode::setupMapData()
 {
-    RCLCPP_INFO(this->get_logger(), "[GlobalSearch] Executing sync global localization...");
-    const auto start_time = this->now();
-
-    // 品質を維持した間引き（インターリーブ抽出）
-    // 点群配列構造 [x0, y0, z0, x1, y1, z1, ...] を保持しつつ間引く
-    std::vector<float> search_cloud;
-    const size_t total_points = h_raw_cloud.size() / 3;
-    search_cloud.reserve((total_points / global_downsample_stride_) * 3);
-
-    for (size_t i = 0; i < total_points; i += global_downsample_stride_) {
-        search_cloud.push_back(h_raw_cloud[i * 3 + 0]);
-        search_cloud.push_back(h_raw_cloud[i * 3 + 1]);
-        search_cloud.push_back(h_raw_cloud[i * 3 + 2]);
-    }
-
-    float min_cost = std::numeric_limits<float>::max();
-    PoseCandidate best_coarse_pose{0.0f, 0.0f, 0.0f};
-
-    MatchingParams global_match_params = match_params_;
-    global_match_params.range_xy       = 0.00f;  // グリッド点でのピンポイント評価
-    global_match_params.range_yaw      = 0.00f;
-
-    std::vector<float> tmp_ground, tmp_obstacle;
-    PoseCandidate tmp_pose;
-    float tmp_cost = 0.0f;
-
-    // 指定範囲での全域グリッドスキャン
-    for (float x = global_range_min_x_; x <= global_range_max_x_; x += global_step_xy_) {
-        for (float y = global_range_min_y_; y <= global_range_max_y_; y += global_step_xy_) {
-            for (float yaw = -M_PI; yaw < M_PI; yaw += global_step_yaw_) {
-                PoseCandidate candidate_pose{x, y, yaw};
-                bool ok = solver_->processPointCloud(
-                    search_cloud,
-                    h_transform,
-                    filter_params_,
-                    global_match_params,
-                    candidate_pose,
-                    tmp_ground,
-                    tmp_obstacle,
-                    tmp_pose,
-                    tmp_cost
-                );
-
-                if (ok && tmp_cost < min_cost) {
-                    min_cost         = tmp_cost;
-                    best_coarse_pose = candidate_pose;
-                }
-            }
+    std::string map_source = this->get_parameter("map_source_type").as_string();
+    if (map_source == "json") {
+        std::string json_path = this->get_parameter("map_file_path").as_string();
+        if (json_path.empty()) {
+            json_path =
+                ament_index_cpp::get_package_share_directory("gn10_pointcloud_localization") +
+                "/config/nhk2026_map.json";
         }
+        map_objects_ = MapLoader::loadFromJSON(json_path);
+    } else if (map_source == "ros2_param") {
+        auto param_list = this->get_parameter("map_objects").as_string_array();
+        map_objects_    = MapLoader::loadFromParams(param_list);
     }
 
-    // 抽出したベスト領域に対し、元のRaw点群(h_raw_cloud) を使用して精密リファイン
-    PoseCandidate refined_pose;  // <-- ここを追加
-    solver_->processPointCloud(
-        h_raw_cloud,
-        h_transform,
-        filter_params_,
-        match_params_,
-        best_coarse_pose,
-        ground_pts,
-        obstacle_pts,
-        refined_pose,
-        best_cost
+    if (map_objects_.empty()) {
+        RCLCPP_WARN(
+            this->get_logger(), "Map is empty or failed to load. Falling back to default map."
+        );
+        map_objects_ = MapLoader::createNHK2026FieldMap();
+    }
+
+    solver_->setMap(map_objects_);
+}
+
+void LocalizationNode::setupROSInterfaces()
+{
+    auto clock           = this->get_clock();
+    tf_buffer_           = std::make_unique<tf2_ros::Buffer>(clock);
+    auto timer_interface = std::make_shared<tf2_ros::CreateTimerROS>(
+        this->get_node_base_interface(), this->get_node_timers_interface()
+    );
+    tf_buffer_->setCreateTimerInterface(timer_interface);
+    tf_listener_    = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+
+    std::string topic_cloud = this->get_parameter("topics.input_cloud").as_string();
+    sub_cloud_filter_.subscribe(this, topic_cloud, rmw_qos_profile_sensor_data);
+    tf_filter_ = std::make_shared<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>>(
+        sub_cloud_filter_,
+        *tf_buffer_,
+        base_frame_,
+        10,
+        this->get_node_logging_interface(),
+        this->get_node_clock_interface(),
+        std::chrono::milliseconds(100)
+    );
+    tf_filter_->registerCallback(&LocalizationNode::cloudCallback, this);
+
+    std::string topic_imu = this->get_parameter("topics.input_imu").as_string();
+    sub_imu_              = this->create_subscription<sensor_msgs::msg::Imu>(
+        topic_imu,
+        rclcpp::SensorDataQoS(),
+        std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1)
     );
 
-    const double elapsed_ms = (this->now() - start_time).seconds() * 1000.0;
-    RCLCPP_INFO(
-        this->get_logger(),
-        "[GlobalSearch] Complete. Best Pose: (%.2f, %.2f, %.2f rad), Cost: %.4f, Elapsed: %.1f ms",
-        refined_pose.x,
-        refined_pose.y,
-        refined_pose.yaw,
-        best_cost,
-        elapsed_ms
+    pub_ground_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        this->get_parameter("topics.output_ground").as_string(), 10
+    );
+    pub_obstacle_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        this->get_parameter("topics.output_obstacle").as_string(), 10
+    );
+    pub_platform_pose_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        this->get_parameter("topics.output_pose").as_string(), 10
+    );
+    pub_map_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+        this->get_parameter("topics.output_markers").as_string(), rclcpp::QoS(1).transient_local()
     );
 
-    return refined_pose;
+    using namespace std::chrono_literals;
+    map_timer_ =
+        this->create_wall_timer(1s, std::bind(&LocalizationNode::publishFieldMapMarkers, this));
 }
 
 void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
-    auto start_time = std::chrono::high_resolution_clock::now();
-
-    geometry_msgs::msg::TransformStamped transform_stamped;
-    try {
-        transform_stamped =
-            tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, msg->header.stamp);
-    } catch (const tf2::TransformException& ex) {
-        RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
+    float h_transform[12];
+    if (!getTransformAsArray(msg->header.frame_id, msg->header.stamp, h_transform)) {
         return;
     }
 
-    const Eigen::Affine3d eigen_tf = tf2::transformToEigen(transform_stamped);
-    float h_transform[12];
-    for (int r = 0; r < 3; ++r) {
-        for (int c = 0; c < 4; ++c) {
-            h_transform[r * 4 + c] = static_cast<float>(eigen_tf.matrix()(r, c));
-        }
-    }
-
-    sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x"), iter_y(*msg, "y"),
-        iter_z(*msg, "z");
-    std::vector<float> h_raw_cloud;
-    h_raw_cloud.reserve(msg->width * msg->height * 3);
-
-    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
-        if (std::isnan(*iter_x)) continue;
-        h_raw_cloud.push_back(*iter_x);
-        h_raw_cloud.push_back(*iter_y);
-        h_raw_cloud.push_back(*iter_z);
-    }
-
+    std::vector<float> h_raw_cloud = extractPointsFromMsg(msg);
     std::vector<float> ground_pts, obstacle_pts;
     PoseCandidate best_pose;
     float best_cost = 0.0f;
     bool matched    = false;
 
     if (is_lost_) {
-        // --- ロスト状態 / 初期位置確定待ち ---
-        best_pose =
-            executeGlobalSearch(h_raw_cloud, h_transform, ground_pts, obstacle_pts, best_cost);
+        best_pose = global_searcher_->search(
+            *solver_,
+            h_raw_cloud,
+            h_transform,
+            filter_params_,
+            match_params_,
+            ground_pts,
+            obstacle_pts,
+            best_cost
+        );
 
         if (best_cost < match_params_.cost_threshold) {
             is_lost_          = false;
@@ -319,16 +230,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             RCLCPP_INFO(
                 this->get_logger(), "[GlobalSearch] Successfully recovered from lost state."
             );
-        } else {
-            RCLCPP_WARN(
-                this->get_logger(),
-                "[GlobalSearch] Recovery failed. Cost (%.4f) > Threshold (%.4f)",
-                best_cost,
-                match_params_.cost_threshold
-            );
         }
     } else {
-        // --- 通常追従状態 ---
         PoseCandidate search_base_pose;
         {
             std::lock_guard<std::mutex> lock(pose_mutex_);
@@ -347,73 +250,11 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             best_cost
         );
 
-        // ロスト自動判定ロジック
-        if (!matched || std::isnan(best_cost) || best_cost > match_params_.cost_threshold) {
-            lost_frame_count_++;
-            RCLCPP_WARN(
-                this->get_logger(),
-                "Matching failed or high cost (matched: %s, cost: %.4f). Lost count: %d/%d",
-                matched ? "true" : "false",
-                best_cost,
-                lost_frame_count_,
-                lost_threshold_count_
-            );
-            if (lost_frame_count_ >= lost_threshold_count_) {
-                RCLCPP_ERROR(
-                    this->get_logger(),
-                    "Localization lost! Transitioning to Global Search on next frame."
-                );
-                is_lost_ = true;
-            }
-        } else {
-            lost_frame_count_ = 0;
-        }
-
-        auto end_time = std::chrono::high_resolution_clock::now();
-        double duration_ms =
-            std::chrono::duration<double, std::milli>(end_time - start_time).count();
-
-        RCLCPP_INFO_THROTTLE(
-            this->get_logger(),
-            *this->get_clock(),
-            1000,
-            "[Benchmark] Total Callback Time: %.2f ms (Input points: %zu)",
-            duration_ms,
-            static_cast<size_t>(msg->width) * msg->height
-        );
+        updateLostState(matched, best_cost);
     }
 
     if (matched && best_cost < match_params_.cost_threshold) {
-        {
-            std::lock_guard<std::mutex> lock(pose_mutex_);
-            last_known_pose_ = best_pose;
-            predicted_pose_  = best_pose;
-        }
-
-        tf2::Quaternion q;
-        q.setRPY(0.0, 0.0, best_pose.yaw);
-
-        auto pose_msg          = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
-        pose_msg->header.stamp = msg->header.stamp;
-        pose_msg->header.frame_id       = map_frame_;
-        pose_msg->pose.pose.position.x  = best_pose.x;
-        pose_msg->pose.pose.position.y  = best_pose.y;
-        pose_msg->pose.pose.position.z  = 0.0f;
-        pose_msg->pose.pose.orientation = tf2::toMsg(q);
-        pose_msg->pose.covariance[0]    = 0.005;
-        pose_msg->pose.covariance[7]    = 0.005;
-        pose_msg->pose.covariance[35]   = 0.002;
-        pub_platform_pose_->publish(std::move(pose_msg));
-
-        geometry_msgs::msg::TransformStamped tf_msg;
-        tf_msg.header.stamp            = msg->header.stamp;
-        tf_msg.header.frame_id         = map_frame_;
-        tf_msg.child_frame_id          = base_frame_;
-        tf_msg.transform.translation.x = best_pose.x;
-        tf_msg.transform.translation.y = best_pose.y;
-        tf_msg.transform.translation.z = 0.0f;
-        tf_msg.transform.rotation      = tf2::toMsg(q);
-        tf_broadcaster_->sendTransform(tf_msg);
+        publishPoseAndTransform(msg->header.stamp, best_pose);
     }
 
     std_msgs::msg::Header out_header = msg->header;
@@ -462,6 +303,97 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 
     predicted_pose_.yaw += static_cast<float>(omega_base.z() * dt);
     predicted_pose_.yaw = std::atan2(std::sin(predicted_pose_.yaw), std::cos(predicted_pose_.yaw));
+}
+
+bool LocalizationNode::getTransformAsArray(
+    const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
+)
+{
+    try {
+        auto tf                        = tf_buffer_->lookupTransform(base_frame_, frame_id, stamp);
+        const Eigen::Affine3d eigen_tf = tf2::transformToEigen(tf);
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 4; ++c) {
+                out_transform[r * 4 + c] = static_cast<float>(eigen_tf.matrix()(r, c));
+            }
+        }
+        return true;
+    } catch (const tf2::TransformException& ex) {
+        RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
+        return false;
+    }
+}
+
+std::vector<float> LocalizationNode::extractPointsFromMsg(
+    const sensor_msgs::msg::PointCloud2::SharedPtr& msg
+)
+{
+    std::vector<float> raw_cloud;
+    raw_cloud.reserve(msg->width * msg->height * 3);
+
+    sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x"), iter_y(*msg, "y"),
+        iter_z(*msg, "z");
+    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+        if (std::isnan(*iter_x)) continue;
+        raw_cloud.push_back(*iter_x);
+        raw_cloud.push_back(*iter_y);
+        raw_cloud.push_back(*iter_z);
+    }
+    return raw_cloud;
+}
+
+void LocalizationNode::updateLostState(bool matched, float best_cost)
+{
+    if (!matched || std::isnan(best_cost) || best_cost > match_params_.cost_threshold) {
+        lost_frame_count_++;
+        RCLCPP_WARN(
+            this->get_logger(),
+            "Matching failed or high cost (cost: %.4f). Lost count: %d/%d",
+            best_cost,
+            lost_frame_count_,
+            lost_threshold_count_
+        );
+        if (lost_frame_count_ >= lost_threshold_count_) {
+            RCLCPP_ERROR(this->get_logger(), "Localization lost! Transitioning to Global Search.");
+            is_lost_ = true;
+        }
+    } else {
+        lost_frame_count_ = 0;
+    }
+}
+
+void LocalizationNode::publishPoseAndTransform(const rclcpp::Time& stamp, const PoseCandidate& pose)
+{
+    {
+        std::lock_guard<std::mutex> lock(pose_mutex_);
+        last_known_pose_ = pose;
+        predicted_pose_  = pose;
+    }
+
+    tf2::Quaternion q;
+    q.setRPY(0.0, 0.0, pose.yaw);
+
+    auto pose_msg             = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
+    pose_msg->header.stamp    = stamp;
+    pose_msg->header.frame_id = map_frame_;
+    pose_msg->pose.pose.position.x  = pose.x;
+    pose_msg->pose.pose.position.y  = pose.y;
+    pose_msg->pose.pose.position.z  = 0.0f;
+    pose_msg->pose.pose.orientation = tf2::toMsg(q);
+    pose_msg->pose.covariance[0]    = 0.005;
+    pose_msg->pose.covariance[7]    = 0.005;
+    pose_msg->pose.covariance[35]   = 0.002;
+    pub_platform_pose_->publish(std::move(pose_msg));
+
+    geometry_msgs::msg::TransformStamped tf_msg;
+    tf_msg.header.stamp            = stamp;
+    tf_msg.header.frame_id         = map_frame_;
+    tf_msg.child_frame_id          = base_frame_;
+    tf_msg.transform.translation.x = pose.x;
+    tf_msg.transform.translation.y = pose.y;
+    tf_msg.transform.translation.z = 0.0f;
+    tf_msg.transform.rotation      = tf2::toMsg(q);
+    tf_broadcaster_->sendTransform(tf_msg);
 }
 
 void LocalizationNode::publishCloud(

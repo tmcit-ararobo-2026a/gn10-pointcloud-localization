@@ -15,6 +15,7 @@
 #include <vector>
 #include <visualization_msgs/msg/marker_array.hpp>
 
+#include "gn10_pointcloud_localization/global_searcher.hpp"
 #include "gn10_pointcloud_localization/map_loader.hpp"
 #include "gn10_pointcloud_localization/pose_solver.hpp"
 
@@ -25,17 +26,22 @@ public:
     ~LocalizationNode() override = default;
 
 private:
+    // 初期化ヘルパー
     void declareAndGetParameters();
+    void setupMapData();
+    void setupROSInterfaces();
+
+    // Callbacks
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
 
-    PoseCandidate executeGlobalSearch(
-        const std::vector<float>& h_raw_cloud,
-        const float* h_transform,
-        std::vector<float>& ground_pts,
-        std::vector<float>& obstacle_pts,
-        float& best_cost
+    // パイプライン分離ヘルパー関数
+    bool getTransformAsArray(
+        const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
     );
+    std::vector<float> extractPointsFromMsg(const sensor_msgs::msg::PointCloud2::SharedPtr& msg);
+    void updateLostState(bool matched, float best_cost);
+    void publishPoseAndTransform(const rclcpp::Time& stamp, const PoseCandidate& pose);
 
     void publishCloud(
         const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub,
@@ -46,6 +52,7 @@ private:
 
     // Member Objects
     std::unique_ptr<PoseSolver> solver_;
+    std::unique_ptr<GlobalSearcher> global_searcher_;
     std::vector<FieldObject> map_objects_;
 
     // Parameters
@@ -61,7 +68,7 @@ private:
     float global_range_max_y_{5.70f};
     float global_step_xy_{0.30f};
     float global_step_yaw_{0.2618f};
-    int global_downsample_stride_{2};  // 品質維持のため2点に1点抽出 (50%間引き)
+    int global_downsample_stride_{2};
     int lost_threshold_count_{5};
 
     // Pose State & Recovery State

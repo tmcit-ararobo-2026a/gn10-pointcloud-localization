@@ -49,6 +49,7 @@ target_compile_options(gn10_cuda_lib PRIVATE
 add_executable(gn10_pointcloud_localization_node
   src/map_loader.cpp
   src/pose_solver.cpp
+  src/global_searcher.cpp
   src/localization_node.cpp
   src/main.cpp
 )
