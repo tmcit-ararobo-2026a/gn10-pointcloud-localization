@@ -21,6 +21,7 @@ struct MatchingParams {
     float step_yaw{0.02f};
     float max_dist_thresh{0.20f};
     float cost_threshold{0.20f};
+    float dynamic_dist_thresh{0.15f};
 };
 
 class PoseSolver
@@ -39,6 +40,7 @@ public:
         const PoseCandidate& search_base_pose,
         std::vector<float>& out_ground_pts,
         std::vector<float>& out_obstacle_pts,
+        std::vector<float>& out_dynamic_pts,
         PoseCandidate& out_best_pose,
         float& out_best_cost
     );

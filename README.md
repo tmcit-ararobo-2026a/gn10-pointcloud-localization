@@ -73,6 +73,12 @@ source install/setup.bash
 ros2 launch gn10_pointcloud_localization localization.launch.py
 ```
 
+static tfを配信：
+
+```bash
+ros2 run tf2_ros static_transform_publisher --x -0.2 --y 0.25 --z 1.09 --yaw 3.1415 --pitch -0.273 --roll 3.13 --frame-id base_link --child-frame-id livox_frame --ros-args -p use_sim_time:=true
+```
+
 ## 5. システム構成
 
 このパッケージは、以下の手順で自己位置推定を行う。

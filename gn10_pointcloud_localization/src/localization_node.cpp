@@ -42,7 +42,7 @@ void LocalizationNode::declareAndGetParameters()
 
     this->declare_parameter("topics.input_cloud", "/livox/lidar");
     this->declare_parameter("topics.input_imu", "/livox/imu");
-    this->declare_parameter("topics.output_ground", "/ground_cloud");
+    this->declare_parameter("topics.output_dynamic", "/dynamic_obstacle_cloud");
     this->declare_parameter("topics.output_obstacle", "/obstacle_cloud");
     this->declare_parameter("topics.output_pose", "/platform_constraint");
     this->declare_parameter("topics.output_markers", "/field_map_markers");
@@ -180,8 +180,8 @@ void LocalizationNode::setupROSInterfaces()
         std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1)
     );
 
-    pub_ground_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        this->get_parameter("topics.output_ground").as_string(), 10
+    pub_dynamic_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        this->get_parameter("topics.output_dynamic").as_string(), 10
     );
     pub_obstacle_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         this->get_parameter("topics.output_obstacle").as_string(), 10
@@ -206,7 +206,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     }
 
     std::vector<float> h_raw_cloud = extractPointsFromMsg(msg);
-    std::vector<float> ground_pts, obstacle_pts;
+    std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
     PoseCandidate best_pose;
     float best_cost = 0.0f;
     bool matched    = false;
@@ -246,6 +246,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             search_base_pose,
             ground_pts,
             obstacle_pts,
+            dynamic_pts,
             best_pose,
             best_cost
         );
@@ -259,7 +260,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     std_msgs::msg::Header out_header = msg->header;
     out_header.frame_id              = base_frame_;
-    publishCloud(pub_ground_, out_header, ground_pts);
+    publishCloud(pub_dynamic_, out_header, dynamic_pts);
     publishCloud(pub_obstacle_, out_header, obstacle_pts);
 }
 

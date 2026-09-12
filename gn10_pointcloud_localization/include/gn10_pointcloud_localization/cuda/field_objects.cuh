@@ -33,8 +33,10 @@ bool launchFieldSDFMatcher(
     float range_yaw,
     float step_yaw,
     float max_dist_thresh,
+    float dynamic_dist_thresh,
     PoseCandidate& out_best_pose,
-    float& out_best_cost
+    float& out_best_cost,
+    std::vector<float>& out_dynamic_pts
 );
 
 #ifdef __cplusplus

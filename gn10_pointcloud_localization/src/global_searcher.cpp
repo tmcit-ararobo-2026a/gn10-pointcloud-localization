@@ -40,7 +40,7 @@ PoseCandidate GlobalSearcher::search(
     global_match_params.range_xy       = 0.00f;  // ピンポイント評価
     global_match_params.range_yaw      = 0.00f;
 
-    std::vector<float> tmp_ground, tmp_obstacle;
+    std::vector<float> tmp_ground, tmp_obstacle, tmp_dynamic;
     PoseCandidate tmp_pose;
     float tmp_cost = 0.0f;
 
@@ -56,6 +56,7 @@ PoseCandidate GlobalSearcher::search(
                     candidate_pose,
                     tmp_ground,
                     tmp_obstacle,
+                    tmp_dynamic,
                     tmp_pose,
                     tmp_cost
                 );
@@ -78,6 +79,7 @@ PoseCandidate GlobalSearcher::search(
         best_coarse_pose,
         out_ground_pts,
         out_obstacle_pts,
+        tmp_dynamic,
         refined_pose,
         out_best_cost
     );
