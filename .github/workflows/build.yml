@@ -45,7 +45,9 @@ jobs:
             git \
             ccache \
             nvidia-cuda-toolkit \
-            nlohmann-json3-dev
+            nlohmann-json3-dev \
+            libceres-dev \
+            libeigen3-dev
 
           export CCACHE_DIR=${{ github.workspace }}/.ccache
           export PATH="/usr/lib/ccache:$PATH"
