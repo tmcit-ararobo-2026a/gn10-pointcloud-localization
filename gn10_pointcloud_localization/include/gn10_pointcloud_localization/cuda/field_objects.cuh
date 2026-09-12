@@ -39,7 +39,8 @@ bool launchFieldSDFMatcher(
     float field_max_y,
     PoseCandidate& out_best_pose,
     float& out_best_cost,
-    std::vector<float>& out_dynamic_pts
+    std::vector<float>& out_dynamic_pts,
+    bool extract_dynamic = true  // false の場合は動的点群抽出カーネルとD2H転送を一切実行しない
 );
 
 #ifdef __cplusplus

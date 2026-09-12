@@ -110,7 +110,8 @@ bool PoseSolver::processPointCloud(
             match_params.field_max_y,
             out_best_pose,
             out_best_cost,
-            out_dynamic_pts
+            out_dynamic_pts,
+            true
         );
     } else {
         out_best_cost = std::numeric_limits<float>::max();
@@ -118,4 +119,80 @@ bool PoseSolver::processPointCloud(
     }
 
     return pose_matched;
+}
+
+int PoseSolver::prepareObstacleCloud(
+    const std::vector<float>& h_raw_cloud,
+    const float h_transform[12],
+    const GroundFilterParams& filter_params
+)
+{
+    int num_points = static_cast<int>(h_raw_cloud.size() / 3);
+    if (num_points == 0 || num_points > max_points_) {
+        return 0;
+    }
+
+    std::memcpy(h_in_, h_raw_cloud.data(), num_points * 3 * sizeof(float));
+
+    cudaMemcpyAsync(d_in_, h_in_, num_points * 3 * sizeof(float), cudaMemcpyHostToDevice, stream_);
+    cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
+
+    int h_ground_count   = 0;
+    int h_obstacle_count = 0;
+
+    launchGroundFilter(
+        stream_,
+        d_in_,
+        d_ground_,
+        d_obstacle_,
+        d_transform_,
+        num_points,
+        filter_params.range_max,
+        filter_params.robot_radius,
+        filter_params.robot_height_min,
+        filter_params.robot_height_max,
+        filter_params.ground_z_thresh,
+        d_ground_count_,
+        d_obstacle_count_,
+        &h_ground_count,
+        &h_obstacle_count
+    );
+
+    cudaStreamSynchronize(stream_);
+    return h_obstacle_count;
+}
+
+bool PoseSolver::evaluateGlobalSDF(
+    int obstacle_count,
+    const PoseCandidate& base_pose,
+    float range_xy,
+    float step_xy,
+    float range_yaw,
+    float step_yaw,
+    const MatchingParams& match_params,
+    PoseCandidate& out_best_pose,
+    float& out_best_cost
+)
+{
+    std::vector<float> dummy_dynamic;
+    return launchFieldSDFMatcher(
+        stream_,
+        d_obstacle_,
+        obstacle_count,
+        base_pose,
+        range_xy,
+        step_xy,
+        range_yaw,
+        step_yaw,
+        match_params.max_dist_thresh,
+        match_params.dynamic_dist_thresh,
+        match_params.field_min_x,
+        match_params.field_max_x,
+        match_params.field_min_y,
+        match_params.field_max_y,
+        out_best_pose,
+        out_best_cost,
+        dummy_dynamic,
+        false
+    );
 }

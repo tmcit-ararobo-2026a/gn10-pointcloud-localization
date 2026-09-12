@@ -36,6 +36,7 @@ public:
 
     void setMap(const std::vector<FieldObject>& host_map);
 
+    // 通常追従用（GroundFilter + SDF Matcher + Dynamic Point 抽出）
     bool processPointCloud(
         const std::vector<float>& h_raw_cloud,
         const float h_transform[12],
@@ -43,6 +44,26 @@ public:
         const MatchingParams& match_params,
         const PoseCandidate& search_base_pose,
         std::vector<float>& out_dynamic_pts,
+        PoseCandidate& out_best_pose,
+        float& out_best_cost
+    );
+
+    // 点群の前処理（GroundFilter）のみを実行し GPU 上の d_obstacle_ に保持する
+    int prepareObstacleCloud(
+        const std::vector<float>& h_raw_cloud,
+        const float h_transform[12],
+        const GroundFilterParams& filter_params
+    );
+
+    // 既に d_obstacle_ に保持されている点群に対して、全域候補の SDF Matcher を一括起動する
+    bool evaluateGlobalSDF(
+        int obstacle_count,
+        const PoseCandidate& base_pose,
+        float range_xy,
+        float step_xy,
+        float range_yaw,
+        float step_yaw,
+        const MatchingParams& match_params,
         PoseCandidate& out_best_pose,
         float& out_best_cost
     );

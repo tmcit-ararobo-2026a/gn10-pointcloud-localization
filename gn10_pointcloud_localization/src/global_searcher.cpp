@@ -17,9 +17,9 @@ PoseCandidate GlobalSearcher::search(
     float& out_best_cost
 )
 {
-    RCLCPP_INFO(logger_, "[GlobalSearch] Executing sync global localization...");
+    RCLCPP_INFO(logger_, "[GlobalSearch] Starting GPU-Batched Ultra Fast Search...");
 
-    // 間引き（インターリーブ抽出）
+    // 1. 点群のダウンサンプリング
     std::vector<float> search_cloud;
     const size_t total_points = h_raw_cloud.size() / 3;
     const int stride          = std::max(1, config_.downsample_stride);
@@ -31,41 +31,51 @@ PoseCandidate GlobalSearcher::search(
         search_cloud.push_back(h_raw_cloud[i * 3 + 2]);
     }
 
-    float min_cost = std::numeric_limits<float>::max();
-    PoseCandidate best_coarse_pose{0.0f, 0.0f, 0.0f};
-
-    MatchingParams global_match_params = match_params;
-    global_match_params.range_xy       = 0.00f;  // ピンポイント評価
-    global_match_params.range_yaw      = 0.00f;
-
-    std::vector<float> tmp_dynamic;
-    PoseCandidate tmp_pose;
-    float tmp_cost = 0.0f;
-
-    for (float x = config_.range_min_x; x <= config_.range_max_x; x += config_.step_xy) {
-        for (float y = config_.range_min_y; y <= config_.range_max_y; y += config_.step_xy) {
-            for (float yaw = -M_PI; yaw < M_PI; yaw += config_.step_yaw) {
-                PoseCandidate candidate_pose{x, y, yaw};
-                bool ok = solver.processPointCloud(
-                    search_cloud,
-                    h_transform,
-                    filter_params,
-                    global_match_params,
-                    candidate_pose,
-                    tmp_dynamic,
-                    tmp_pose,
-                    tmp_cost
-                );
-
-                if (ok && tmp_cost < min_cost) {
-                    min_cost         = tmp_cost;
-                    best_coarse_pose = candidate_pose;
-                }
-            }
-        }
+    // 2. GPU 上に障害物点群を展開（1回だけ実行）
+    int obstacle_count = solver.prepareObstacleCloud(search_cloud, h_transform, filter_params);
+    if (obstacle_count <= 50) {
+        RCLCPP_WARN(logger_, "[GlobalSearch] Too few obstacle points. Search aborted.");
+        out_best_cost = std::numeric_limits<float>::max();
+        return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
 
-    // 元の Raw 点群を使用してリファイン
+    // 3. フィールド中央座標および全域探索幅の設定
+    PoseCandidate center_pose;
+    center_pose.x   = (config_.range_min_x + config_.range_max_x) * 0.5f;
+    center_pose.y   = (config_.range_min_y + config_.range_max_y) * 0.5f;
+    center_pose.yaw = 0.0f;
+
+    float range_x   = (config_.range_max_x - config_.range_min_x) * 0.5f;
+    float range_y   = (config_.range_max_y - config_.range_min_y) * 0.5f;
+    float range_yaw = M_PI;  // -PI 〜 PI
+
+    // ※ range_x, range_y の異形アスペクト比対応のため、大きい方を幅として渡し全グリッドを生成させる
+    float max_range_xy = std::max(range_x, range_y);
+
+    PoseCandidate best_coarse_pose;
+    float coarse_cost = std::numeric_limits<float>::max();
+
+    // 全域探索を一括で GPU 実行（動的点群抽出なし）
+    bool ok = solver.evaluateGlobalSDF(
+        obstacle_count,
+        center_pose,
+        max_range_xy,
+        config_.step_xy,
+        range_yaw,
+        config_.step_yaw,
+        match_params,
+        best_coarse_pose,
+        coarse_cost
+    );
+
+    if (!ok) {
+        RCLCPP_ERROR(logger_, "[GlobalSearch] GPU Global Search Failed.");
+        out_best_cost = std::numeric_limits<float>::max();
+        return PoseCandidate{0.0f, 0.0f, 0.0f};
+    }
+
+    // 4. Raw 点群による局所リファイン処理
+    std::vector<float> dummy_dynamic;
     PoseCandidate refined_pose;
     solver.processPointCloud(
         h_raw_cloud,
@@ -73,7 +83,7 @@ PoseCandidate GlobalSearcher::search(
         filter_params,
         match_params,
         best_coarse_pose,
-        tmp_dynamic,
+        dummy_dynamic,
         refined_pose,
         out_best_cost
     );

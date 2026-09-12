@@ -200,7 +200,8 @@ bool launchFieldSDFMatcher(
     float field_max_y,
     PoseCandidate& out_best_pose,
     float& out_best_cost,
-    std::vector<float>& out_dynamic_pts
+    std::vector<float>& out_dynamic_pts,
+    bool extract_dynamic
 )
 {
     if (num_points <= 0 || g_num_map_objects <= 0) return false;
@@ -292,51 +293,55 @@ bool launchFieldSDFMatcher(
     out_best_pose = h_candidates[best_idx];
 
     // 5. 動的点群のフィルタリング (GPU)
-    int dyn_threads = 256;
-    int dyn_blocks  = (num_points + dyn_threads - 1) / dyn_threads;
-    filterDynamicPointsKernel<<<dyn_blocks, dyn_threads, 0, stream>>>(
-        d_obstacle_cloud,
-        num_points,
-        g_num_map_objects,
-        out_best_pose,
-        dynamic_dist_thresh,
-        field_min_x,
-        field_max_x,
-        field_min_y,
-        field_max_y,
-        d_is_dynamic
-    );
-
-    // 6. 動的点群の書き戻し処理
-    std::vector<uint8_t> h_is_dynamic(num_points);
-    std::vector<float> h_raw_cloud(num_points * 3);
-
-    cudaMemcpyAsync(
-        h_is_dynamic.data(),
-        d_is_dynamic,
-        num_points * sizeof(uint8_t),
-        cudaMemcpyDeviceToHost,
-        stream
-    );
-    cudaMemcpyAsync(
-        h_raw_cloud.data(),
-        d_obstacle_cloud,
-        num_points * 3 * sizeof(float),
-        cudaMemcpyDeviceToHost,
-        stream
-    );
-
-    cudaStreamSynchronize(stream);
-
     out_dynamic_pts.clear();
-    out_dynamic_pts.reserve(num_points * 3);
-    for (int i = 0; i < num_points; ++i) {
-        if (h_is_dynamic[i]) {
-            out_dynamic_pts.push_back(h_raw_cloud[i * 3 + 0]);
-            out_dynamic_pts.push_back(h_raw_cloud[i * 3 + 1]);
-            out_dynamic_pts.push_back(h_raw_cloud[i * 3 + 2]);
+
+    if (extract_dynamic) {
+        int dyn_threads = 256;
+        int dyn_blocks  = (num_points + dyn_threads - 1) / dyn_threads;
+        filterDynamicPointsKernel<<<dyn_blocks, dyn_threads, 0, stream>>>(
+            d_obstacle_cloud,
+            num_points,
+            g_num_map_objects,
+            out_best_pose,
+            dynamic_dist_thresh,
+            field_min_x,
+            field_max_x,
+            field_min_y,
+            field_max_y,
+            d_is_dynamic
+        );
+
+        std::vector<uint8_t> h_is_dynamic(num_points);
+        std::vector<float> h_raw_cloud(num_points * 3);
+
+        cudaMemcpyAsync(
+            h_is_dynamic.data(),
+            d_is_dynamic,
+            num_points * sizeof(uint8_t),
+            cudaMemcpyDeviceToHost,
+            stream
+        );
+        cudaMemcpyAsync(
+            h_raw_cloud.data(),
+            d_obstacle_cloud,
+            num_points * 3 * sizeof(float),
+            cudaMemcpyDeviceToHost,
+            stream
+        );
+
+        cudaStreamSynchronize(stream);
+
+        out_dynamic_pts.reserve(num_points * 3);
+        for (int i = 0; i < num_points; ++i) {
+            if (h_is_dynamic[i]) {
+                out_dynamic_pts.push_back(h_raw_cloud[i * 3 + 0]);
+                out_dynamic_pts.push_back(h_raw_cloud[i * 3 + 1]);
+                out_dynamic_pts.push_back(h_raw_cloud[i * 3 + 2]);
+            }
         }
     }
+
+    return true;
 
     return true;
 }
