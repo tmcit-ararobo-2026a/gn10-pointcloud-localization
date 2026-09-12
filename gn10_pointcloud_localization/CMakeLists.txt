@@ -33,7 +33,6 @@ include_directories(
 # CUDA ライブラリ
 add_library(gn10_cuda_lib
   src/cuda/ground_filter.cu
-  src/cuda/platform_detector.cu
   src/cuda/field_objects.cu
 )
 set_target_properties(gn10_cuda_lib PROPERTIES

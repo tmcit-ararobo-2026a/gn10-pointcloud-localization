@@ -53,6 +53,7 @@ __global__ void filterGroundKernel(
 }
 
 void launchGroundFilter(
+    cudaStream_t stream,
     const float* d_in,
     float* d_ground,
     float* d_obstacle,
@@ -69,13 +70,13 @@ void launchGroundFilter(
     int* h_obstacle_count
 )
 {
-    cudaMemset(d_ground_count, 0, sizeof(int));
-    cudaMemset(d_obstacle_count, 0, sizeof(int));
+    cudaMemsetAsync(d_ground_count, 0, sizeof(int), stream);
+    cudaMemsetAsync(d_obstacle_count, 0, sizeof(int), stream);
 
     int threadsPerBlock = 256;
     int blocksPerGrid   = (num_points + threadsPerBlock - 1) / threadsPerBlock;
 
-    filterGroundKernel<<<blocksPerGrid, threadsPerBlock>>>(
+    filterGroundKernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
         d_in,
         d_ground,
         d_obstacle,
@@ -89,8 +90,9 @@ void launchGroundFilter(
         d_ground_count,
         d_obstacle_count
     );
-    cudaDeviceSynchronize();
 
-    cudaMemcpy(h_ground_count, d_ground_count, sizeof(int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_obstacle_count, d_obstacle_count, sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(h_ground_count, d_ground_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    cudaMemcpyAsync(
+        h_obstacle_count, d_obstacle_count, sizeof(int), cudaMemcpyDeviceToHost, stream
+    );
 }

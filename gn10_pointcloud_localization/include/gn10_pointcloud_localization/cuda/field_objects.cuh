@@ -24,6 +24,7 @@ extern "C" {
 void uploadFieldMapToGPU(const std::vector<FieldObject>& host_map);
 
 bool launchFieldSDFMatcher(
+    cudaStream_t stream,
     const float* d_obstacle_cloud,
     int num_points,
     const PoseCandidate& base_pose,

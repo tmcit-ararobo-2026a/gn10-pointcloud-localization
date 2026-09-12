@@ -55,6 +55,7 @@ private:
     rclcpp::TimerBase::SharedPtr map_timer_;
 
     // --- CUDA Buffers & Parameters ---
+    cudaStream_t stream_;
     int max_points_{200000};
 
     // Device Pointers

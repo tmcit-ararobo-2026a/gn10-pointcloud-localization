@@ -2,6 +2,7 @@
 #include <cuda_runtime.h>
 
 void launchGroundFilter(
+    cudaStream_t stream,
     const float* d_in,
     float* d_ground,
     float* d_obstacle,

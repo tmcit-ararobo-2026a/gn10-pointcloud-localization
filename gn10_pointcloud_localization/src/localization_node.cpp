@@ -99,7 +99,9 @@ std::vector<FieldObject> createNHK2026FieldMap()
 
 LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_points_(200000)
 {
-    // 1. TF 関連の初期化
+    // CUDA ストリームの作成
+    cudaStreamCreate(&stream_);
+    // TF 関連の初期化
     auto clock = this->get_clock();
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(clock);
     // タイマーインターフェースを登録する
@@ -110,7 +112,7 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_point
     tf_listener_    = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-    // 2. PointCloud2 Subscriber (MessageFilter 経由)
+    // PointCloud2 Subscriber (MessageFilter 経由)
     sub_cloud_filter_.subscribe(this, "/livox/lidar", rmw_qos_profile_sensor_data);
     tf_filter_ = std::make_shared<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>>(
         sub_cloud_filter_,
@@ -123,14 +125,14 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_point
     );
     tf_filter_->registerCallback(&LocalizationNode::cloudCallback, this);
 
-    // 3. IMU Subscriber
+    // IMU Subscriber
     sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
         "/livox/imu",
         rclcpp::SensorDataQoS(),
         std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1)
     );
 
-    // 4. Publishers
+    // Publishers
     pub_ground_   = this->create_publisher<sensor_msgs::msg::PointCloud2>("/ground_cloud", 10);
     pub_obstacle_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/obstacle_cloud", 10);
     pub_platform_pose_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
@@ -140,7 +142,7 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_point
         "/field_map_markers", rclcpp::QoS(1).transient_local()
     );
 
-    // 5. CUDA デバイスメモリの確保
+    // CUDA デバイスメモリの確保
     cudaMalloc(&d_in_, max_points_ * 3 * sizeof(float));
     cudaMalloc(&d_ground_, max_points_ * 3 * sizeof(float));
     cudaMalloc(&d_obstacle_, max_points_ * 3 * sizeof(float));
@@ -148,12 +150,12 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_point
     cudaMalloc(&d_obstacle_count_, sizeof(int));
     cudaMalloc(&d_transform_, 12 * sizeof(float));
 
-    // 6. ホスト側 Pinned Memory の確保（転送速度の最適化）
+    // ホスト側 Pinned Memory の確保（転送速度の最適化）
     cudaMallocHost(&h_in_, max_points_ * 3 * sizeof(float));
     cudaMallocHost(&h_out_ground_, max_points_ * 3 * sizeof(float));
     cudaMallocHost(&h_out_obstacle_, max_points_ * 3 * sizeof(float));
 
-    // 7. 初期姿勢およびマップの初期化
+    // 初期姿勢およびマップの初期化
     last_known_pose_ = {-4.0f, -4.0f, -1.5708f};
     predicted_pose_  = last_known_pose_;
     is_initialized_  = false;
@@ -162,7 +164,7 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_point
     uploadFieldMapToGPU(map_objects_);
     publishFieldMapMarkers();
 
-    // 8. 1秒周期で静的マップマーカーを配信するタイマーの設定
+    // 1秒周期で静的マップマーカーを配信するタイマーの設定
     using namespace std::chrono_literals;
     map_timer_ =
         this->create_wall_timer(1s, std::bind(&LocalizationNode::publishFieldMapMarkers, this));
@@ -170,6 +172,11 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node"), max_point
 
 LocalizationNode::~LocalizationNode()
 {
+    if (stream_) {
+        cudaStreamSynchronize(stream_);
+        cudaStreamDestroy(stream_);
+    }
+
     cudaFree(d_in_);
     cudaFree(d_ground_);
     cudaFree(d_obstacle_);
@@ -208,7 +215,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x"), iter_y(*msg, "y"),
         iter_z(*msg, "z");
     int valid_pts = 0;
-    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+    for (; iter_x != iter_x.end() && valid_pts < max_points_; ++iter_x, ++iter_y, ++iter_z) {
         if (std::isnan(*iter_x)) continue;
         h_in_[valid_pts * 3 + 0] = *iter_x;
         h_in_[valid_pts * 3 + 1] = *iter_y;
@@ -216,12 +223,13 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         valid_pts++;
     }
 
-    cudaMemcpy(d_in_, h_in_, valid_pts * 3 * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(d_in_, h_in_, valid_pts * 3 * sizeof(float), cudaMemcpyHostToDevice, stream_);
+    cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
 
     int h_ground_count   = 0;
     int h_obstacle_count = 0;
     launchGroundFilter(
+        stream_,
         d_in_,
         d_ground_,
         d_obstacle_,
@@ -238,6 +246,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         &h_obstacle_count
     );
 
+    cudaStreamSynchronize(stream_);
+
     if (h_obstacle_count > 50) {
         PoseCandidate search_base_pose;
         {
@@ -249,6 +259,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         float best_cost = 0.0f;
 
         const bool matched = launchFieldSDFMatcher(
+            stream_,
             d_obstacle_,
             h_obstacle_count,
             search_base_pose,
@@ -310,12 +321,22 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     }
 
-    cudaMemcpy(
-        h_out_ground_, d_ground_, h_ground_count * 3 * sizeof(float), cudaMemcpyDeviceToHost
+    cudaMemcpyAsync(
+        h_out_ground_,
+        d_ground_,
+        h_ground_count * 3 * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        stream_
     );
-    cudaMemcpy(
-        h_out_obstacle_, d_obstacle_, h_obstacle_count * 3 * sizeof(float), cudaMemcpyDeviceToHost
+    cudaMemcpyAsync(
+        h_out_obstacle_,
+        d_obstacle_,
+        h_obstacle_count * 3 * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        stream_
     );
+
+    cudaStreamSynchronize(stream_);
 
     std_msgs::msg::Header out_header = msg->header;
     out_header.frame_id              = "base_link";
@@ -428,7 +449,10 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
     const double dt = (rclcpp::Time(msg->header.stamp) - last_imu_stamp_).seconds();
     last_imu_stamp_ = msg->header.stamp;
 
-    if (dt <= 0.0 || dt > 0.5) return;
+    if (dt <= 0.0 || dt > 0.5) {
+        imu_initialized_ = false;
+        return;
+    }
 
     // 3. 角速度を base_link 座標系へ変換して Yaw 積分
     const Eigen::Vector3d omega_imu(

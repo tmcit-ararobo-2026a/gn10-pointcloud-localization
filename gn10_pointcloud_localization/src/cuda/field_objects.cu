@@ -4,9 +4,9 @@
 
 #include "gn10_pointcloud_localization/cuda/field_objects.cuh"
 
-// Constant memory または グローバルメモリの定義
-static FieldObject* d_map_objects = nullptr;
-static int g_num_map_objects      = 0;
+// GPU 定数メモリの定義（最大128個のオブジェクト）
+__constant__ FieldObject c_map_objects[128];
+static int g_num_map_objects = 0;
 
 static PoseCandidate* d_candidates = nullptr;
 static float* d_costs              = nullptr;
@@ -35,7 +35,6 @@ __device__ float distToCylinder2D(float px, float py, float cx, float cy, float 
 __global__ void evaluateFieldSDFKernel(
     const float* __restrict__ cloud,
     int num_points,
-    const FieldObject* __restrict__ objects,
     int num_objects,
     const PoseCandidate* __restrict__ candidates,
     float* __restrict__ out_costs,
@@ -55,7 +54,7 @@ __global__ void evaluateFieldSDFKernel(
     __shared__ float s_cost[256];
     s_cost[tid] = 0.0f;
 
-    // 各スレッドが割当られた点群の残差を計算
+    // 各スレッドが割り当てられた点群の残差を計算
     for (int i = tid; i < num_points; i += blockDim.x) {
         float lx = cloud[i * 3 + 0];
         float ly = cloud[i * 3 + 1];
@@ -64,16 +63,16 @@ __global__ void evaluateFieldSDFKernel(
         // ロボットローカル座標 (base_link) -> ワールド仮定座標への変換
         float wx = cos_y * lx - sin_y * ly + rx;
         float wy = sin_y * lx + cos_y * ly + ry;
-        float wz = lz;  // 高さZ
+        float wz = lz;
 
         float min_d = max_dist_thresh;
 
-        // 全フィールドオブジェクトに対する距離評価
+        // 定数メモリ (c_map_objects) から全フィールドオブジェクトを評価
         for (int o = 0; o < num_objects; ++o) {
-            FieldObject obj = objects[o];
+            const FieldObject obj = c_map_objects[o];
 
-            // 高さ (Z) の合致判定
-            if (wz >= obj.z_min && wz <= obj.z_max) {
+            // 高さ (Z) の合致判定（マージン 0.1m を考慮して姿勢ロストを防ぐ）
+            if (wz >= (obj.z_min - 0.1f) && wz <= (obj.z_max + 0.1f)) {
                 float d = max_dist_thresh;
                 if (obj.type == CYLINDER) {
                     d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
@@ -84,7 +83,7 @@ __global__ void evaluateFieldSDFKernel(
             }
         }
 
-        // コストの加算（Huber損失的なクリッピング）
+        // コストの加算（閾値によるクリッピング）
         s_cost[tid] += (min_d < max_dist_thresh) ? min_d : max_dist_thresh;
     }
     __syncthreads();
@@ -106,14 +105,16 @@ extern "C" {
 
 void uploadFieldMapToGPU(const std::vector<FieldObject>& host_map)
 {
-    if (d_map_objects) cudaFree(d_map_objects);
-    g_num_map_objects = host_map.size();
-    size_t bytes      = g_num_map_objects * sizeof(FieldObject);
-    cudaMalloc(&d_map_objects, bytes);
-    cudaMemcpy(d_map_objects, host_map.data(), bytes, cudaMemcpyHostToDevice);
+    g_num_map_objects = static_cast<int>(host_map.size());
+    if (g_num_map_objects > 128) g_num_map_objects = 128;
+
+    size_t bytes = g_num_map_objects * sizeof(FieldObject);
+    // 定数メモリ (c_map_objects) にマップデータを転送
+    cudaMemcpyToSymbol(c_map_objects, host_map.data(), bytes);
 }
 
 bool launchFieldSDFMatcher(
+    cudaStream_t stream,
     const float* d_obstacle_cloud,
     int num_points,
     const PoseCandidate& base_pose,
@@ -130,51 +131,55 @@ bool launchFieldSDFMatcher(
 
     // グリッド候補姿勢の生成
     std::vector<PoseCandidate> h_candidates;
-    for (float dx = -range_xy; dx <= range_xy; dx += step_xy) {
-        for (float dy = -range_xy; dy <= range_xy; dy += step_xy) {
-            for (float dyaw = -range_yaw; dyaw <= range_yaw; dyaw += step_yaw) {
+    for (float dx = -range_xy; dx <= range_xy + 1e-5f; dx += step_xy) {
+        for (float dy = -range_xy; dy <= range_xy + 1e-5f; dy += step_xy) {
+            for (float dyaw = -range_yaw; dyaw <= range_yaw + 1e-5f; dyaw += step_yaw) {
                 h_candidates.push_back({base_pose.x + dx, base_pose.y + dy, base_pose.yaw + dyaw});
             }
         }
     }
 
-    int num_candidates = h_candidates.size();
+    int num_candidates = static_cast<int>(h_candidates.size());
     if (num_candidates == 0) return false;
 
-    // バッファ確保
+    // GPUメモリの動的確保・再利用
     if (num_candidates > g_max_candidates) {
         if (d_candidates) cudaFree(d_candidates);
         if (d_costs) cudaFree(d_costs);
-        g_max_candidates = num_candidates;
+        g_max_candidates = num_candidates * 2;
         cudaMalloc(&d_candidates, g_max_candidates * sizeof(PoseCandidate));
         cudaMalloc(&d_costs, g_max_candidates * sizeof(float));
     }
 
-    cudaMemcpy(
+    cudaMemcpyAsync(
         d_candidates,
         h_candidates.data(),
         num_candidates * sizeof(PoseCandidate),
-        cudaMemcpyHostToDevice
+        cudaMemcpyHostToDevice,
+        stream
     );
 
-    // カーネル起動 (1ブロック = 1姿勢候補)
+    // カーネル起動（1ブロック = 1姿勢候補）
     int threads_per_block = 256;
     int blocks_per_grid   = num_candidates;
 
-    evaluateFieldSDFKernel<<<blocks_per_grid, threads_per_block>>>(
+    evaluateFieldSDFKernel<<<blocks_per_grid, threads_per_block, 0, stream>>>(
         d_obstacle_cloud,
         num_points,
-        d_map_objects,
-        g_num_map_objects,
+        g_num_map_objects,  // ★ポインタではなく整数(個数)を渡すように修正
         d_candidates,
         d_costs,
         max_dist_thresh
     );
 
     std::vector<float> h_costs(num_candidates);
-    cudaMemcpy(h_costs.data(), d_costs, num_candidates * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(
+        h_costs.data(), d_costs, num_candidates * sizeof(float), cudaMemcpyDeviceToHost, stream
+    );
 
-    // 最小コストの探索
+    cudaStreamSynchronize(stream);
+
+    // 最小コスト姿勢の判定
     int best_idx   = 0;
     float min_cost = FLT_MAX;
     for (int i = 0; i < num_candidates; ++i) {
