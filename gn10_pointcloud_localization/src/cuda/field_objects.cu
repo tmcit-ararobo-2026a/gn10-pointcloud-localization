@@ -3,6 +3,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
+#include <cub/cub.cuh>
 #include <vector>
 
 #include "gn10_pointcloud_localization/cuda/field_objects.cuh"
@@ -16,6 +17,10 @@ static int g_max_candidates        = 0;
 
 static uint8_t* d_is_dynamic = nullptr;
 static int g_max_dynamic_pts = 0;
+
+static cub::KeyValuePair<int, float>* d_out_argmin = nullptr;
+static void* d_temp_storage                        = nullptr;
+static size_t temp_storage_bytes                   = 0;
 
 __device__ float distToBox2D(float px, float py, float cx, float cy, float half_w, float half_d)
 {
@@ -200,6 +205,7 @@ bool launchFieldSDFMatcher(
 {
     if (num_points <= 0 || g_num_map_objects <= 0) return false;
 
+    // 1. 姿勢候補の生成 (Host)
     std::vector<PoseCandidate> h_candidates;
     for (float dx = -range_xy; dx <= range_xy + 1e-5f; dx += step_xy) {
         for (float dy = -range_xy; dy <= range_xy + 1e-5f; dy += step_xy) {
@@ -212,12 +218,24 @@ bool launchFieldSDFMatcher(
     int num_candidates = static_cast<int>(h_candidates.size());
     if (num_candidates == 0) return false;
 
+    // メモリ確保・再確保チェック
     if (num_candidates > g_max_candidates) {
         if (d_candidates) cudaFree(d_candidates);
         if (d_costs) cudaFree(d_costs);
+        if (d_out_argmin) cudaFree(d_out_argmin);
+
         g_max_candidates = num_candidates * 2;
         cudaMalloc(&d_candidates, g_max_candidates * sizeof(PoseCandidate));
         cudaMalloc(&d_costs, g_max_candidates * sizeof(float));
+        cudaMalloc(&d_out_argmin, sizeof(cub::KeyValuePair<int, float>));
+
+        // CUBの作業用テンポラリメモリ領域のサイズ計算
+        d_temp_storage     = nullptr;
+        temp_storage_bytes = 0;
+        cub::DeviceReduce::ArgMin(
+            d_temp_storage, temp_storage_bytes, d_costs, d_out_argmin, num_candidates, stream
+        );
+        cudaMalloc(&d_temp_storage, temp_storage_bytes);
     }
 
     if (num_points > g_max_dynamic_pts) {
@@ -226,6 +244,7 @@ bool launchFieldSDFMatcher(
         cudaMalloc(&d_is_dynamic, g_max_dynamic_pts * sizeof(uint8_t));
     }
 
+    // H2D 転送 (Async)
     cudaMemcpyAsync(
         d_candidates,
         h_candidates.data(),
@@ -234,9 +253,9 @@ bool launchFieldSDFMatcher(
         stream
     );
 
+    // 2. 全姿勢候補のSDF評価 (GPU)
     int sdf_threads = 256;
     int sdf_blocks  = num_candidates;
-
     evaluateFieldSDFKernel<<<sdf_blocks, sdf_threads, 0, stream>>>(
         d_obstacle_cloud,
         num_points,
@@ -250,28 +269,31 @@ bool launchFieldSDFMatcher(
         field_max_y
     );
 
-    std::vector<float> h_costs(num_candidates);
-    cudaMemcpyAsync(
-        h_costs.data(), d_costs, num_candidates * sizeof(float), cudaMemcpyDeviceToHost, stream
+    // 3. GPU内で最小コストとそのインデックス（ArgMin）を算出 (GPU)
+    cub::DeviceReduce::ArgMin(
+        d_temp_storage, temp_storage_bytes, d_costs, d_out_argmin, num_candidates, stream
     );
 
+    // 4. 最小結果（KeyValuePair 1つだけ）をホストへ転送
+    cub::KeyValuePair<int, float> h_argmin;
+    cudaMemcpyAsync(
+        &h_argmin,
+        d_out_argmin,
+        sizeof(cub::KeyValuePair<int, float>),
+        cudaMemcpyDeviceToHost,
+        stream
+    );
+
+    // D2H 転送完了を待機（全コスト配列の同期処理が無くなる）
     cudaStreamSynchronize(stream);
 
-    int best_idx   = 0;
-    float min_cost = FLT_MAX;
-    for (int i = 0; i < num_candidates; ++i) {
-        if (h_costs[i] < min_cost) {
-            min_cost = h_costs[i];
-            best_idx = i;
-        }
-    }
-
+    int best_idx  = h_argmin.key;
+    out_best_cost = h_argmin.value;
     out_best_pose = h_candidates[best_idx];
-    out_best_cost = min_cost;
 
+    // 5. 動的点群のフィルタリング (GPU)
     int dyn_threads = 256;
     int dyn_blocks  = (num_points + dyn_threads - 1) / dyn_threads;
-
     filterDynamicPointsKernel<<<dyn_blocks, dyn_threads, 0, stream>>>(
         d_obstacle_cloud,
         num_points,
@@ -285,6 +307,7 @@ bool launchFieldSDFMatcher(
         d_is_dynamic
     );
 
+    // 6. 動的点群の書き戻し処理
     std::vector<uint8_t> h_is_dynamic(num_points);
     std::vector<float> h_raw_cloud(num_points * 3);
 
@@ -307,7 +330,6 @@ bool launchFieldSDFMatcher(
 
     out_dynamic_pts.clear();
     out_dynamic_pts.reserve(num_points * 3);
-
     for (int i = 0; i < num_points; ++i) {
         if (h_is_dynamic[i]) {
             out_dynamic_pts.push_back(h_raw_cloud[i * 3 + 0]);
