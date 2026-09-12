@@ -10,8 +10,14 @@
 6. [ライセンス](#6-ライセンス)
 
 ## 1. 概要
-MID360S LiDARを用いた高専ロボコン向けの自己位置推定パッケージです。
-フィールドが静的で平坦であることを前提としており、CUDAを用いた高速化が行われています。
+MID360S LiDARを用いた高専ロボコン向けの自己位置推定パッケージ。
+フィールドが静的で平坦で、MID360Sの取り付け高さが固定であることを前提としており、CUDAを用いた高速化が行われている。
+また、オドメトリ、初期位置の情報を用いずにMID360Sから得られるPointCloud2とIMUのみで自己位置推定を行うことができる。
+
+動作環境：
+Ubuntu 22.04
+ROS2 Humble
+CUDA 12.0以上
 
 ## 2. ドキュメント
 
@@ -34,7 +40,8 @@ sudo apt update
 sudo apt install -y libceres-dev libeigen3-dev nlohmann-json3-dev
 ```
 
-CUDAのパスを通す（CUDAが/usr/local/cudaにある場合）
+CUDAのパスを通す(普通は通ってると思うが、私はパスを常時通すことを嫌うので毎回通すようにしている)
+CUDAが/usr/local/cudaにある場合:
 
 ```bash
 export PATH=/usr/local/cuda/bin:$PATH
@@ -68,8 +75,10 @@ ros2 launch gn10_pointcloud_localization localization.launch.py
 
 ## 5. システム構成
 
-<!-- ROS2ノード構成・STM32との通信方式・ハードウェア構成 等 -->
-<!-- 依存クラスが3つ以上ある場合は docs/uml/ にUML図を作成し、ここにリンクする -->
+このパッケージは、以下の手順で自己位置推定を行う。
+1. 点群のフィルタリングで半径12mを抽出
+2. 平面抽出して床面を除く
+3. フィールドの囲いと中央の教壇、各オブジェクトを一致させて自己位置を割り出し
 
 ## 6. ライセンス
 
