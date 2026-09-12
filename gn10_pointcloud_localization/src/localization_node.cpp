@@ -271,6 +271,8 @@ PoseCandidate LocalizationNode::executeGlobalSearch(
 
 void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     geometry_msgs::msg::TransformStamped transform_stamped;
     try {
         transform_stamped =
@@ -365,6 +367,19 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         } else {
             lost_frame_count_ = 0;
         }
+
+        auto end_time = std::chrono::high_resolution_clock::now();
+        double duration_ms =
+            std::chrono::duration<double, std::milli>(end_time - start_time).count();
+
+        RCLCPP_INFO_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            1000,
+            "[Benchmark] Total Callback Time: %.2f ms (Input points: %zu)",
+            duration_ms,
+            static_cast<size_t>(msg->width) * msg->height
+        );
     }
 
     if (matched && best_cost < match_params_.cost_threshold) {
