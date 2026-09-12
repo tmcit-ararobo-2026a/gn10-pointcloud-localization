@@ -46,6 +46,6 @@
       range_min_y: -5.70        # 探索範囲 Y 最小値 [m]
       range_max_y:  5.70        # 探索範囲 Y 最大値 [m]
       step_xy: 0.30            # グローバルサーチのXY検索ピッチ [m]
-      step_yaw: 0.15           # グローバルサーチのYaw検索ピッチ [rad]
-      downsample_stride: 3     # グローバル探索時の点群抽出ピッチ (2: 50%間引き, 1: 完全RAW)
+      step_yaw: 0.4            # グローバルサーチのYaw検索ピッチ [rad]
+      downsample_stride: 4     # グローバル探索時の点群抽出ピッチ (2: 50%間引き, 1: 完全RAW)
       lost_count_thresh: 5     # ロスト確定までの連続判定フレーム数
