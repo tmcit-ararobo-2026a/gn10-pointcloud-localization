@@ -31,7 +31,7 @@ MID360S LiDARを用いた高専ロボコン向けの自己位置推定パッケ�
 
 ```bash
 sudo apt update
-sudo apt install -y libceres-dev libeigen3-dev
+sudo apt install -y libceres-dev libeigen3-dev nlohmann-json3-dev
 ```
 
 CUDAのパスを通す（CUDAが/usr/local/cudaにある場合）
