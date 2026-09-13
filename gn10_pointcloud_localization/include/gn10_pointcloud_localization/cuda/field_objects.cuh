@@ -10,6 +10,7 @@ struct FieldObject {
     float center_x, center_y;
     float z_min, z_max;
     float param1, param2;
+    float weight;
 };
 
 struct PoseCandidate {

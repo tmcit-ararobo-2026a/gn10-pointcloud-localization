@@ -36,9 +36,9 @@
       cost_threshold: 0.1
 
     initial_pose:
-      x: 0.0
-      y: 0.0
-      yaw: 0.0
+      x: -4.0
+      y: -3.0
+      yaw: 1.57
     
     global_search:
       range_min_x: -5.25        # 探索範囲 X 最小値 [m]

@@ -83,21 +83,26 @@ __global__ void evaluateFieldSDFKernel(
         }
 
         s_valid_count[tid] += 1;
-        float min_d = max_dist_thresh;
+        float min_weighted_d = max_dist_thresh;
 
         for (int o = 0; o < num_objects; ++o) {
             const FieldObject obj = c_map_objects[o];
             if (wz >= (obj.z_min - 0.1f) && wz <= (obj.z_max + 0.1f)) {
-                float d = max_dist_thresh;
+                float raw_d = max_dist_thresh;
                 if (obj.type == CYLINDER) {
-                    d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
+                    raw_d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
                 } else if (obj.type == BOX) {
-                    d = distToBox2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
+                    raw_d = distToBox2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
                 }
-                if (d < min_d) min_d = d;
+
+                // 重み付き距離の計算 (weight < 1.0 でコスト寄与度を高める)
+                float weighted_d = raw_d * obj.weight;
+                if (weighted_d < min_weighted_d) {
+                    min_weighted_d = weighted_d;
+                }
             }
         }
-        s_cost[tid] += (min_d < max_dist_thresh) ? min_d : max_dist_thresh;
+        s_cost[tid] += (min_weighted_d < max_dist_thresh) ? min_weighted_d : max_dist_thresh;
     }
     __syncthreads();
 
