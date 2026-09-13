@@ -8,8 +8,11 @@
 
 #include "gn10_pointcloud_localization/cuda/field_objects.cuh"
 
-__constant__ FieldObject c_map_objects[128];
-static int g_num_map_objects = 0;
+__constant__ FieldObject c_cylinders[128];
+__constant__ FieldObject c_boxes[128];
+
+static int g_num_cylinders = 0;
+static int g_num_boxes     = 0;
 
 static PoseCandidate* d_candidates = nullptr;
 static float* d_costs              = nullptr;
@@ -22,7 +25,9 @@ static cub::KeyValuePair<int, float>* d_out_argmin = nullptr;
 static void* d_temp_storage                        = nullptr;
 static size_t temp_storage_bytes                   = 0;
 
-__device__ float distToBox2D(float px, float py, float cx, float cy, float half_w, float half_d)
+__device__ __forceinline__ float distToBox2D(
+    float px, float py, float cx, float cy, float half_w, float half_d
+)
 {
     float dx = fabsf(px - cx) - half_w;
     float dy = fabsf(py - cy) - half_d;
@@ -31,7 +36,9 @@ __device__ float distToBox2D(float px, float py, float cx, float cy, float half_
     return sqrtf(ax * ax + ay * ay) + fminf(fmaxf(dx, dy), 0.0f);
 }
 
-__device__ float distToCylinder2D(float px, float py, float cx, float cy, float radius)
+__device__ __forceinline__ float distToCylinder2D(
+    float px, float py, float cx, float cy, float radius
+)
 {
     float dx          = px - cx;
     float dy          = py - cy;
@@ -43,7 +50,8 @@ __device__ float distToCylinder2D(float px, float py, float cx, float cy, float 
 __global__ void evaluateFieldSDFKernel(
     const float* __restrict__ cloud,
     int num_points,
-    int num_objects,
+    int num_cylinders,
+    int num_boxes,
     const PoseCandidate* __restrict__ candidates,
     float* __restrict__ out_costs,
     float max_dist_thresh,
@@ -85,22 +93,29 @@ __global__ void evaluateFieldSDFKernel(
         s_valid_count[tid] += 1;
         float min_d = max_dist_thresh;
 
-        for (int o = 0; o < num_objects; ++o) {
-            const FieldObject obj = c_map_objects[o];
+        // --- CYLINDER の判定ループ ---
+        for (int o = 0; o < num_cylinders; ++o) {
+            const FieldObject obj = c_cylinders[o];
             if (wz >= (obj.z_min - 0.1f) && wz <= (obj.z_max + 0.1f)) {
-                float d = max_dist_thresh;
-                if (obj.type == CYLINDER) {
-                    d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
-                } else if (obj.type == BOX) {
-                    d = distToBox2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
-                }
+                float d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
                 if (d < min_d) min_d = d;
             }
         }
+
+        // --- BOX の判定ループ ---
+        for (int o = 0; o < num_boxes; ++o) {
+            const FieldObject obj = c_boxes[o];
+            if (wz >= (obj.z_min - 0.1f) && wz <= (obj.z_max + 0.1f)) {
+                float d = distToBox2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
+                if (d < min_d) min_d = d;
+            }
+        }
+
         s_cost[tid] += (min_d < max_dist_thresh) ? min_d : max_dist_thresh;
     }
     __syncthreads();
 
+    // Block Reduce
     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
         if (tid < s) {
             s_cost[tid] += s_cost[tid + s];
@@ -119,7 +134,8 @@ __global__ void evaluateFieldSDFKernel(
 __global__ void filterDynamicPointsKernel(
     const float* __restrict__ cloud,
     int num_points,
-    int num_objects,
+    int num_cylinders,
+    int num_boxes,
     PoseCandidate best_pose,
     float dynamic_dist_thresh,
     float field_min_x,
@@ -148,7 +164,6 @@ __global__ void filterDynamicPointsKernel(
     float wy = sin_y * lx + cos_y * ly + ry;
     float wz = lz;
 
-    // フィールド境界外の点は動的障害物としても扱わない
     if (wx < field_min_x || wx > field_max_x || wy < field_min_y || wy > field_max_y) {
         out_is_dynamic[i] = 0;
         return;
@@ -156,15 +171,20 @@ __global__ void filterDynamicPointsKernel(
 
     float min_d = dynamic_dist_thresh;
 
-    for (int o = 0; o < num_objects; ++o) {
-        const FieldObject obj = c_map_objects[o];
+    // --- CYLINDER の判定ループ ---
+    for (int o = 0; o < num_cylinders; ++o) {
+        const FieldObject obj = c_cylinders[o];
         if (wz >= (obj.z_min - 0.1f) && wz <= (obj.z_max + 0.1f)) {
-            float d = dynamic_dist_thresh;
-            if (obj.type == CYLINDER) {
-                d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
-            } else if (obj.type == BOX) {
-                d = distToBox2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
-            }
+            float d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
+            if (d < min_d) min_d = d;
+        }
+    }
+
+    // --- BOX の判定ループ ---
+    for (int o = 0; o < num_boxes; ++o) {
+        const FieldObject obj = c_boxes[o];
+        if (wz >= (obj.z_min - 0.1f) && wz <= (obj.z_max + 0.1f)) {
+            float d = distToBox2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
             if (d < min_d) min_d = d;
         }
     }
@@ -176,11 +196,29 @@ extern "C" {
 
 void uploadFieldMapToGPU(const std::vector<FieldObject>& host_map)
 {
-    g_num_map_objects = static_cast<int>(host_map.size());
-    if (g_num_map_objects > 128) g_num_map_objects = 128;
+    std::vector<FieldObject> cylinders;
+    std::vector<FieldObject> boxes;
 
-    size_t bytes = g_num_map_objects * sizeof(FieldObject);
-    cudaMemcpyToSymbol(c_map_objects, host_map.data(), bytes);
+    for (const auto& obj : host_map) {
+        if (obj.type == CYLINDER) {
+            cylinders.push_back(obj);
+        } else if (obj.type == BOX) {
+            boxes.push_back(obj);
+        }
+    }
+
+    g_num_cylinders = static_cast<int>(cylinders.size());
+    g_num_boxes     = static_cast<int>(boxes.size());
+
+    if (g_num_cylinders > 128) g_num_cylinders = 128;
+    if (g_num_boxes > 128) g_num_boxes = 128;
+
+    if (g_num_cylinders > 0) {
+        cudaMemcpyToSymbol(c_cylinders, cylinders.data(), g_num_cylinders * sizeof(FieldObject));
+    }
+    if (g_num_boxes > 0) {
+        cudaMemcpyToSymbol(c_boxes, boxes.data(), g_num_boxes * sizeof(FieldObject));
+    }
 }
 
 bool launchFieldSDFMatcher(
@@ -204,7 +242,7 @@ bool launchFieldSDFMatcher(
     bool extract_dynamic
 )
 {
-    if (num_points <= 0 || g_num_map_objects <= 0) return false;
+    if (num_points <= 0 || (g_num_cylinders == 0 && g_num_boxes == 0)) return false;
 
     // 姿勢候補の生成 (Host)
     std::vector<PoseCandidate> h_candidates;
@@ -230,7 +268,6 @@ bool launchFieldSDFMatcher(
         cudaMalloc(&d_costs, g_max_candidates * sizeof(float));
         cudaMalloc(&d_out_argmin, sizeof(cub::KeyValuePair<int, float>));
 
-        // CUBの作業用テンポラリメモリ領域のサイズ計算
         d_temp_storage     = nullptr;
         temp_storage_bytes = 0;
         cub::DeviceReduce::ArgMin(
@@ -245,7 +282,7 @@ bool launchFieldSDFMatcher(
         cudaMalloc(&d_is_dynamic, g_max_dynamic_pts * sizeof(uint8_t));
     }
 
-    // H2D 転送 (Async)
+    // H2D 転送
     cudaMemcpyAsync(
         d_candidates,
         h_candidates.data(),
@@ -260,7 +297,8 @@ bool launchFieldSDFMatcher(
     evaluateFieldSDFKernel<<<sdf_blocks, sdf_threads, 0, stream>>>(
         d_obstacle_cloud,
         num_points,
-        g_num_map_objects,
+        g_num_cylinders,
+        g_num_boxes,
         d_candidates,
         d_costs,
         max_dist_thresh,
@@ -270,12 +308,11 @@ bool launchFieldSDFMatcher(
         field_max_y
     );
 
-    // GPU内で最小コストとそのインデックス（ArgMin）を算出 (GPU)
+    // CUB ArgMin
     cub::DeviceReduce::ArgMin(
         d_temp_storage, temp_storage_bytes, d_costs, d_out_argmin, num_candidates, stream
     );
 
-    // 最小結果をホストへ転送
     cub::KeyValuePair<int, float> h_argmin;
     cudaMemcpyAsync(
         &h_argmin,
@@ -285,14 +322,13 @@ bool launchFieldSDFMatcher(
         stream
     );
 
-    // D2H転送完了を待機
     cudaStreamSynchronize(stream);
 
     int best_idx  = h_argmin.key;
     out_best_cost = h_argmin.value;
     out_best_pose = h_candidates[best_idx];
 
-    // 動的点群のフィルタリング(GPU)
+    // 動的点群の抽出
     out_dynamic_pts.clear();
 
     if (extract_dynamic) {
@@ -301,7 +337,8 @@ bool launchFieldSDFMatcher(
         filterDynamicPointsKernel<<<dyn_blocks, dyn_threads, 0, stream>>>(
             d_obstacle_cloud,
             num_points,
-            g_num_map_objects,
+            g_num_cylinders,
+            g_num_boxes,
             out_best_pose,
             dynamic_dist_thresh,
             field_min_x,
@@ -340,8 +377,6 @@ bool launchFieldSDFMatcher(
             }
         }
     }
-
-    return true;
 
     return true;
 }
