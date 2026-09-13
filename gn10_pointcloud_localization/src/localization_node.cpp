@@ -372,8 +372,19 @@ void LocalizationNode::publishPoseAndTransform(const rclcpp::Time& stamp, const 
 {
     {
         std::lock_guard<std::mutex> lock(pose_mutex_);
+
+        // 直前までの予測姿勢と今回確定した姿勢の差分（yawのずれ）を計算
+        float yaw_diff = pose.yaw - last_known_pose_.yaw;
+        yaw_diff       = std::atan2(std::sin(yaw_diff), std::cos(yaw_diff));
+
         last_known_pose_ = pose;
-        predicted_pose_  = pose;
+
+        // predicted_pose_ を丸ごと上書きせず、確定した補正量（残差）だけを反映させる
+        predicted_pose_.x = pose.x;
+        predicted_pose_.y = pose.y;
+        predicted_pose_.yaw += yaw_diff;
+        predicted_pose_.yaw =
+            std::atan2(std::sin(predicted_pose_.yaw), std::cos(predicted_pose_.yaw));
     }
 
     tf2::Quaternion q;
