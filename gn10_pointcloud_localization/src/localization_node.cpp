@@ -70,6 +70,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("global_search.range_max_x", 5.25);
     this->declare_parameter("global_search.range_min_y", -5.70);
     this->declare_parameter("global_search.range_max_y", 5.70);
+    this->declare_parameter("global_search.range_yaw_diff", 0.7854);
     this->declare_parameter("global_search.step_xy", 0.30);
     this->declare_parameter("global_search.step_yaw", 0.2618);
     this->declare_parameter("global_search.downsample_stride", 2);
@@ -124,6 +125,8 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("global_search.range_min_y").as_double());
     global_range_max_y_ =
         static_cast<float>(this->get_parameter("global_search.range_max_y").as_double());
+    global_range_yaw_diff_ =
+        static_cast<float>(this->get_parameter("global_search.range_yaw_diff").as_double());
     global_step_xy_ = static_cast<float>(this->get_parameter("global_search.step_xy").as_double());
     global_step_yaw_ =
         static_cast<float>(this->get_parameter("global_search.step_yaw").as_double());
@@ -227,8 +230,21 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     bool matched    = false;
 
     if (is_lost_) {
+        float current_prior_yaw = 0.0f;
+        {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            current_prior_yaw = predicted_pose_.yaw;
+        }
+
         best_pose = global_searcher_->search(
-            *solver_, h_raw_cloud, h_transform, filter_params_, match_params_, best_cost
+            *solver_,
+            h_raw_cloud,
+            h_transform,
+            filter_params_,
+            match_params_,
+            current_prior_yaw,
+            global_range_yaw_diff_,
+            best_cost
         );
 
         if (best_cost < match_params_.cost_threshold) {

@@ -14,10 +14,12 @@ PoseCandidate GlobalSearcher::search(
     const float* h_transform,
     const GroundFilterParams& filter_params,
     const MatchingParams& match_params,
+    float prior_yaw,
+    float max_yaw_diff,
     float& out_best_cost
 )
 {
-    RCLCPP_INFO(logger_, "[GlobalSearch] Starting GPU-Batched Ultra Fast Search...");
+    RCLCPP_INFO(logger_, "[GlobalSearch] Starting GPU-Batched Yaw-Constrained Search...");
 
     // 点群のダウンサンプリング
     std::vector<float> search_cloud;
@@ -39,22 +41,22 @@ PoseCandidate GlobalSearcher::search(
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
 
-    // フィールド中央座標および全域探索幅の設定
+    // IMUの事前Yaw角を中心に、指定された許容範囲(max_yaw_diff)のみを探索窓に設定
     PoseCandidate center_pose;
     center_pose.x   = (config_.range_min_x + config_.range_max_x) * 0.5f;
     center_pose.y   = (config_.range_min_y + config_.range_max_y) * 0.5f;
-    center_pose.yaw = 0.0f;
+    center_pose.yaw = prior_yaw;  // 事前情報をセット
 
     float range_x   = (config_.range_max_x - config_.range_min_x) * 0.5f;
     float range_y   = (config_.range_max_y - config_.range_min_y) * 0.5f;
-    float range_yaw = M_PI;  // -PI 〜 PI
+    float range_yaw = max_yaw_diff;  // 全周(PI)ではなく制限範囲を設定
 
     float max_range_xy = std::max(range_x, range_y);
 
     PoseCandidate best_coarse_pose;
     float coarse_cost = std::numeric_limits<float>::max();
 
-    // 全域探索をGPU 実行（動的点群抽出なし）
+    // GPU 探索実行
     bool ok = solver.evaluateGlobalSDF(
         obstacle_count,
         center_pose,

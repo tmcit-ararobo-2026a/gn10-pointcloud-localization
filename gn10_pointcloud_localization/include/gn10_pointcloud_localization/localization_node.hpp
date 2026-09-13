@@ -66,6 +66,7 @@ private:
     float global_range_max_x_{5.25f};
     float global_range_min_y_{-5.70f};
     float global_range_max_y_{5.70f};
+    float global_range_yaw_diff_{0.785f};
     float global_step_xy_{0.30f};
     float global_step_yaw_{0.2618f};
     int global_downsample_stride_{2};
