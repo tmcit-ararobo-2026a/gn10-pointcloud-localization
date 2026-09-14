@@ -41,8 +41,25 @@ def generate_launch_description():
         # ]
     )
 
+    static_tf_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='static_transform_publisher',
+        arguments=[
+            '--x', '0.2',
+            '--y', '-0.25',
+            '--z', '1.09',
+            '--yaw', '0.0',
+            '--pitch', '-0.273',
+            '--roll', '3.13',
+            '--frame-id', 'base_link',
+            '--child-frame-id', 'livox_frame'
+        ]
+    )
+
     return LaunchDescription([
         declare_use_sim_time,
         declare_params_file,
-        localization_node
+        localization_node,
+        static_tf_node
     ])
