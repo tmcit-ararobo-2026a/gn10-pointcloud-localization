@@ -44,7 +44,7 @@ def generate_launch_description():
     static_tf_node = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='static_transform_publisher',
+        name='livox_tf',
         arguments=[
             '--x', '0.2',
             '--y', '-0.25',
