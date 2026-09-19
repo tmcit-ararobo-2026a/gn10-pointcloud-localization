@@ -1,0 +1,52 @@
+/**:
+  ros__parameters:
+    map_source_type: "json" # "json" または "ros2_param"
+    map_file_path: ""       # 空文字列の場合はパッケージ相対パス等を使用
+    
+    # map_source_type が "ros2_param" の場合に使用
+    # map_objects: ["BOX,0.0,5.7,0.0,0.15,5.25,0.05", "CYLINDER,0.55,0.87,0.0,0.255,0.1365,0.0"]
+
+    frames:
+      map_frame: "map"
+      base_frame: "base_link"
+
+    topics:
+      input_cloud: "/livox/lidar"
+      input_imu: "/livox/imu"
+      output_dynamic: "/dynamic_cloud"
+      output_ground: "/ground_cloud"
+      output_obstacle: "/obstacle_cloud"
+      output_pose: "/platform_constraint"
+      output_markers: "/field_map_markers"
+
+    filter_params:
+      max_range: 12.0
+      robot_radius: 1.0
+      robot_height_min: 0.0
+      robot_height_max: 1.2
+      ground_z_thresh: 0.04
+      max_points: 200000
+
+    matching_params:
+      search_range_xy: 0.30
+      search_step_xy: 0.03
+      search_range_yaw: 0.3
+      search_step_yaw: 0.02
+      max_dist_thresh: 0.25
+      cost_threshold: 0.1
+
+    initial_pose:
+      x: -4.57
+      y: 1.9
+      yaw: -1.57
+    
+    global_search:
+      range_min_x: -5.25        # 探索範囲 X 最小値 [m]
+      range_max_x:  5.25        # 探索範囲 X 最大値 [m]
+      range_min_y: -5.70        # 探索範囲 Y 最小値 [m]
+      range_max_y:  5.70        # 探索範囲 Y 最大値 [m]
+      range_yaw_diff: 1.0   # 探索範囲 Yaw 差分最大値 [rad]
+      step_xy: 0.30            # グローバルサーチのXY検索ピッチ [m]
+      step_yaw: 0.3            # グローバルサーチのYaw検索ピッチ [rad]
+      downsample_stride: 2     # グローバル探索時の点群抽出ピッチ (2: 50%間引き, 1: 完全RAW)
+      lost_count_thresh: 5     # ロスト確定までの連続判定フレーム数
