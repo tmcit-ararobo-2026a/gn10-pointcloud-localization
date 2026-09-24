@@ -1,3 +1,4 @@
+#include "gn10_pointcloud_localization/odom_projection.hpp"
 #include "gn10_pointcloud_localization/pose_fusion_filter.hpp"
 
 #include <algorithm>
@@ -41,17 +42,16 @@ Eigen::Isometry3d poseToEigen(const geometry_msgs::msg::Pose& pose)
     return result;
 }
 
-gn10::Pose2d planarPose(const Eigen::Isometry3d& transform)
-{
-    return {transform.translation().x(), transform.translation().y(),
-            std::atan2(transform.linear()(1, 0), transform.linear()(0, 0))};
-}
-
 class PoseFusionNode : public rclcpp::Node
 {
 public:
     PoseFusionNode() : Node("gn10_pose_fusion_node"), filter_(loadConfig())
     {
+        history_s_ = get_parameter("fusion.history_s").as_double();
+        max_odom_gap_s_ = get_parameter("fusion.max_odom_gap_s").as_double();
+        max_odom_step_m_ = get_parameter("fusion.max_odom_step_m").as_double();
+        max_odom_step_yaw_rad_ =
+            get_parameter("fusion.max_odom_step_yaw_rad").as_double();
         map_frame_ = declare_parameter<std::string>("frames.map_frame", "map");
         base_frame_ = declare_parameter<std::string>("frames.base_frame", "base_link");
         lidar_frame_ = declare_parameter<std::string>("frames.lidar_frame", "livox_frame");
@@ -163,6 +163,34 @@ private:
         }
     }
 
+    void resetMotion()
+    {
+        filter_.reset();
+        previous_odom_base_.reset();
+        full_odom_history_.clear();
+        anchor_odom_base_.reset();
+        pending_matches_.clear();
+        virtual_odom_ = {};
+        last_accepted_stamp_ = std::numeric_limits<double>::quiet_NaN();
+    }
+
+    void recordAcceptedMatch(double stamp, const gn10::Pose2d& measurement)
+    {
+        ++matches_accepted_;
+        last_accepted_stamp_ = stamp;
+        if (anchor_odom_base_) return;
+        const auto nearest = std::min_element(
+            full_odom_history_.begin(), full_odom_history_.end(),
+            [stamp](const auto& a, const auto& b) {
+                return std::abs(a.first - stamp) < std::abs(b.first - stamp);
+            }
+        );
+        if (nearest != full_odom_history_.end()) {
+            anchor_odom_base_ = nearest->second;
+            anchor_map_yaw_ = measurement.yaw;
+        }
+    }
+
     void onOdometry(const nav_msgs::msg::Odometry& msg)
     {
         ++odom_received_;
@@ -181,12 +209,31 @@ private:
             q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z < 0.5) return;
 
         const double stamp = seconds(msg.header.stamp);
-        const gn10::Pose2d odom_base = planarPose(
-            poseToEigen(msg.pose.pose) * *body_to_base_
-        );
-        const double previous_stamp = filter_.latestStamp();
-        filter_.addOdometry(stamp, odom_base);
-        if (filter_.latestStamp() <= previous_stamp && std::isfinite(previous_stamp)) return;
+        const Eigen::Isometry3d odom_base = poseToEigen(msg.pose.pose) * *body_to_base_;
+        if (!std::isfinite(stamp) || !odom_base.translation().allFinite()) return;
+        if (previous_odom_base_) {
+            const double dt = stamp - previous_odom_stamp_;
+            if (dt <= 0.0 && dt >= -0.5) return;
+            const Eigen::Isometry3d delta = previous_odom_base_->inverse() * odom_base;
+            const double rotation = Eigen::AngleAxisd(delta.linear()).angle();
+            if (dt <= 0.0 || dt > max_odom_gap_s_ ||
+                delta.translation().norm() > max_odom_step_m_ ||
+                rotation > max_odom_step_yaw_rad_) {
+                resetMotion();
+            } else {
+                virtual_odom_ = gn10::integrateBodyMotion(
+                    virtual_odom_, *previous_odom_base_, odom_base
+                );
+            }
+        }
+        filter_.addOdometry(stamp, virtual_odom_);
+        previous_odom_base_ = odom_base;
+        previous_odom_stamp_ = stamp;
+        full_odom_history_.emplace_back(stamp, odom_base);
+        while (full_odom_history_.size() > 1 &&
+               stamp - full_odom_history_.front().first > history_s_ + 0.5) {
+            full_odom_history_.pop_front();
+        }
 
         for (auto it = pending_matches_.begin(); it != pending_matches_.end();) {
             if (it->first > stamp + 0.15) {
@@ -196,12 +243,11 @@ private:
             if (!filter_.addMatch(it->first, it->second)) {
                 recordRejection();
             } else {
-                ++matches_accepted_;
-                last_accepted_stamp_ = it->first;
+                recordAcceptedMatch(it->first, it->second);
             }
             it = pending_matches_.erase(it);
         }
-        if (filter_.hasPose()) publish(msg.header.stamp);
+        if (filter_.hasPose() && anchor_odom_base_) publish(msg.header.stamp, odom_base);
     }
 
     void onMatch(const geometry_msgs::msg::PoseWithCovarianceStamped& msg)
@@ -225,8 +271,7 @@ private:
         if (!filter_.addMatch(stamp, measurement)) {
             recordRejection();
         } else {
-            ++matches_accepted_;
-            last_accepted_stamp_ = stamp;
+            recordAcceptedMatch(stamp, measurement);
         }
     }
 
@@ -286,22 +331,34 @@ private:
         diagnostics_publisher_->publish(array);
     }
 
-    void publish(const builtin_interfaces::msg::Time& stamp)
+    void publish(
+        const builtin_interfaces::msg::Time& stamp,
+        const Eigen::Isometry3d& odom_base
+    )
     {
         const auto state = filter_.pose();
         const auto covariance = filter_.covariance();
-        const double half = state.yaw * 0.5;
+        const Eigen::Isometry3d map_base = gn10::reconstructMapBase(
+            state, *anchor_odom_base_, anchor_map_yaw_, odom_base
+        );
+        const Eigen::Quaterniond q(map_base.linear());
         geometry_msgs::msg::PoseWithCovarianceStamped pose;
         pose.header.stamp = stamp;
         pose.header.frame_id = map_frame_;
         pose.pose.pose.position.x = state.x;
         pose.pose.pose.position.y = state.y;
-        pose.pose.pose.orientation.z = std::sin(half);
-        pose.pose.pose.orientation.w = std::cos(half);
+        pose.pose.pose.position.z = map_base.translation().z();
+        pose.pose.pose.orientation.x = q.x();
+        pose.pose.pose.orientation.y = q.y();
+        pose.pose.pose.orientation.z = q.z();
+        pose.pose.pose.orientation.w = q.w();
         constexpr int axes[3] = {0, 1, 5};
         for (int row = 0; row < 3; ++row)
             for (int col = 0; col < 3; ++col)
                 pose.pose.covariance[axes[row] * 6 + axes[col]] = covariance(row, col);
+        pose.pose.covariance[14] = 0.1;  // z, roll and pitch have no map measurement.
+        pose.pose.covariance[21] = 0.1;
+        pose.pose.covariance[28] = 0.1;
         publisher_->publish(pose);
 
         geometry_msgs::msg::TransformStamped transform;
@@ -309,6 +366,7 @@ private:
         transform.child_frame_id = base_frame_;
         transform.transform.translation.x = state.x;
         transform.transform.translation.y = state.y;
+        transform.transform.translation.z = map_base.translation().z();
         transform.transform.rotation = pose.pose.pose.orientation;
         broadcaster_->sendTransform(transform);
     }
@@ -327,6 +385,16 @@ private:
     rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_publisher_;
     rclcpp::TimerBase::SharedPtr diagnostics_timer_;
     std::deque<std::pair<double, gn10::Pose2d>> pending_matches_;
+    std::deque<std::pair<double, Eigen::Isometry3d>> full_odom_history_;
+    std::optional<Eigen::Isometry3d> previous_odom_base_;
+    std::optional<Eigen::Isometry3d> anchor_odom_base_;
+    gn10::Pose2d virtual_odom_;
+    double previous_odom_stamp_{0.0};
+    double anchor_map_yaw_{0.0};
+    double history_s_{5.0};
+    double max_odom_gap_s_{1.0};
+    double max_odom_step_m_{2.0};
+    double max_odom_step_yaw_rad_{1.5};
     size_t odom_received_{0};
     size_t raw_matches_received_{0};
     size_t matches_accepted_{0};

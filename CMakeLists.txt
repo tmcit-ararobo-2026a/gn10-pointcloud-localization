@@ -83,7 +83,7 @@ ament_target_dependencies(gn10_pointcloud_localization_node
 add_executable(livox_pointcloud_bridge src/livox_pointcloud_bridge.cpp)
 ament_target_dependencies(livox_pointcloud_bridge rclcpp sensor_msgs livox_ros_driver2)
 
-add_library(gn10_pose_fusion_filter src/pose_fusion_filter.cpp)
+add_library(gn10_pose_fusion_filter src/pose_fusion_filter.cpp src/odom_projection.cpp)
 target_include_directories(gn10_pose_fusion_filter PUBLIC include ${EIGEN3_INCLUDE_DIRS})
 
 add_executable(gn10_pose_fusion_node src/pose_fusion_node.cpp)
@@ -97,6 +97,9 @@ if(BUILD_TESTING)
   add_executable(test_pose_fusion_filter test/test_pose_fusion_filter.cpp)
   target_link_libraries(test_pose_fusion_filter gn10_pose_fusion_filter)
   add_test(NAME pose_fusion_filter COMMAND test_pose_fusion_filter)
+  add_executable(test_odom_projection test/test_odom_projection.cpp)
+  target_link_libraries(test_odom_projection gn10_pose_fusion_filter)
+  add_test(NAME odom_projection COMMAND test_odom_projection)
 endif()
 
 # インストール設定 (Launch, Config, Node)

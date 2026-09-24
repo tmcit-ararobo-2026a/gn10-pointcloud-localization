@@ -1,6 +1,7 @@
 #include "gn10_pointcloud_localization/localization_node.hpp"
 
 #include <tf2/LinearMath/Quaternion.h>
+#include <tf2/utils.h>
 #include <tf2_ros/create_timer_ros.h>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -372,7 +373,7 @@ void LocalizationNode::fusedPriorCallback(
     if (msg->header.frame_id != map_frame_) return;
     const auto& pose = msg->pose.pose;
     if (!std::isfinite(pose.position.x) || !std::isfinite(pose.position.y)) return;
-    const double yaw = 2.0 * std::atan2(pose.orientation.z, pose.orientation.w);
+    const double yaw = tf2::getYaw(pose.orientation);
     if (!std::isfinite(yaw)) return;
     std::lock_guard<std::mutex> lock(pose_mutex_);
     fused_prior_ = {static_cast<float>(pose.position.x),
