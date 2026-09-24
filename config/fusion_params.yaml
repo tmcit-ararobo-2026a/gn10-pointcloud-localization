@@ -10,7 +10,7 @@
       odom: "/Odometry"
       match: "/platform_constraint_raw"
       output: "/platform_constraint"
-    # Must match FAST-LIO mapping.extrinsic_T/R (IMU body -> LiDAR).
+    # Legacy key name: FAST-LIO mapping.extrinsic_T/R transform LiDAR coordinates into IMU coordinates.
     imu_to_lidar:
       xyz: [-0.011, -0.02329, 0.04412]
       rpy: [0.0, 0.0, 0.0]

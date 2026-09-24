@@ -15,6 +15,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -88,7 +89,7 @@ target_include_directories(gn10_pose_fusion_filter PUBLIC include ${EIGEN3_INCLU
 add_executable(gn10_pose_fusion_node src/pose_fusion_node.cpp)
 target_link_libraries(gn10_pose_fusion_node gn10_pose_fusion_filter)
 ament_target_dependencies(gn10_pose_fusion_node
-  rclcpp nav_msgs geometry_msgs tf2_ros tf2_eigen
+  rclcpp nav_msgs geometry_msgs diagnostic_msgs tf2_ros tf2_eigen
 )
 
 if(BUILD_TESTING)

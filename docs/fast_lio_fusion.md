@@ -44,11 +44,25 @@ ros2 bag play '/home/lambda/bag_files/地区大会/rosbagjetson6/rosbag2_2026_09
 
 ## 調整と確認
 
-- `config/fast_lio_mid360.yaml` の `mapping.extrinsic_T/R` と `config/fusion_params.yaml` の `imu_to_lidar.xyz/rpy` は同じIMU→LiDAR変換にする。掲載値はROS 2版FAST-LIOのMID360設定の初期値で、実機校正値ではない。
+- `config/fast_lio_mid360.yaml` の `mapping.extrinsic_T/R` と `config/fusion_params.yaml` の `imu_to_lidar.xyz/rpy` は同じ数値にする。`imu_to_lidar` は既存のパラメータ名だが、FAST-LIOの実装では **LiDAR座標からIMU座標への変換** を表す。掲載値はROS 2版FAST-LIOのMID360設定の初期値で、実機校正値ではない。
 - `base_link → livox_frame` はlaunch内の静的TFと一致させる。FAST-LIOの `body` はIMUフレームであり、`base_link` と同一とは仮定しない。
 - `/Odometry` の時刻、フレーム名、`/platform_constraint_raw`、`/platform_constraint`、`map → base_link` を確認する。FAST-LIOの `camera_init → body` TFを `map → base_link` と同じ親子名に変更しない。
 - `fusion.match_xy_stddev`、`fusion.match_yaw_stddev`、プロセスノイズ、`fusion.innovation_gate` はbagの軌跡と誤復帰を確認して調整する。共通のLiDAR入力から得たFAST-LIOと地図マッチングには相関があるため、掲載共分散は統計的に校正された値ではない。
 - この構成で連続してTFが出ても、地図マッチングのない区間の絶対位置が検証されたことにはならない。決勝bagの旧出力も真値ではない。
+
+### RVizで点群がロボットと一緒に動く場合
+
+`Fixed Frame` を `map` にし、`/livox/lidar` を表示する。これはセンサ座標の生点群なので、地図上で静止物が止まって見えるかどうかは `map → base_link → livox_frame` のTFに依存する。`/dynamic_cloud` は `base_link` 座標の点群、FAST-LIOの `/cloud_registered` は `camera_init` 座標の点群であり、後者を直接map座標の地図点群とみなさない。
+
+`/platform_constraint_raw` が出ていても、融合フィルタがその観測を採用したとは限らない。次の診断値の `matches_accepted` が増えているか、`last_accepted_age_s` が短いか確認する。`matches_rejected` が増える場合は `rejected_gate` と `rejected_timestamp` を見て、地図マッチングの位置・向きの不一致か、タイムスタンプずれかを分ける。
+
+```bash
+ros2 topic echo /gn10_pose_fusion/diagnostics
+ros2 topic echo --once /livox/lidar --field header
+ros2 run tf2_ros tf2_echo map base_link
+```
+
+bag再生時は `/livox/lidar` と `/livox/imu` のみに絞り、bag内の旧 `map → base_link` TFと融合TFを競合させない。マッチングが棄却されている間はFAST-LIOの相対移動だけが姿勢を進めるため、点群が地図に固定されて見えることを精度の証拠としない。
 
 ### 開発時の確認結果
 

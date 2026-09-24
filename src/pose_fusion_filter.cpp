@@ -18,6 +18,8 @@ bool finite(const Pose2d& pose)
 
 PoseFusionFilter::PoseFusionFilter(FusionConfig config) : config_(config) {}
 
+MatchRejection PoseFusionFilter::lastMatchRejection() const { return last_match_rejection_; }
+
 void PoseFusionFilter::reset() { history_.clear(); }
 
 bool PoseFusionFilter::hasPose() const { return !history_.empty() && history_.back().valid; }
@@ -94,6 +96,7 @@ bool PoseFusionFilter::correct(size_t index)
     const auto solver = S.ldlt();
     if (solver.info() != Eigen::Success ||
         innovation.dot(solver.solve(innovation)) > config_.innovation_gate) {
+        last_match_rejection_ = MatchRejection::Innovation;
         sample.match.reset();
         return false;
     }
@@ -144,7 +147,15 @@ void PoseFusionFilter::addOdometry(double stamp, Pose2d pose)
 
 bool PoseFusionFilter::addMatch(double stamp, Pose2d pose)
 {
-    if (history_.empty() || !std::isfinite(stamp) || !finite(pose)) return false;
+    last_match_rejection_ = MatchRejection::None;
+    if (history_.empty()) {
+        last_match_rejection_ = MatchRejection::NoOdometry;
+        return false;
+    }
+    if (!std::isfinite(stamp) || !finite(pose)) {
+        last_match_rejection_ = MatchRejection::Invalid;
+        return false;
+    }
     auto nearest = history_.begin();
     double best = std::abs(nearest->stamp - stamp);
     for (auto it = history_.begin() + 1; it != history_.end(); ++it) {
@@ -154,7 +165,14 @@ bool PoseFusionFilter::addMatch(double stamp, Pose2d pose)
             nearest = it;
         }
     }
-    if (best > config_.max_match_skew_s || nearest->match) return false;
+    if (best > config_.max_match_skew_s) {
+        last_match_rejection_ = MatchRejection::Timestamp;
+        return false;
+    }
+    if (nearest->match) {
+        last_match_rejection_ = MatchRejection::Duplicate;
+        return false;
+    }
     const size_t index = static_cast<size_t>(nearest - history_.begin());
     nearest->match = Match{pose};
     if (index == 0) {
@@ -163,7 +181,9 @@ bool PoseFusionFilter::addMatch(double stamp, Pose2d pose)
         return true;
     }
     replayFrom(index);
-    return history_[index].match.has_value();
+    const bool accepted = history_[index].match.has_value();
+    if (accepted) last_match_rejection_ = MatchRejection::None;
+    return accepted;
 }
 
 }  // namespace gn10

@@ -13,6 +13,7 @@
   <depend>livox_ros_driver2</depend>
   <depend>nav_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>diagnostic_msgs</depend>
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_eigen</depend>

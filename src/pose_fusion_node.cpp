@@ -3,13 +3,18 @@
 #include <algorithm>
 #include <cmath>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <Eigen/Geometry>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <diagnostic_msgs/msg/diagnostic_status.hpp>
+#include <diagnostic_msgs/msg/key_value.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -62,12 +67,12 @@ public:
         if (extrinsic.size() != 3 || angles.size() != 3) {
             throw std::runtime_error("imu_to_lidar.xyz and .rpy must each contain 3 values");
         }
-        imu_to_lidar_ = Eigen::Isometry3d::Identity();
-        imu_to_lidar_.linear() = (Eigen::AngleAxisd(angles[2], Eigen::Vector3d::UnitZ()) *
+        lidar_to_imu_ = Eigen::Isometry3d::Identity();
+        lidar_to_imu_.linear() = (Eigen::AngleAxisd(angles[2], Eigen::Vector3d::UnitZ()) *
                                   Eigen::AngleAxisd(angles[1], Eigen::Vector3d::UnitY()) *
                                   Eigen::AngleAxisd(angles[0], Eigen::Vector3d::UnitX()))
                                      .toRotationMatrix();
-        imu_to_lidar_.translation() = Eigen::Vector3d(extrinsic[0], extrinsic[1], extrinsic[2]);
+        lidar_to_imu_.translation() = Eigen::Vector3d(extrinsic[0], extrinsic[1], extrinsic[2]);
 
         tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
         tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
@@ -92,6 +97,11 @@ public:
                 onMatch(*msg);
             }
         );
+        diagnostics_publisher_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
+            "/gn10_pose_fusion/diagnostics", 10
+        );
+        using namespace std::chrono_literals;
+        diagnostics_timer_ = create_wall_timer(1s, [this] { publishDiagnostics(); });
     }
 
 private:
@@ -141,7 +151,7 @@ private:
             const auto base_to_lidar = tf_buffer_->lookupTransform(
                 base_frame_, lidar_frame_, tf2::TimePointZero
             );
-            body_to_base_ = imu_to_lidar_ *
+            body_to_base_ = lidar_to_imu_ *
                 tf2::transformToEigen(base_to_lidar).inverse();
             return true;
         } catch (const tf2::TransformException& ex) {
@@ -155,6 +165,7 @@ private:
 
     void onOdometry(const nav_msgs::msg::Odometry& msg)
     {
+        ++odom_received_;
         if (msg.header.frame_id != expected_odom_frame_ ||
             msg.child_frame_id != expected_body_frame_) {
             RCLCPP_WARN_THROTTLE(
@@ -183,10 +194,10 @@ private:
                 continue;
             }
             if (!filter_.addMatch(it->first, it->second)) {
-                RCLCPP_WARN_THROTTLE(
-                    get_logger(), *get_clock(), 2000,
-                    "Map match rejected by fusion gate or timestamp alignment"
-                );
+                recordRejection();
+            } else {
+                ++matches_accepted_;
+                last_accepted_stamp_ = it->first;
             }
             it = pending_matches_.erase(it);
         }
@@ -196,6 +207,7 @@ private:
     void onMatch(const geometry_msgs::msg::PoseWithCovarianceStamped& msg)
     {
         if (msg.header.frame_id != map_frame_) return;
+        ++raw_matches_received_;
         const auto& p = msg.pose.pose;
         const gn10::Pose2d measurement{
             p.position.x, p.position.y,
@@ -204,15 +216,74 @@ private:
         const double stamp = seconds(msg.header.stamp);
         if (stamp > filter_.latestStamp() + 0.15) {
             pending_matches_.emplace_back(stamp, measurement);
-            if (pending_matches_.size() > 100) pending_matches_.pop_front();
+            if (pending_matches_.size() > 100) {
+                pending_matches_.pop_front();
+                ++matches_rejected_;
+            }
             return;
         }
         if (!filter_.addMatch(stamp, measurement)) {
-            RCLCPP_WARN_THROTTLE(
-                get_logger(), *get_clock(), 2000,
-                "Map match rejected by fusion gate or timestamp alignment"
-            );
+            recordRejection();
+        } else {
+            ++matches_accepted_;
+            last_accepted_stamp_ = stamp;
         }
+    }
+
+    void recordRejection()
+    {
+        ++matches_rejected_;
+        switch (filter_.lastMatchRejection()) {
+            case gn10::MatchRejection::Innovation: ++rejected_gate_; break;
+            case gn10::MatchRejection::Timestamp: ++rejected_timestamp_; break;
+            case gn10::MatchRejection::Duplicate: ++rejected_duplicate_; break;
+            case gn10::MatchRejection::NoOdometry: ++rejected_no_odometry_; break;
+            default: break;
+        }
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Map match rejected (gate=%zu, timestamp=%zu, duplicate=%zu, no_odom=%zu)",
+            rejected_gate_, rejected_timestamp_, rejected_duplicate_, rejected_no_odometry_
+        );
+    }
+
+    void publishDiagnostics()
+    {
+        diagnostic_msgs::msg::DiagnosticArray array;
+        array.header.stamp = now();
+        diagnostic_msgs::msg::DiagnosticStatus status;
+        status.name = "GN10 pose fusion";
+        status.hardware_id = "gn10_pose_fusion_node";
+        const double current_stamp = seconds(array.header.stamp);
+        const double age = current_stamp - last_accepted_stamp_;
+        if (!filter_.hasPose()) {
+            status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+            status.message = "Waiting for FAST-LIO odometry and first accepted map match";
+        } else if (!std::isfinite(age) || age < 0.0 || age > 1.0) {
+            status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+            status.message = "FAST-LIO prediction only; map match is stale";
+        } else {
+            status.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+            status.message = "Recent map match accepted";
+        }
+        const auto add = [&status](const std::string& key, const std::string& value) {
+            diagnostic_msgs::msg::KeyValue item;
+            item.key = key;
+            item.value = value;
+            status.values.push_back(std::move(item));
+        };
+        add("odom_received", std::to_string(odom_received_));
+        add("raw_matches_received", std::to_string(raw_matches_received_));
+        add("matches_accepted", std::to_string(matches_accepted_));
+        add("matches_rejected", std::to_string(matches_rejected_));
+        add("rejected_gate", std::to_string(rejected_gate_));
+        add("rejected_timestamp", std::to_string(rejected_timestamp_));
+        add("rejected_duplicate", std::to_string(rejected_duplicate_));
+        add("rejected_no_odometry", std::to_string(rejected_no_odometry_));
+        add("matches_pending", std::to_string(pending_matches_.size()));
+        add("last_accepted_age_s", std::isfinite(age) ? std::to_string(age) : "never");
+        array.status.push_back(std::move(status));
+        diagnostics_publisher_->publish(array);
     }
 
     void publish(const builtin_interfaces::msg::Time& stamp)
@@ -244,7 +315,7 @@ private:
 
     gn10::PoseFusionFilter filter_;
     std::string map_frame_, base_frame_, lidar_frame_, expected_odom_frame_, expected_body_frame_;
-    Eigen::Isometry3d imu_to_lidar_;
+    Eigen::Isometry3d lidar_to_imu_;
     std::optional<Eigen::Isometry3d> body_to_base_;
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
     std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -253,7 +324,18 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
         match_subscription_;
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr publisher_;
+    rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_publisher_;
+    rclcpp::TimerBase::SharedPtr diagnostics_timer_;
     std::deque<std::pair<double, gn10::Pose2d>> pending_matches_;
+    size_t odom_received_{0};
+    size_t raw_matches_received_{0};
+    size_t matches_accepted_{0};
+    size_t matches_rejected_{0};
+    size_t rejected_gate_{0};
+    size_t rejected_timestamp_{0};
+    size_t rejected_duplicate_{0};
+    size_t rejected_no_odometry_{0};
+    double last_accepted_stamp_{std::numeric_limits<double>::quiet_NaN()};
 };
 }  // namespace
 

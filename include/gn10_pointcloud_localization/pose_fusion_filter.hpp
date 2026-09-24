@@ -28,6 +28,8 @@ struct FusionConfig {
     double innovation_gate{16.27};  // chi-square 3 DoF, 99.9%
 };
 
+enum class MatchRejection { None, NoOdometry, Invalid, Timestamp, Duplicate, Innovation };
+
 class PoseFusionFilter
 {
 public:
@@ -35,6 +37,7 @@ public:
 
     void addOdometry(double stamp, Pose2d pose);
     bool addMatch(double stamp, Pose2d pose);
+    MatchRejection lastMatchRejection() const;
     bool hasPose() const;
     double latestStamp() const;
     Pose2d pose() const;
@@ -58,6 +61,7 @@ private:
 
     FusionConfig config_;
     std::deque<Sample> history_;
+    MatchRejection last_match_rejection_{MatchRejection::None};
 };
 
 double wrapYaw(double yaw);

@@ -28,7 +28,11 @@ int main()
     require(filter.pose().x > before);
     require(filter.pose().x < before + 0.1);
     require(!filter.addMatch(0.2, {100.0, 100.0, 0.0}));
+    require(filter.lastMatchRejection() == gn10::MatchRejection::Innovation);
     require(filter.pose().x < 4.0);
+
+    require(!filter.addMatch(10.0, {1.0, 1.0, 0.0}));
+    require(filter.lastMatchRejection() == gn10::MatchRejection::Timestamp);
 
     filter.addOdometry(2.0, {0.0, 0.0, 0.0});
     require(!filter.hasPose());
