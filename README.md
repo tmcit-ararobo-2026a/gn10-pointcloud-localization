@@ -33,6 +33,9 @@ CUDA 12.0以上
 
 ## 4. ビルド・使い方
 
+MID360SのFAST-LIOオドメトリとフィールドマッチングを統合する構成は
+[docs/fast_lio_fusion.md](docs/fast_lio_fusion.md)を参照。
+
 必要なパッケージをインストール
 
 ```bash

@@ -34,6 +34,9 @@ private:
     // Callbacks
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
+    void fusedPriorCallback(
+        const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg
+    );
 
     // パイプライン分離ヘルパー関数
     bool getTransformAsArray(
@@ -71,6 +74,12 @@ private:
     float global_step_yaw_{0.2618f};
     int global_downsample_stride_{2};
     int lost_threshold_count_{5};
+    bool publish_tf_{true};
+    bool use_fused_prior_{false};
+    double prior_max_age_s_{0.25};
+    rclcpp::Time prior_stamp_;
+    PoseCandidate fused_prior_;
+    bool prior_received_{false};
 
     // Pose State & Recovery State
     std::mutex pose_mutex_;
@@ -89,6 +98,8 @@ private:
     message_filters::Subscriber<sensor_msgs::msg::PointCloud2> sub_cloud_filter_;
     std::shared_ptr<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>> tf_filter_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
+        sub_fused_prior_;
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obstacle_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_dynamic_;

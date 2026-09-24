@@ -46,6 +46,10 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("topics.output_obstacle", "/obstacle_cloud");
     this->declare_parameter("topics.output_pose", "/platform_constraint");
     this->declare_parameter("topics.output_markers", "/field_map_markers");
+    this->declare_parameter("topics.fused_prior", "/platform_constraint");
+    this->declare_parameter("publish_tf", true);
+    this->declare_parameter("fusion.use_prior", false);
+    this->declare_parameter("fusion.prior_max_age_s", 0.25);
 
     this->declare_parameter("filter_params.max_range", 12.0);
     this->declare_parameter("filter_params.robot_radius", 0.6);
@@ -134,6 +138,9 @@ void LocalizationNode::declareAndGetParameters()
         1, static_cast<int>(this->get_parameter("global_search.downsample_stride").as_int())
     );
     lost_threshold_count_ = this->get_parameter("global_search.lost_count_thresh").as_int();
+    publish_tf_ = this->get_parameter("publish_tf").as_bool();
+    use_fused_prior_ = this->get_parameter("fusion.use_prior").as_bool();
+    prior_max_age_s_ = this->get_parameter("fusion.prior_max_age_s").as_double();
 
     last_known_pose_.x   = static_cast<float>(this->get_parameter("initial_pose.x").as_double());
     last_known_pose_.y   = static_cast<float>(this->get_parameter("initial_pose.y").as_double());
@@ -197,6 +204,13 @@ void LocalizationNode::setupROSInterfaces()
         rclcpp::SensorDataQoS(),
         std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1)
     );
+    if (use_fused_prior_) {
+        sub_fused_prior_ =
+            this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+                this->get_parameter("topics.fused_prior").as_string(), 20,
+                std::bind(&LocalizationNode::fusedPriorCallback, this, std::placeholders::_1)
+            );
+    }
 
     pub_dynamic_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         this->get_parameter("topics.output_dynamic").as_string(), 10
@@ -229,7 +243,37 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     float best_cost = 0.0f;
     bool matched    = false;
 
-    if (is_lost_) {
+    PoseCandidate search_base_pose;
+    bool has_fresh_prior = false;
+    {
+        std::lock_guard<std::mutex> lock(pose_mutex_);
+        search_base_pose = predicted_pose_;
+        if (use_fused_prior_ && prior_received_) {
+            const double age = (rclcpp::Time(msg->header.stamp) - prior_stamp_).seconds();
+            if (std::abs(age) <= prior_max_age_s_) {
+                search_base_pose = fused_prior_;
+                has_fresh_prior = true;
+            }
+        }
+    }
+
+    // A recent fused pose can reacquire locally even after the map matcher was lost.
+    if (is_lost_ && has_fresh_prior) {
+        matched = solver_->processPointCloud(
+            h_raw_cloud, h_transform, filter_params_, match_params_, search_base_pose,
+            dynamic_pts, best_pose, best_cost
+        );
+        if (matched && std::isfinite(best_cost) &&
+            best_cost < match_params_.cost_threshold) {
+            is_lost_ = false;
+            lost_frame_count_ = 0;
+        } else {
+            matched = false;
+            dynamic_pts.clear();
+        }
+    }
+
+    if (is_lost_ && !matched) {
         float current_prior_yaw = 0.0f;
         {
             std::lock_guard<std::mutex> lock(pose_mutex_);
@@ -255,13 +299,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                 this->get_logger(), "[GlobalSearch] Successfully recovered from lost state."
             );
         }
-    } else {
-        PoseCandidate search_base_pose;
-        {
-            std::lock_guard<std::mutex> lock(pose_mutex_);
-            search_base_pose = predicted_pose_;
-        }
-
+    } else if (!matched) {
         matched = solver_->processPointCloud(
             h_raw_cloud,
             h_transform,
@@ -325,6 +363,22 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 
     predicted_pose_.yaw += static_cast<float>(omega_base.z() * dt);
     predicted_pose_.yaw = std::atan2(std::sin(predicted_pose_.yaw), std::cos(predicted_pose_.yaw));
+}
+
+void LocalizationNode::fusedPriorCallback(
+    const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg
+)
+{
+    if (msg->header.frame_id != map_frame_) return;
+    const auto& pose = msg->pose.pose;
+    if (!std::isfinite(pose.position.x) || !std::isfinite(pose.position.y)) return;
+    const double yaw = 2.0 * std::atan2(pose.orientation.z, pose.orientation.w);
+    if (!std::isfinite(yaw)) return;
+    std::lock_guard<std::mutex> lock(pose_mutex_);
+    fused_prior_ = {static_cast<float>(pose.position.x),
+                    static_cast<float>(pose.position.y), static_cast<float>(yaw)};
+    prior_stamp_ = msg->header.stamp;
+    prior_received_ = true;
 }
 
 bool LocalizationNode::getTransformAsArray(
@@ -415,7 +469,7 @@ void LocalizationNode::publishPoseAndTransform(const rclcpp::Time& stamp, const 
     tf_msg.transform.translation.y = pose.y;
     tf_msg.transform.translation.z = 0.0f;
     tf_msg.transform.rotation      = tf2::toMsg(q);
-    tf_broadcaster_->sendTransform(tf_msg);
+    if (publish_tf_) tf_broadcaster_->sendTransform(tf_msg);
 }
 
 void LocalizationNode::publishCloud(

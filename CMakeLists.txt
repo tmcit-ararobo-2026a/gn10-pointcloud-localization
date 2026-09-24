@@ -12,6 +12,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(livox_ros_driver2 REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -77,9 +79,30 @@ ament_target_dependencies(gn10_pointcloud_localization_node
   nlohmann_json
 )
 
+add_executable(livox_pointcloud_bridge src/livox_pointcloud_bridge.cpp)
+ament_target_dependencies(livox_pointcloud_bridge rclcpp sensor_msgs livox_ros_driver2)
+
+add_library(gn10_pose_fusion_filter src/pose_fusion_filter.cpp)
+target_include_directories(gn10_pose_fusion_filter PUBLIC include ${EIGEN3_INCLUDE_DIRS})
+
+add_executable(gn10_pose_fusion_node src/pose_fusion_node.cpp)
+target_link_libraries(gn10_pose_fusion_node gn10_pose_fusion_filter)
+ament_target_dependencies(gn10_pose_fusion_node
+  rclcpp nav_msgs geometry_msgs tf2_ros tf2_eigen
+)
+
+if(BUILD_TESTING)
+  enable_testing()
+  add_executable(test_pose_fusion_filter test/test_pose_fusion_filter.cpp)
+  target_link_libraries(test_pose_fusion_filter gn10_pose_fusion_filter)
+  add_test(NAME pose_fusion_filter COMMAND test_pose_fusion_filter)
+endif()
+
 # インストール設定 (Launch, Config, Node)
 install(TARGETS 
   gn10_pointcloud_localization_node
+  livox_pointcloud_bridge
+  gn10_pose_fusion_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
