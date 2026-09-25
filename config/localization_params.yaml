@@ -33,9 +33,10 @@
       search_range_yaw: 0.6
       search_step_yaw: 0.05
       max_dist_thresh: 0.2
-      cost_threshold: 0.015
+      cost_threshold: 0.165  # all-point mean clipped unsigned surface distance [m]
 
     initial_pose:
+      use_for_local_search: false # set true only when x/y/yaw are known at replay start
       x: 0.0
       y: 0.0
       yaw: 0.0

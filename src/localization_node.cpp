@@ -44,6 +44,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("topics.input_cloud", "/livox/lidar");
     this->declare_parameter("topics.input_imu", "/livox/imu");
     this->declare_parameter("topics.output_dynamic", "/dynamic_cloud");
+    this->declare_parameter("topics.output_ground", "/ground_cloud");
     this->declare_parameter("topics.output_obstacle", "/obstacle_cloud");
     this->declare_parameter("topics.output_pose", "/platform_constraint");
     this->declare_parameter("topics.output_markers", "/field_map_markers");
@@ -64,7 +65,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.search_range_yaw", 0.15);
     this->declare_parameter("matching_params.search_step_yaw", 0.02);
     this->declare_parameter("matching_params.max_dist_thresh", 0.20);
-    this->declare_parameter("matching_params.cost_threshold", 0.20);
+    this->declare_parameter("matching_params.cost_threshold", 0.165);
     this->declare_parameter("matching_params.dynamic_dist_thresh", 0.15);
     this->declare_parameter("matching_params.field_min_x", -5.5);
     this->declare_parameter("matching_params.field_max_x", 5.5);
@@ -84,6 +85,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("initial_pose.x", -4.0);
     this->declare_parameter("initial_pose.y", -4.0);
     this->declare_parameter("initial_pose.yaw", -1.5708);
+    this->declare_parameter("initial_pose.use_for_local_search", false);
 
     map_frame_  = this->get_parameter("frames.map_frame").as_string();
     base_frame_ = this->get_parameter("frames.base_frame").as_string();
@@ -147,6 +149,9 @@ void LocalizationNode::declareAndGetParameters()
     last_known_pose_.y   = static_cast<float>(this->get_parameter("initial_pose.y").as_double());
     last_known_pose_.yaw = static_cast<float>(this->get_parameter("initial_pose.yaw").as_double());
     predicted_pose_      = last_known_pose_;
+    // A known start pose resolves the field's near-symmetric global matches.
+    // Do not publish it as a measurement; first require a successful cloud match.
+    is_lost_ = !this->get_parameter("initial_pose.use_for_local_search").as_bool();
 }
 
 void LocalizationNode::setupMapData()
@@ -218,6 +223,9 @@ void LocalizationNode::setupROSInterfaces()
     );
     pub_obstacle_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         this->get_parameter("topics.output_obstacle").as_string(), 10
+    );
+    pub_ground_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        this->get_parameter("topics.output_ground").as_string(), 10
     );
     pub_platform_pose_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
         this->get_parameter("topics.output_pose").as_string(), 10
@@ -321,6 +329,16 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     std_msgs::msg::Header out_header = msg->header;
     out_header.frame_id              = base_frame_;
+    const bool need_ground = pub_ground_->get_subscription_count() > 0;
+    const bool need_obstacle = pub_obstacle_->get_subscription_count() > 0;
+    if (need_ground || need_obstacle) {
+        solver_->copyFilteredClouds(
+            need_ground ? &ground_pts : nullptr,
+            need_obstacle ? &obstacle_pts : nullptr
+        );
+        if (need_ground) publishCloud(pub_ground_, out_header, ground_pts);
+        if (need_obstacle) publishCloud(pub_obstacle_, out_header, obstacle_pts);
+    }
     publishCloud(pub_dynamic_, out_header, dynamic_pts);
 }
 

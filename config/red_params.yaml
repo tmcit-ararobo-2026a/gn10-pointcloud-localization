@@ -33,7 +33,7 @@
       search_range_yaw: 0.3
       search_step_yaw: 0.02
       max_dist_thresh: 0.25
-      cost_threshold: 0.1
+      cost_threshold: 0.165  # all-point mean clipped unsigned surface distance [m]
 
     initial_pose:
       x: -4.57

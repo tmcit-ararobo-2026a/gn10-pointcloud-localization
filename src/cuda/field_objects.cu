@@ -22,13 +22,15 @@ static cub::KeyValuePair<int, float>* d_out_argmin = nullptr;
 static void* d_temp_storage                        = nullptr;
 static size_t temp_storage_bytes                   = 0;
 
-__device__ float distToBox2D(float px, float py, float cx, float cy, float half_w, float half_d)
+// Distance to the nearest box surface. A signed SDF would reward points deep
+// inside a solid map object and could cancel positive residuals elsewhere.
+__device__ float distToBoxSurface2D(float px, float py, float cx, float cy, float half_w, float half_d)
 {
     float dx = fabsf(px - cx) - half_w;
     float dy = fabsf(py - cy) - half_d;
     float ax = fmaxf(dx, 0.0f);
     float ay = fmaxf(dy, 0.0f);
-    return sqrtf(ax * ax + ay * ay) + fminf(fmaxf(dx, dy), 0.0f);
+    return fabsf(sqrtf(ax * ax + ay * ay) + fminf(fmaxf(dx, dy), 0.0f));
 }
 
 __device__ float distToCylinder2D(float px, float py, float cx, float cy, float radius)
@@ -64,9 +66,7 @@ __global__ void evaluateFieldSDFKernel(
     float sin_y = sinf(ryaw);
 
     __shared__ float s_cost[256];
-    __shared__ int s_valid_count[256];
     s_cost[tid]        = 0.0f;
-    s_valid_count[tid] = 0;
 
     for (int i = tid; i < num_points; i += blockDim.x) {
         float lx = cloud[i * 3 + 0];
@@ -79,10 +79,12 @@ __global__ void evaluateFieldSDFKernel(
         float wz = lz;
 
         if (wx < field_min_x || wx > field_max_x || wy < field_min_y || wy > field_max_y) {
+            // Keep every input point in the denominator. Otherwise a global
+            // candidate can win by moving most returns outside the field.
+            s_cost[tid] += max_dist_thresh;
             continue;
         }
 
-        s_valid_count[tid] += 1;
         float min_d = max_dist_thresh;
 
         for (int o = 0; o < num_objects; ++o) {
@@ -92,7 +94,7 @@ __global__ void evaluateFieldSDFKernel(
                 if (obj.type == CYLINDER) {
                     d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
                 } else if (obj.type == BOX) {
-                    d = distToBox2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
+                    d = distToBoxSurface2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
                 }
                 if (d < min_d) min_d = d;
             }
@@ -104,15 +106,12 @@ __global__ void evaluateFieldSDFKernel(
     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
         if (tid < s) {
             s_cost[tid] += s_cost[tid + s];
-            s_valid_count[tid] += s_valid_count[tid + s];
         }
         __syncthreads();
     }
 
     if (tid == 0) {
-        int total_valid = s_valid_count[0];
-        out_costs[pose_idx] =
-            (total_valid > 0) ? (s_cost[0] / static_cast<float>(total_valid)) : max_dist_thresh;
+        out_costs[pose_idx] = s_cost[0] / static_cast<float>(num_points);
     }
 }
 
@@ -163,7 +162,7 @@ __global__ void filterDynamicPointsKernel(
             if (obj.type == CYLINDER) {
                 d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
             } else if (obj.type == BOX) {
-                d = distToBox2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
+                d = distToBoxSurface2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
             }
             if (d < min_d) min_d = d;
         }
@@ -188,7 +187,8 @@ bool launchFieldSDFMatcher(
     const float* d_obstacle_cloud,
     int num_points,
     const PoseCandidate& base_pose,
-    float range_xy,
+    float range_x,
+    float range_y,
     float step_xy,
     float range_yaw,
     float step_yaw,
@@ -208,8 +208,8 @@ bool launchFieldSDFMatcher(
 
     // 姿勢候補の生成 (Host)
     std::vector<PoseCandidate> h_candidates;
-    for (float dx = -range_xy; dx <= range_xy + 1e-5f; dx += step_xy) {
-        for (float dy = -range_xy; dy <= range_xy + 1e-5f; dy += step_xy) {
+    for (float dx = -range_x; dx <= range_x + 1e-5f; dx += step_xy) {
+        for (float dy = -range_y; dy <= range_y + 1e-5f; dy += step_xy) {
             for (float dyaw = -range_yaw; dyaw <= range_yaw + 1e-5f; dyaw += step_yaw) {
                 h_candidates.push_back({base_pose.x + dx, base_pose.y + dy, base_pose.yaw + dyaw});
             }

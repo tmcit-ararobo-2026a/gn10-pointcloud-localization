@@ -18,8 +18,6 @@ PoseSolver::PoseSolver(int max_points) : max_points_(max_points)
     cudaMalloc(&d_transform_, 12 * sizeof(float));
 
     cudaMallocHost(&h_in_, max_points_ * 3 * sizeof(float));
-    cudaMallocHost(&h_out_ground_, max_points_ * 3 * sizeof(float));
-    cudaMallocHost(&h_out_obstacle_, max_points_ * 3 * sizeof(float));
 }
 
 PoseSolver::~PoseSolver()
@@ -37,8 +35,6 @@ PoseSolver::~PoseSolver()
     cudaFree(d_transform_);
 
     cudaFreeHost(h_in_);
-    cudaFreeHost(h_out_ground_);
-    cudaFreeHost(h_out_obstacle_);
 }
 
 void PoseSolver::setMap(const std::vector<FieldObject>& host_map)
@@ -58,6 +54,8 @@ bool PoseSolver::processPointCloud(
 )
 {
     int num_points = static_cast<int>(h_raw_cloud.size() / 3);
+    ground_count_ = 0;
+    obstacle_count_ = 0;
     if (num_points == 0 || num_points > max_points_) {
         out_best_cost = std::numeric_limits<float>::max();
         return false;
@@ -90,6 +88,8 @@ bool PoseSolver::processPointCloud(
     );
 
     cudaStreamSynchronize(stream_);
+    ground_count_ = h_ground_count;
+    obstacle_count_ = h_obstacle_count;
 
     bool pose_matched = false;
     if (h_obstacle_count > 50) {
@@ -98,6 +98,7 @@ bool PoseSolver::processPointCloud(
             d_obstacle_,
             h_obstacle_count,
             search_base_pose,
+            match_params.range_xy,
             match_params.range_xy,
             match_params.step_xy,
             match_params.range_yaw,
@@ -128,6 +129,8 @@ int PoseSolver::prepareObstacleCloud(
 )
 {
     int num_points = static_cast<int>(h_raw_cloud.size() / 3);
+    ground_count_ = 0;
+    obstacle_count_ = 0;
     if (num_points == 0 || num_points > max_points_) {
         return 0;
     }
@@ -159,13 +162,40 @@ int PoseSolver::prepareObstacleCloud(
     );
 
     cudaStreamSynchronize(stream_);
+    ground_count_ = h_ground_count;
+    obstacle_count_ = h_obstacle_count;
     return h_obstacle_count;
+}
+
+void PoseSolver::copyFilteredClouds(
+    std::vector<float>* ground, std::vector<float>* obstacle
+)
+{
+    if (ground) {
+        ground->resize(static_cast<size_t>(ground_count_) * 3);
+        if (ground_count_ > 0) {
+            cudaMemcpy(
+                ground->data(), d_ground_, ground->size() * sizeof(float),
+                cudaMemcpyDeviceToHost
+            );
+        }
+    }
+    if (obstacle) {
+        obstacle->resize(static_cast<size_t>(obstacle_count_) * 3);
+        if (obstacle_count_ > 0) {
+            cudaMemcpy(
+                obstacle->data(), d_obstacle_, obstacle->size() * sizeof(float),
+                cudaMemcpyDeviceToHost
+            );
+        }
+    }
 }
 
 bool PoseSolver::evaluateGlobalSDF(
     int obstacle_count,
     const PoseCandidate& base_pose,
-    float range_xy,
+    float range_x,
+    float range_y,
     float step_xy,
     float range_yaw,
     float step_yaw,
@@ -180,7 +210,8 @@ bool PoseSolver::evaluateGlobalSDF(
         d_obstacle_,
         obstacle_count,
         base_pose,
-        range_xy,
+        range_x,
+        range_y,
         step_xy,
         range_yaw,
         step_yaw,

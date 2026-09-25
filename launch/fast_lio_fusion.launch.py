@@ -8,6 +8,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -17,6 +18,10 @@ def generate_launch_description():
     matcher_config = LaunchConfiguration('matcher_config')
     fusion_config = LaunchConfiguration('fusion_config')
     fast_lio_config = LaunchConfiguration('fast_lio_config')
+    initial_pose_local_search = LaunchConfiguration('initial_pose_local_search')
+    initial_pose_x = LaunchConfiguration('initial_pose_x')
+    initial_pose_y = LaunchConfiguration('initial_pose_y')
+    initial_pose_yaw = LaunchConfiguration('initial_pose_yaw')
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
@@ -27,6 +32,10 @@ def generate_launch_description():
             share, 'config', 'fusion_params.yaml')),
         DeclareLaunchArgument('fast_lio_config', default_value=os.path.join(
             share, 'config', 'fast_lio_mid360.yaml')),
+        DeclareLaunchArgument('initial_pose_local_search', default_value='false'),
+        DeclareLaunchArgument('initial_pose_x', default_value='0.0'),
+        DeclareLaunchArgument('initial_pose_y', default_value='0.0'),
+        DeclareLaunchArgument('initial_pose_yaw', default_value='0.0'),
         Node(
             package='gn10_pointcloud_localization', executable='livox_pointcloud_bridge',
             name='livox_pointcloud_bridge', output='screen',
@@ -47,6 +56,11 @@ def generate_launch_description():
                 'topics.output_pose': '/platform_constraint_raw',
                 'topics.fused_prior': '/platform_constraint',
                 'fusion.use_prior': True,
+                'initial_pose.use_for_local_search': ParameterValue(
+                    initial_pose_local_search, value_type=bool),
+                'initial_pose.x': ParameterValue(initial_pose_x, value_type=float),
+                'initial_pose.y': ParameterValue(initial_pose_y, value_type=float),
+                'initial_pose.yaw': ParameterValue(initial_pose_yaw, value_type=float),
             }],
         ),
         Node(
