@@ -12,7 +12,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(livox_ros_driver2 REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
@@ -80,42 +79,9 @@ ament_target_dependencies(gn10_pointcloud_localization_node
   nlohmann_json
 )
 
-add_executable(livox_pointcloud_bridge src/livox_pointcloud_bridge.cpp)
-ament_target_dependencies(livox_pointcloud_bridge rclcpp sensor_msgs livox_ros_driver2)
-
-add_library(gn10_pose_fusion_filter src/pose_fusion_filter.cpp src/odom_projection.cpp)
-target_include_directories(gn10_pose_fusion_filter PUBLIC include ${EIGEN3_INCLUDE_DIRS})
-
-add_executable(gn10_pose_fusion_node src/pose_fusion_node.cpp)
-target_link_libraries(gn10_pose_fusion_node gn10_pose_fusion_filter)
-ament_target_dependencies(gn10_pose_fusion_node
-  rclcpp nav_msgs geometry_msgs diagnostic_msgs tf2_ros tf2_eigen
-)
-
-if(BUILD_TESTING)
-  enable_testing()
-  add_executable(test_pose_fusion_filter test/test_pose_fusion_filter.cpp)
-  target_link_libraries(test_pose_fusion_filter gn10_pose_fusion_filter)
-  add_test(NAME pose_fusion_filter COMMAND test_pose_fusion_filter)
-  add_executable(test_odom_projection test/test_odom_projection.cpp)
-  target_link_libraries(test_odom_projection gn10_pose_fusion_filter)
-  add_test(NAME odom_projection COMMAND test_odom_projection)
-  add_executable(test_field_matcher test/test_field_matcher.cpp)
-  target_link_libraries(test_field_matcher gn10_cuda_lib CUDA::cudart)
-  add_test(NAME field_matcher COMMAND test_field_matcher)
-  set_tests_properties(field_matcher PROPERTIES SKIP_RETURN_CODE 77)
-  add_executable(test_field_geometry test/test_field_geometry.cpp src/map_loader.cpp)
-  ament_target_dependencies(test_field_geometry rclcpp nlohmann_json)
-  target_compile_definitions(test_field_geometry PRIVATE
-    TEST_FIELD_MAP_PATH="${CMAKE_CURRENT_SOURCE_DIR}/config/nhk2026_map.json")
-  add_test(NAME field_geometry COMMAND test_field_geometry)
-endif()
-
 # インストール設定 (Launch, Config, Node)
 install(TARGETS 
   gn10_pointcloud_localization_node
-  livox_pointcloud_bridge
-  gn10_pose_fusion_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
