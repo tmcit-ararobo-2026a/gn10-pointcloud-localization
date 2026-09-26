@@ -39,7 +39,12 @@ PoseSolver::~PoseSolver()
 
 void PoseSolver::setMap(const std::vector<FieldObject>& host_map)
 {
-    uploadFieldMapToGPU(host_map);
+    std::vector<FieldObject> matching_map;
+    matching_map.reserve(host_map.size());
+    for (const auto& object : host_map) {
+        if (object.type != VISUAL_BOX) matching_map.push_back(object);
+    }
+    uploadFieldMapToGPU(matching_map);
 }
 
 bool PoseSolver::processPointCloud(

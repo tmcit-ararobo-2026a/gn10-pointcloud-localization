@@ -104,6 +104,11 @@ if(BUILD_TESTING)
   target_link_libraries(test_field_matcher gn10_cuda_lib CUDA::cudart)
   add_test(NAME field_matcher COMMAND test_field_matcher)
   set_tests_properties(field_matcher PROPERTIES SKIP_RETURN_CODE 77)
+  add_executable(test_field_geometry test/test_field_geometry.cpp src/map_loader.cpp)
+  ament_target_dependencies(test_field_geometry rclcpp nlohmann_json)
+  target_compile_definitions(test_field_geometry PRIVATE
+    TEST_FIELD_MAP_PATH="${CMAKE_CURRENT_SOURCE_DIR}/config/nhk2026_map.json")
+  add_test(NAME field_geometry COMMAND test_field_geometry)
 endif()
 
 # インストール設定 (Launch, Config, Node)

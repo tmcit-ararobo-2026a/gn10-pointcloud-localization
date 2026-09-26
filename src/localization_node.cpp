@@ -542,8 +542,9 @@ void LocalizationNode::publishFieldMapMarkers()
         marker.pose.position.x = obj.center_x;
         marker.pose.position.y = obj.center_y;
         marker.pose.position.z = obj.z_min + height / 2.0f;
+        marker.pose.orientation.w = 1.0;
 
-        if (obj.type == BOX) {
+        if (obj.type == BOX || obj.type == VISUAL_BOX) {
             marker.type    = visualization_msgs::msg::Marker::CUBE;
             marker.scale.x = obj.param1 * 2.0f;
             marker.scale.y = obj.param2 * 2.0f;

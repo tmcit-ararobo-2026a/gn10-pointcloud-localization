@@ -21,7 +21,8 @@ std::vector<FieldObject> MapLoader::loadFromJSON(const std::string& file_path)
         for (const auto& item : j) {
             FieldObject obj;
             std::string type_str = item.at("type").get<std::string>();
-            obj.type             = (type_str == "CYLINDER") ? CYLINDER : BOX;
+            obj.type             = (type_str == "CYLINDER") ? CYLINDER :
+                                   (type_str == "VISUAL_BOX") ? VISUAL_BOX : BOX;
             obj.center_x         = item.at("x").get<float>();
             obj.center_y         = item.at("y").get<float>();
             obj.z_min            = item.at("z_min").get<float>();
@@ -50,7 +51,8 @@ std::vector<FieldObject> MapLoader::loadFromParams(const std::vector<std::string
         }
         if (tokens.size() == 7) {
             FieldObject obj;
-            obj.type     = (tokens[0] == "CYLINDER") ? CYLINDER : BOX;
+            obj.type     = (tokens[0] == "CYLINDER") ? CYLINDER :
+                           (tokens[0] == "VISUAL_BOX") ? VISUAL_BOX : BOX;
             obj.center_x = std::stof(tokens[1]);
             obj.center_y = std::stof(tokens[2]);
             obj.z_min    = std::stof(tokens[3]);
@@ -67,11 +69,17 @@ std::vector<FieldObject> MapLoader::createNHK2026FieldMap()
 {
     std::vector<FieldObject> map;
 
-    // 1. 外壁 (10.5m x 11.4m, H=0.15m) -> X: [-5.25, 5.25], Y: [-5.7, 5.7]
-    map.push_back({BOX, 0.000f, 5.700f, 0.000f, 0.150f, 5.250f, 0.050f});   // 上壁
-    map.push_back({BOX, 0.000f, -5.700f, 0.000f, 0.150f, 5.250f, 0.050f});  // 下壁
-    map.push_back({BOX, -5.250f, 0.000f, 0.000f, 0.150f, 0.050f, 5.700f});  // 左壁
-    map.push_back({BOX, 5.250f, 0.000f, 0.000f, 0.150f, 0.050f, 5.700f});   // 右壁
+    // 1. CAD fence: 150 mm L-section, 24 mm foot and inner upright.
+    // The floor foot is displayed but not matched because ground filtering
+    // removes its returns. The 24 mm upright is the LiDAR-facing surface.
+    map.push_back({VISUAL_BOX, 0.000f, 5.775f, 0.000f, 0.024f, 5.400f, 0.075f});
+    map.push_back({VISUAL_BOX, 0.000f, -5.775f, 0.000f, 0.024f, 5.400f, 0.075f});
+    map.push_back({VISUAL_BOX, -5.325f, 0.000f, 0.000f, 0.024f, 0.075f, 5.700f});
+    map.push_back({VISUAL_BOX, 5.325f, 0.000f, 0.000f, 0.024f, 0.075f, 5.700f});
+    map.push_back({BOX, 0.000f, 5.712f, 0.024f, 0.150f, 5.400f, 0.012f});
+    map.push_back({BOX, 0.000f, -5.712f, 0.024f, 0.150f, 5.400f, 0.012f});
+    map.push_back({BOX, -5.262f, 0.000f, 0.024f, 0.150f, 0.012f, 5.700f});
+    map.push_back({BOX, 5.262f, 0.000f, 0.024f, 0.150f, 0.012f, 5.700f});
 
     // 2. 教壇 (X: -5.25~5.25m, Y: -0.3~0.3m, H: 0.2m)
     map.push_back({BOX, 0.000f, 0.000f, 0.000f, 0.200f, 5.250f, 0.300f});
@@ -100,7 +108,7 @@ std::vector<FieldObject> MapLoader::createNHK2026FieldMap()
     // 椅子 (W0.36 x D0.40, H0.807)
     base_specs.push_back({BOX, 0.550f, 4.980f, 0.180f, 0.200f, 0.000f, 0.807f});
 
-    // 机 (W0.65 x D0.45 x H0.76) - 4台
+    // Each side has desk 1, desk 2, a control-station desk and a refill desk.
     constexpr float desk_coords[4][2] = {
         {-2.295f, 3.855f},
         { 3.395f, 3.855f},
@@ -114,6 +122,7 @@ std::vector<FieldObject> MapLoader::createNHK2026FieldMap()
     // 旗 (土台 0.39x0.39xH0.18 + 支柱 φ0.06 x H3.0)
     base_specs.push_back({BOX, 0.550f, 3.025f, 0.195f, 0.195f, 0.000f, 0.180f});
     base_specs.push_back({CYLINDER, 0.550f, 3.025f, 0.030f, 0.000f, 0.180f, 3.000f});
+    base_specs.push_back({BOX, 0.850f, 3.025f, 0.300f, 0.020f, 1.200f, 3.000f});
 
     // 領域A (+Y) と 領域B (-Y) に対称展開
     for (const auto& spec : base_specs) {

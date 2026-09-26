@@ -3,7 +3,7 @@
 
 #include <vector>
 
-enum ObjectType { CYLINDER, BOX };
+enum ObjectType { CYLINDER, BOX, VISUAL_BOX };
 
 struct FieldObject {
     ObjectType type;
