@@ -19,13 +19,17 @@ struct MatchingParams {
     float step_xy{0.03f};
     float range_yaw{0.15f};
     float step_yaw{0.02f};
+    bool fine_refine{true};
     float max_dist_thresh{0.20f};
-    float cost_threshold{0.20f};
+    float cost_threshold{0.165f};
     float dynamic_dist_thresh{0.15f};
     float field_min_x{-5.5f};
     float field_max_x{5.5f};
     float field_min_y{-6.0f};
     float field_max_y{6.0f};
+    float inlier_dist_thresh{0.08f};
+    int min_inliers{60};
+    float inlier_cost_thresh{0.05f};
 };
 
 class PoseSolver
@@ -45,7 +49,10 @@ public:
         const PoseCandidate& search_base_pose,
         std::vector<float>& out_dynamic_pts,
         PoseCandidate& out_best_pose,
-        float& out_best_cost
+        float& out_best_cost,
+        int* out_inlier_count                            = nullptr,
+        float* out_inlier_cost                           = nullptr,
+        const std::vector<float>* extra_base_link_points = nullptr
     );
 
     // 点群の前処理（GroundFilter）のみを実行し GPU 上の d_obstacle_ に保持する
@@ -55,11 +62,15 @@ public:
         const GroundFilterParams& filter_params
     );
 
+    // Copy the filtered clouds for RViz only when a subscriber needs them.
+    void copyFilteredClouds(std::vector<float>* ground, std::vector<float>* obstacle);
+
     // 既に d_obstacle_ に保持されている点群に対して、全域候補の SDF Matcher を一括起動する
     bool evaluateGlobalSDF(
         int obstacle_count,
         const PoseCandidate& base_pose,
-        float range_xy,
+        float range_x,
+        float range_y,
         float step_xy,
         float range_yaw,
         float step_yaw,
@@ -82,6 +93,6 @@ private:
 
     // Host Pinned Memory
     float* h_in_{nullptr};
-    float* h_out_ground_{nullptr};
-    float* h_out_obstacle_{nullptr};
+    int ground_count_{0};
+    int obstacle_count_{0};
 };

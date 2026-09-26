@@ -32,10 +32,20 @@
       search_step_xy: 0.05
       search_range_yaw: 0.6
       search_step_yaw: 0.05
+      fine_refine: true # 125 local candidates around the coarse best pose
       max_dist_thresh: 0.2
-      cost_threshold: 0.015
+      cost_threshold: 0.165  # all-point mean clipped unsigned surface distance [m]
+      inlier_dist_thresh: 0.08 # [m] 距離がこの値以下の点をマップ合致(Inlier)とみなす
+      min_inliers: 60          # 動的障害物があってもマッチング成立とする最小Inlier点数
+      inlier_cost_thresh: 0.05 # [m] Inlier点の平均残差しきい値
+
+    lidar_2d:
+      enable: false             # 後方2D LiDAR (Lakibeam 1) の点群マージを有効化
+      topic: "/lakibeam/scan"   # 2D LiDAR の LaserScan トピック名
+      frame_id: "lakibeam_frame" # 2D LiDAR のフレームID
 
     initial_pose:
+      use_for_local_search: false # set true only when x/y/yaw are known at replay start
       x: 0.0
       y: 0.0
       yaw: 0.0

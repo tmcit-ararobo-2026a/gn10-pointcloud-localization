@@ -1,0 +1,29 @@
+/**:
+  ros__parameters:
+    frames:
+      map_frame: "map"
+      base_frame: "base_link"
+      lidar_frame: "livox_frame"
+      odom_frame: "camera_init"
+      body_frame: "body"
+    topics:
+      odom: "/Odometry"
+      match: "/platform_constraint_raw"
+      output: "/platform_constraint"
+    # Legacy key name: FAST-LIO mapping.extrinsic_T/R transform LiDAR coordinates into IMU coordinates.
+    imu_to_lidar:
+      xyz: [-0.011, -0.02329, 0.04412]
+      rpy: [0.0, 0.0, 0.0]
+    fusion:
+      history_s: 5.0
+      max_odom_gap_s: 1.0
+      max_odom_step_m: 2.0
+      max_odom_step_yaw_rad: 1.5
+      max_match_skew_s: 0.15
+      process_translation_per_m: 0.03
+      process_translation_per_s: 0.05
+      process_yaw_per_rad: 0.03
+      process_yaw_per_s: 0.03
+      match_xy_stddev: 0.08
+      match_yaw_stddev: 0.08
+      innovation_gate: 16.27

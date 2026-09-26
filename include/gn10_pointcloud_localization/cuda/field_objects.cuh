@@ -3,7 +3,7 @@
 
 #include <vector>
 
-enum ObjectType { CYLINDER, BOX };
+enum ObjectType { CYLINDER, BOX, VISUAL_BOX };
 
 struct FieldObject {
     ObjectType type;
@@ -27,7 +27,8 @@ bool launchFieldSDFMatcher(
     const float* d_obstacle_cloud,
     int num_points,
     const PoseCandidate& base_pose,
-    float range_xy,
+    float range_x,
+    float range_y,
     float step_xy,
     float range_yaw,
     float step_yaw,
@@ -40,7 +41,10 @@ bool launchFieldSDFMatcher(
     PoseCandidate& out_best_pose,
     float& out_best_cost,
     std::vector<float>& out_dynamic_pts,
-    bool extract_dynamic = true  // false の場合は動的点群抽出カーネルとD2H転送を一切実行しない
+    bool extract_dynamic     = true,  // false の場合は動的点群抽出カーネルとD2H転送を一切実行しない
+    int* out_inlier_count    = nullptr,
+    float* out_inlier_cost   = nullptr,
+    float inlier_dist_thresh = 0.08f
 );
 
 #ifdef __cplusplus

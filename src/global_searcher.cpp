@@ -51,8 +51,6 @@ PoseCandidate GlobalSearcher::search(
     float range_y   = (config_.range_max_y - config_.range_min_y) * 0.5f;
     float range_yaw = max_yaw_diff;  // 全周(PI)ではなく制限範囲を設定
 
-    float max_range_xy = std::max(range_x, range_y);
-
     PoseCandidate best_coarse_pose;
     float coarse_cost = std::numeric_limits<float>::max();
 
@@ -60,7 +58,8 @@ PoseCandidate GlobalSearcher::search(
     bool ok = solver.evaluateGlobalSDF(
         obstacle_count,
         center_pose,
-        max_range_xy,
+        range_x,
+        range_y,
         config_.step_xy,
         range_yaw,
         config_.step_yaw,
@@ -88,6 +87,12 @@ PoseCandidate GlobalSearcher::search(
         refined_pose,
         out_best_cost
     );
+
+    if (refined_pose.x < config_.range_min_x || refined_pose.x > config_.range_max_x ||
+        refined_pose.y < config_.range_min_y || refined_pose.y > config_.range_max_y) {
+        RCLCPP_WARN(logger_, "[GlobalSearch] Refined pose is outside the configured start area.");
+        out_best_cost = std::numeric_limits<float>::max();
+    }
 
     RCLCPP_INFO(
         logger_,
