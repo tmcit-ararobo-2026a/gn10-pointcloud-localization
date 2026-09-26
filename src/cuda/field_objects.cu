@@ -224,6 +224,7 @@ bool launchFieldSDFMatcher(
         if (d_candidates) cudaFree(d_candidates);
         if (d_costs) cudaFree(d_costs);
         if (d_out_argmin) cudaFree(d_out_argmin);
+        if (d_temp_storage) cudaFree(d_temp_storage);
 
         g_max_candidates = num_candidates * 2;
         cudaMalloc(&d_candidates, g_max_candidates * sizeof(PoseCandidate));

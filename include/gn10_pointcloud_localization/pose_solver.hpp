@@ -19,6 +19,7 @@ struct MatchingParams {
     float step_xy{0.03f};
     float range_yaw{0.15f};
     float step_yaw{0.02f};
+    bool fine_refine{true};
     float max_dist_thresh{0.20f};
     float cost_threshold{0.165f};
     float dynamic_dist_thresh{0.15f};

@@ -64,6 +64,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.search_step_xy", 0.03);
     this->declare_parameter("matching_params.search_range_yaw", 0.15);
     this->declare_parameter("matching_params.search_step_yaw", 0.02);
+    this->declare_parameter("matching_params.fine_refine", true);
     this->declare_parameter("matching_params.max_dist_thresh", 0.20);
     this->declare_parameter("matching_params.cost_threshold", 0.165);
     this->declare_parameter("matching_params.dynamic_dist_thresh", 0.15);
@@ -109,6 +110,7 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("matching_params.search_range_yaw").as_double());
     match_params_.step_yaw =
         static_cast<float>(this->get_parameter("matching_params.search_step_yaw").as_double());
+    match_params_.fine_refine = this->get_parameter("matching_params.fine_refine").as_bool();
     match_params_.max_dist_thresh =
         static_cast<float>(this->get_parameter("matching_params.max_dist_thresh").as_double());
     match_params_.cost_threshold =

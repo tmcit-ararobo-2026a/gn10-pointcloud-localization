@@ -32,6 +32,7 @@
       search_step_xy: 0.05
       search_range_yaw: 0.6
       search_step_yaw: 0.05
+      fine_refine: true # 125 local candidates around the coarse best pose
       max_dist_thresh: 0.2
       cost_threshold: 0.165  # all-point mean clipped unsigned surface distance [m]
 

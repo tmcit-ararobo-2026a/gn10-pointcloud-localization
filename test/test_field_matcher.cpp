@@ -67,6 +67,31 @@ int main()
         stream, {0.5f, 0.0f, 0.0f, 3.0f, 0.0f, 0.0f}, 0.0f, pose
     );
     require(std::abs(outside_cost - 0.1f) < 1e-4f);
+
+    DeviceCloud shifted({
+        -0.517f, 0.0f, 0.0f, 0.483f, 0.0f, 0.0f,
+        -0.017f, -0.5f, 0.0f, -0.017f, 0.5f, 0.0f
+    });
+    float coarse_cost = 1.0f;
+    float fine_cost = 1.0f;
+    PoseCandidate coarse_pose{};
+    PoseCandidate fine_pose{};
+    std::vector<float> dynamic;
+    require(launchFieldSDFMatcher(
+        stream, shifted.data, 4, {0.0f, 0.0f, 0.0f},
+        0.05f, 0.0f, 0.05f, 0.0f, 0.01f,
+        0.2f, 0.15f, -1.0f, 1.0f, -1.0f, 1.0f,
+        coarse_pose, coarse_cost, dynamic, false
+    ));
+    require(launchFieldSDFMatcher(
+        stream, shifted.data, 4, coarse_pose,
+        0.02f, 0.0f, 0.01f, 0.0f, 0.01f,
+        0.2f, 0.15f, -1.0f, 1.0f, -1.0f, 1.0f,
+        fine_pose, fine_cost, dynamic, false
+    ));
+    require(std::abs(coarse_pose.x) < 1e-4f);
+    require(std::abs(fine_pose.x - 0.02f) < 1e-4f);
+    require(fine_cost < coarse_cost - 0.005f);
     checkCuda(cudaStreamDestroy(stream));
     return 0;
 }
