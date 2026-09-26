@@ -27,6 +27,9 @@ struct MatchingParams {
     float field_max_x{5.5f};
     float field_min_y{-6.0f};
     float field_max_y{6.0f};
+    float inlier_dist_thresh{0.08f};
+    int min_inliers{60};
+    float inlier_cost_thresh{0.05f};
 };
 
 class PoseSolver
@@ -46,7 +49,10 @@ public:
         const PoseCandidate& search_base_pose,
         std::vector<float>& out_dynamic_pts,
         PoseCandidate& out_best_pose,
-        float& out_best_cost
+        float& out_best_cost,
+        int* out_inlier_count                            = nullptr,
+        float* out_inlier_cost                           = nullptr,
+        const std::vector<float>* extra_base_link_points = nullptr
     );
 
     // 点群の前処理（GroundFilter）のみを実行し GPU 上の d_obstacle_ に保持する

@@ -2,6 +2,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -25,6 +26,12 @@ def generate_launch_description():
         description='Full path to the ROS2 parameters file to use'
     )
 
+    declare_lakibeam_tf = DeclareLaunchArgument(
+        'start_lakibeam_tf',
+        default_value='false',
+        description='Publish static TF for rear Lakibeam 1 LiDAR (base_link -> lakibeam_frame)'
+    )
+
     # ノードの設定
     localization_node = Node(
         package='gn10_pointcloud_localization',
@@ -35,10 +42,6 @@ def generate_launch_description():
             LaunchConfiguration('params_file'),
             {'use_sim_time': LaunchConfiguration('use_sim_time')}
         ],
-        # 必要に応じてトピックのリマップを追加
-        # remapping=[
-        #     ('/livox/lidar', '/custom/lidar'),
-        # ]
     )
 
     static_tf_node = Node(
@@ -57,9 +60,28 @@ def generate_launch_description():
         ]
     )
 
+    lakibeam_tf_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='lakibeam_tf',
+        arguments=[
+            '--x', '-0.30',
+            '--y', '0.0',
+            '--z', '0.20',
+            '--yaw', '3.14159',
+            '--pitch', '0.0',
+            '--roll', '0.0',
+            '--frame-id', 'base_link',
+            '--child-frame-id', 'lakibeam_frame'
+        ],
+        condition=IfCondition(LaunchConfiguration('start_lakibeam_tf'))
+    )
+
     return LaunchDescription([
         declare_use_sim_time,
         declare_params_file,
+        declare_lakibeam_tf,
         localization_node,
-        static_tf_node
+        static_tf_node,
+        lakibeam_tf_node
     ])

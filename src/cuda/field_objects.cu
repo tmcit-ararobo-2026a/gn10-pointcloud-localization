@@ -22,9 +22,14 @@ static cub::KeyValuePair<int, float>* d_out_argmin = nullptr;
 static void* d_temp_storage                        = nullptr;
 static size_t temp_storage_bytes                   = 0;
 
+static int* d_inlier_count      = nullptr;
+static float* d_inlier_dist_sum = nullptr;
+
 // Distance to the nearest box surface. A signed SDF would reward points deep
 // inside a solid map object and could cancel positive residuals elsewhere.
-__device__ float distToBoxSurface2D(float px, float py, float cx, float cy, float half_w, float half_d)
+__device__ float distToBoxSurface2D(
+    float px, float py, float cx, float cy, float half_w, float half_d
+)
 {
     float dx = fabsf(px - cx) - half_w;
     float dy = fabsf(py - cy) - half_d;
@@ -66,7 +71,7 @@ __global__ void evaluateFieldSDFKernel(
     float sin_y = sinf(ryaw);
 
     __shared__ float s_cost[256];
-    s_cost[tid]        = 0.0f;
+    s_cost[tid] = 0.0f;
 
     for (int i = tid; i < num_points; i += blockDim.x) {
         float lx = cloud[i * 3 + 0];
@@ -94,7 +99,9 @@ __global__ void evaluateFieldSDFKernel(
                 if (obj.type == CYLINDER) {
                     d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
                 } else if (obj.type == BOX) {
-                    d = distToBoxSurface2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
+                    d = distToBoxSurface2D(
+                        wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2
+                    );
                 }
                 if (d < min_d) min_d = d;
             }
@@ -171,6 +178,83 @@ __global__ void filterDynamicPointsKernel(
     out_is_dynamic[i] = (min_d >= dynamic_dist_thresh) ? 1 : 0;
 }
 
+__global__ void computeBestPoseMetricsKernel(
+    const float* __restrict__ cloud,
+    int num_points,
+    int num_objects,
+    PoseCandidate best_pose,
+    float inlier_dist_thresh,
+    float field_min_x,
+    float field_max_x,
+    float field_min_y,
+    float field_max_y,
+    int* __restrict__ out_inlier_count,
+    float* __restrict__ out_inlier_dist_sum
+)
+{
+    __shared__ int s_count[256];
+    __shared__ float s_dist[256];
+
+    int tid      = threadIdx.x;
+    s_count[tid] = 0;
+    s_dist[tid]  = 0.0f;
+
+    float rx   = best_pose.x;
+    float ry   = best_pose.y;
+    float ryaw = best_pose.yaw;
+
+    float cos_y = cosf(ryaw);
+    float sin_y = sinf(ryaw);
+
+    for (int i = blockIdx.x * blockDim.x + tid; i < num_points; i += gridDim.x * blockDim.x) {
+        float lx = cloud[i * 3 + 0];
+        float ly = cloud[i * 3 + 1];
+        float lz = cloud[i * 3 + 2];
+
+        float wx = cos_y * lx - sin_y * ly + rx;
+        float wy = sin_y * lx + cos_y * ly + ry;
+        float wz = lz;
+
+        if (wx < field_min_x || wx > field_max_x || wy < field_min_y || wy > field_max_y) {
+            continue;
+        }
+
+        float min_d = inlier_dist_thresh;
+        for (int o = 0; o < num_objects; ++o) {
+            const FieldObject obj = c_map_objects[o];
+            if (wz >= (obj.z_min - 0.1f) && wz <= (obj.z_max + 0.1f)) {
+                float d = inlier_dist_thresh;
+                if (obj.type == CYLINDER) {
+                    d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
+                } else if (obj.type == BOX) {
+                    d = distToBoxSurface2D(
+                        wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2
+                    );
+                }
+                if (d < min_d) min_d = d;
+            }
+        }
+        if (min_d < inlier_dist_thresh) {
+            s_count[tid] += 1;
+            s_dist[tid] += min_d;
+        }
+    }
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            s_count[tid] += s_count[tid + s];
+            s_dist[tid] += s_dist[tid + s];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        atomicAdd(out_inlier_count, s_count[0]);
+        atomicAdd(out_inlier_dist_sum, s_dist[0]);
+    }
+}
+
 extern "C" {
 
 void uploadFieldMapToGPU(const std::vector<FieldObject>& host_map)
@@ -201,7 +285,10 @@ bool launchFieldSDFMatcher(
     PoseCandidate& out_best_pose,
     float& out_best_cost,
     std::vector<float>& out_dynamic_pts,
-    bool extract_dynamic
+    bool extract_dynamic,
+    int* out_inlier_count,
+    float* out_inlier_cost,
+    float inlier_dist_thresh
 )
 {
     if (num_points <= 0 || g_num_map_objects <= 0) return false;
@@ -244,6 +331,11 @@ bool launchFieldSDFMatcher(
         if (d_is_dynamic) cudaFree(d_is_dynamic);
         g_max_dynamic_pts = num_points * 2;
         cudaMalloc(&d_is_dynamic, g_max_dynamic_pts * sizeof(uint8_t));
+    }
+
+    if (!d_inlier_count) {
+        cudaMalloc(&d_inlier_count, sizeof(int));
+        cudaMalloc(&d_inlier_dist_sum, sizeof(float));
     }
 
     // H2D 転送 (Async)
@@ -292,6 +384,38 @@ bool launchFieldSDFMatcher(
     int best_idx  = h_argmin.key;
     out_best_cost = h_argmin.value;
     out_best_pose = h_candidates[best_idx];
+
+    // Inlier メトリクスの計算（要求されている場合）
+    if (out_inlier_count || out_inlier_cost) {
+        cudaMemsetAsync(d_inlier_count, 0, sizeof(int), stream);
+        cudaMemsetAsync(d_inlier_dist_sum, 0, sizeof(float), stream);
+        int met_threads = 256;
+        int met_blocks  = (num_points + met_threads - 1) / met_threads;
+        if (met_blocks > 64) met_blocks = 64;
+        computeBestPoseMetricsKernel<<<met_blocks, met_threads, 0, stream>>>(
+            d_obstacle_cloud,
+            num_points,
+            g_num_map_objects,
+            out_best_pose,
+            inlier_dist_thresh,
+            field_min_x,
+            field_max_x,
+            field_min_y,
+            field_max_y,
+            d_inlier_count,
+            d_inlier_dist_sum
+        );
+        int h_count      = 0;
+        float h_dist_sum = 0.0f;
+        cudaMemcpyAsync(&h_count, d_inlier_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(
+            &h_dist_sum, d_inlier_dist_sum, sizeof(float), cudaMemcpyDeviceToHost, stream
+        );
+        cudaStreamSynchronize(stream);
+        if (out_inlier_count) *out_inlier_count = h_count;
+        if (out_inlier_cost)
+            *out_inlier_cost = (h_count > 0) ? (h_dist_sum / static_cast<float>(h_count)) : 1.0f;
+    }
 
     // 動的点群のフィルタリング(GPU)
     out_dynamic_pts.clear();

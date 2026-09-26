@@ -55,14 +55,19 @@ bool PoseSolver::processPointCloud(
     const PoseCandidate& search_base_pose,
     std::vector<float>& out_dynamic_pts,
     PoseCandidate& out_best_pose,
-    float& out_best_cost
+    float& out_best_cost,
+    int* out_inlier_count,
+    float* out_inlier_cost,
+    const std::vector<float>* extra_base_link_points
 )
 {
-    int num_points = static_cast<int>(h_raw_cloud.size() / 3);
-    ground_count_ = 0;
+    int num_points  = static_cast<int>(h_raw_cloud.size() / 3);
+    ground_count_   = 0;
     obstacle_count_ = 0;
     if (num_points == 0 || num_points > max_points_) {
         out_best_cost = std::numeric_limits<float>::max();
+        if (out_inlier_count) *out_inlier_count = 0;
+        if (out_inlier_cost) *out_inlier_cost = 1.0f;
         return false;
     }
 
@@ -93,7 +98,24 @@ bool PoseSolver::processPointCloud(
     );
 
     cudaStreamSynchronize(stream_);
-    ground_count_ = h_ground_count;
+
+    // 2D LiDAR などの追加点群 (base_link 座標系) を障害物バッファにマージ
+    if (extra_base_link_points && !extra_base_link_points->empty()) {
+        int extra_points = static_cast<int>(extra_base_link_points->size() / 3);
+        if (h_obstacle_count + extra_points <= max_points_) {
+            cudaMemcpyAsync(
+                d_obstacle_ + h_obstacle_count * 3,
+                extra_base_link_points->data(),
+                extra_points * 3 * sizeof(float),
+                cudaMemcpyHostToDevice,
+                stream_
+            );
+            h_obstacle_count += extra_points;
+            cudaStreamSynchronize(stream_);
+        }
+    }
+
+    ground_count_   = h_ground_count;
     obstacle_count_ = h_obstacle_count;
 
     bool pose_matched = false;
@@ -120,27 +142,47 @@ bool PoseSolver::processPointCloud(
             coarse_pose,
             coarse_cost,
             match_params.fine_refine ? ignored_dynamic : out_dynamic_pts,
-            !match_params.fine_refine
+            !match_params.fine_refine,
+            match_params.fine_refine ? nullptr : out_inlier_count,
+            match_params.fine_refine ? nullptr : out_inlier_cost,
+            match_params.inlier_dist_thresh
         );
         out_best_pose = coarse_pose;
         out_best_cost = coarse_cost;
         if (pose_matched && match_params.fine_refine) {
             // Five samples per axis around the coarse winner. This adds 125
             // candidates without expanding the full-field search.
-            const float fine_xy = match_params.step_xy / 5.0f;
+            const float fine_xy  = match_params.step_xy / 5.0f;
             const float fine_yaw = match_params.step_yaw / 5.0f;
-            pose_matched = launchFieldSDFMatcher(
-                stream_, d_obstacle_, h_obstacle_count, coarse_pose,
-                2.0f * fine_xy, 2.0f * fine_xy, fine_xy,
-                2.0f * fine_yaw, fine_yaw,
-                match_params.max_dist_thresh, match_params.dynamic_dist_thresh,
-                match_params.field_min_x, match_params.field_max_x,
-                match_params.field_min_y, match_params.field_max_y,
-                out_best_pose, out_best_cost, out_dynamic_pts, true
+            pose_matched         = launchFieldSDFMatcher(
+                stream_,
+                d_obstacle_,
+                h_obstacle_count,
+                coarse_pose,
+                2.0f * fine_xy,
+                2.0f * fine_xy,
+                fine_xy,
+                2.0f * fine_yaw,
+                fine_yaw,
+                match_params.max_dist_thresh,
+                match_params.dynamic_dist_thresh,
+                match_params.field_min_x,
+                match_params.field_max_x,
+                match_params.field_min_y,
+                match_params.field_max_y,
+                out_best_pose,
+                out_best_cost,
+                out_dynamic_pts,
+                true,
+                out_inlier_count,
+                out_inlier_cost,
+                match_params.inlier_dist_thresh
             );
         }
     } else {
         out_best_cost = std::numeric_limits<float>::max();
+        if (out_inlier_count) *out_inlier_count = 0;
+        if (out_inlier_cost) *out_inlier_cost = 1.0f;
         out_dynamic_pts.clear();
     }
 
@@ -153,8 +195,8 @@ int PoseSolver::prepareObstacleCloud(
     const GroundFilterParams& filter_params
 )
 {
-    int num_points = static_cast<int>(h_raw_cloud.size() / 3);
-    ground_count_ = 0;
+    int num_points  = static_cast<int>(h_raw_cloud.size() / 3);
+    ground_count_   = 0;
     obstacle_count_ = 0;
     if (num_points == 0 || num_points > max_points_) {
         return 0;
@@ -187,21 +229,18 @@ int PoseSolver::prepareObstacleCloud(
     );
 
     cudaStreamSynchronize(stream_);
-    ground_count_ = h_ground_count;
+    ground_count_   = h_ground_count;
     obstacle_count_ = h_obstacle_count;
     return h_obstacle_count;
 }
 
-void PoseSolver::copyFilteredClouds(
-    std::vector<float>* ground, std::vector<float>* obstacle
-)
+void PoseSolver::copyFilteredClouds(std::vector<float>* ground, std::vector<float>* obstacle)
 {
     if (ground) {
         ground->resize(static_cast<size_t>(ground_count_) * 3);
         if (ground_count_ > 0) {
             cudaMemcpy(
-                ground->data(), d_ground_, ground->size() * sizeof(float),
-                cudaMemcpyDeviceToHost
+                ground->data(), d_ground_, ground->size() * sizeof(float), cudaMemcpyDeviceToHost
             );
         }
     }
@@ -209,7 +248,9 @@ void PoseSolver::copyFilteredClouds(
         obstacle->resize(static_cast<size_t>(obstacle_count_) * 3);
         if (obstacle_count_ > 0) {
             cudaMemcpy(
-                obstacle->data(), d_obstacle_, obstacle->size() * sizeof(float),
+                obstacle->data(),
+                d_obstacle_,
+                obstacle->size() * sizeof(float),
                 cudaMemcpyDeviceToHost
             );
         }

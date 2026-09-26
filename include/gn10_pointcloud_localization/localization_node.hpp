@@ -11,6 +11,7 @@
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/laser_scan.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <vector>
 #include <visualization_msgs/msg/marker_array.hpp>
@@ -34,9 +35,8 @@ private:
     // Callbacks
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
-    void fusedPriorCallback(
-        const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg
-    );
+    void scan2dCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
+    void fusedPriorCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
 
     // パイプライン分離ヘルパー関数
     bool getTransformAsArray(
@@ -90,6 +90,20 @@ private:
     bool is_lost_{true};
     int lost_frame_count_{0};
 
+    // Velocity & Motion Prediction
+    float velocity_x_{0.0f};
+    float velocity_y_{0.0f};
+    bool has_velocity_{false};
+    rclcpp::Time last_match_stamp_;
+
+    // 2D LiDAR (Lakibeam 1) Integration
+    bool use_2d_lidar_{false};
+    std::string topic_2d_lidar_{"/lakibeam/scan"};
+    std::string lidar_2d_frame_{"lakibeam_frame"};
+    std::mutex lidar_2d_mutex_;
+    std::vector<float> latest_2d_points_;
+    rclcpp::Time latest_2d_stamp_;
+
     // ROS 2 Interfaces
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -98,8 +112,8 @@ private:
     message_filters::Subscriber<sensor_msgs::msg::PointCloud2> sub_cloud_filter_;
     std::shared_ptr<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>> tf_filter_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
-    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
-        sub_fused_prior_;
+    rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_2d_lidar_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_fused_prior_;
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obstacle_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_ground_;

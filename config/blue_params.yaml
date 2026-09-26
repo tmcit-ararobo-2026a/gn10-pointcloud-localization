@@ -35,8 +35,17 @@
       fine_refine: true
       max_dist_thresh: 0.25
       cost_threshold: 0.165  # all-point mean clipped unsigned surface distance [m]
+      inlier_dist_thresh: 0.08
+      min_inliers: 60
+      inlier_cost_thresh: 0.05
+
+    lidar_2d:
+      enable: false
+      topic: "/lakibeam/scan"
+      frame_id: "lakibeam_frame"
 
     initial_pose:
+      use_for_local_search: false
       x: -4.57
       y: 1.9
       yaw: -1.57

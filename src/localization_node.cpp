@@ -72,6 +72,13 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.field_max_x", 5.5);
     this->declare_parameter("matching_params.field_min_y", -6.0);
     this->declare_parameter("matching_params.field_max_y", 6.0);
+    this->declare_parameter("matching_params.inlier_dist_thresh", 0.08);
+    this->declare_parameter("matching_params.min_inliers", 60);
+    this->declare_parameter("matching_params.inlier_cost_thresh", 0.05);
+
+    this->declare_parameter("lidar_2d.enable", false);
+    this->declare_parameter("lidar_2d.topic", "/lakibeam/scan");
+    this->declare_parameter("lidar_2d.frame_id", "lakibeam_frame");
 
     this->declare_parameter("global_search.range_min_x", -5.25);
     this->declare_parameter("global_search.range_max_x", 5.25);
@@ -125,6 +132,15 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("matching_params.field_min_y").as_double());
     match_params_.field_max_y =
         static_cast<float>(this->get_parameter("matching_params.field_max_y").as_double());
+    match_params_.inlier_dist_thresh =
+        static_cast<float>(this->get_parameter("matching_params.inlier_dist_thresh").as_double());
+    match_params_.min_inliers = this->get_parameter("matching_params.min_inliers").as_int();
+    match_params_.inlier_cost_thresh =
+        static_cast<float>(this->get_parameter("matching_params.inlier_cost_thresh").as_double());
+
+    use_2d_lidar_   = this->get_parameter("lidar_2d.enable").as_bool();
+    topic_2d_lidar_ = this->get_parameter("lidar_2d.topic").as_string();
+    lidar_2d_frame_ = this->get_parameter("lidar_2d.frame_id").as_string();
 
     global_range_min_x_ =
         static_cast<float>(this->get_parameter("global_search.range_min_x").as_double());
@@ -143,9 +159,9 @@ void LocalizationNode::declareAndGetParameters()
         1, static_cast<int>(this->get_parameter("global_search.downsample_stride").as_int())
     );
     lost_threshold_count_ = this->get_parameter("global_search.lost_count_thresh").as_int();
-    publish_tf_ = this->get_parameter("publish_tf").as_bool();
-    use_fused_prior_ = this->get_parameter("fusion.use_prior").as_bool();
-    prior_max_age_s_ = this->get_parameter("fusion.prior_max_age_s").as_double();
+    publish_tf_           = this->get_parameter("publish_tf").as_bool();
+    use_fused_prior_      = this->get_parameter("fusion.use_prior").as_bool();
+    prior_max_age_s_      = this->get_parameter("fusion.prior_max_age_s").as_double();
 
     last_known_pose_.x   = static_cast<float>(this->get_parameter("initial_pose.x").as_double());
     last_known_pose_.y   = static_cast<float>(this->get_parameter("initial_pose.y").as_double());
@@ -213,11 +229,11 @@ void LocalizationNode::setupROSInterfaces()
         std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1)
     );
     if (use_fused_prior_) {
-        sub_fused_prior_ =
-            this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-                this->get_parameter("topics.fused_prior").as_string(), 20,
-                std::bind(&LocalizationNode::fusedPriorCallback, this, std::placeholders::_1)
-            );
+        sub_fused_prior_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            this->get_parameter("topics.fused_prior").as_string(),
+            20,
+            std::bind(&LocalizationNode::fusedPriorCallback, this, std::placeholders::_1)
+        );
     }
 
     pub_dynamic_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -236,9 +252,89 @@ void LocalizationNode::setupROSInterfaces()
         this->get_parameter("topics.output_markers").as_string(), rclcpp::QoS(1).transient_local()
     );
 
+    if (use_2d_lidar_) {
+        sub_2d_lidar_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
+            topic_2d_lidar_,
+            rclcpp::SensorDataQoS(),
+            std::bind(&LocalizationNode::scan2dCallback, this, std::placeholders::_1)
+        );
+        RCLCPP_INFO(
+            this->get_logger(), "Subscribed to 2D LiDAR on topic: %s", topic_2d_lidar_.c_str()
+        );
+    }
+
     using namespace std::chrono_literals;
     map_timer_ =
         this->create_wall_timer(1s, std::bind(&LocalizationNode::publishFieldMapMarkers, this));
+}
+
+void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
+{
+    geometry_msgs::msg::TransformStamped tf_stamped;
+    try {
+        tf_stamped = tf_buffer_->lookupTransform(
+            base_frame_,
+            msg->header.frame_id,
+            msg->header.stamp,
+            rclcpp::Duration::from_seconds(0.05)
+        );
+    } catch (const tf2::TransformException&) {
+        try {
+            tf_stamped =
+                tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, tf2::TimePointZero);
+        } catch (const tf2::TransformException&) {
+            return;
+        }
+    }
+
+    const double tx = tf_stamped.transform.translation.x;
+    const double ty = tf_stamped.transform.translation.y;
+    const double tz = tf_stamped.transform.translation.z;
+    const double qx = tf_stamped.transform.rotation.x;
+    const double qy = tf_stamped.transform.rotation.y;
+    const double qz = tf_stamped.transform.rotation.z;
+    const double qw = tf_stamped.transform.rotation.w;
+
+    const double siny_cosp = 2.0 * (qw * qz + qx * qy);
+    const double cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
+    const double yaw       = std::atan2(siny_cosp, cosy_cosp);
+    const float cos_y      = static_cast<float>(std::cos(yaw));
+    const float sin_y      = static_cast<float>(std::sin(yaw));
+
+    std::vector<float> points;
+    points.reserve(msg->ranges.size() * 3);
+
+    const float angle_min = msg->angle_min;
+    const float angle_inc = msg->angle_increment;
+    const float range_min = msg->range_min;
+    const float range_max = std::min(msg->range_max, filter_params_.range_max);
+
+    for (size_t i = 0; i < msg->ranges.size(); ++i) {
+        const float r = msg->ranges[i];
+        if (!std::isfinite(r) || r < range_min || r > range_max) continue;
+
+        const float angle = angle_min + static_cast<float>(i) * angle_inc;
+        const float xl    = r * std::cos(angle);
+        const float yl    = r * std::sin(angle);
+
+        const float xb = cos_y * xl - sin_y * yl + static_cast<float>(tx);
+        const float yb = sin_y * xl + cos_y * yl + static_cast<float>(ty);
+        const float zb = static_cast<float>(tz);
+
+        if (xb * xb + yb * yb <= filter_params_.robot_radius * filter_params_.robot_radius) {
+            continue;
+        }
+
+        points.push_back(xb);
+        points.push_back(yb);
+        points.push_back(zb);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(lidar_2d_mutex_);
+        latest_2d_points_ = std::move(points);
+        latest_2d_stamp_  = msg->header.stamp;
+    }
 }
 
 void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
@@ -254,30 +350,67 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     float best_cost = 0.0f;
     bool matched    = false;
 
+    // 2D LiDAR (Lakibeam 1) の点群を取得
+    std::vector<float> extra_2d_points;
+    if (use_2d_lidar_) {
+        std::lock_guard<std::mutex> lock(lidar_2d_mutex_);
+        if (!latest_2d_points_.empty()) {
+            const double age = (rclcpp::Time(msg->header.stamp) - latest_2d_stamp_).seconds();
+            if (std::abs(age) < 0.20) {
+                extra_2d_points = latest_2d_points_;
+            }
+        }
+    }
+
+    // 速度予測モデル + IMU積分による探索中心 (search_base_pose) の計算
     PoseCandidate search_base_pose;
     bool has_fresh_prior = false;
     {
         std::lock_guard<std::mutex> lock(pose_mutex_);
         search_base_pose = predicted_pose_;
+        if (has_velocity_ && !is_lost_) {
+            const double dt = (rclcpp::Time(msg->header.stamp) - last_match_stamp_).seconds();
+            if (dt > 0.0 && dt < 0.5) {
+                search_base_pose.x = last_known_pose_.x + velocity_x_ * static_cast<float>(dt);
+                search_base_pose.y = last_known_pose_.y + velocity_y_ * static_cast<float>(dt);
+            }
+        }
         if (use_fused_prior_ && prior_received_) {
             const double age = (rclcpp::Time(msg->header.stamp) - prior_stamp_).seconds();
             if (std::abs(age) <= prior_max_age_s_) {
                 search_base_pose = fused_prior_;
-                has_fresh_prior = true;
+                has_fresh_prior  = true;
             }
         }
     }
 
+    int inlier_count  = 0;
+    float inlier_cost = 1.0f;
+
     // A recent fused pose can reacquire locally even after the map matcher was lost.
     if (is_lost_ && has_fresh_prior) {
         matched = solver_->processPointCloud(
-            h_raw_cloud, h_transform, filter_params_, match_params_, search_base_pose,
-            dynamic_pts, best_pose, best_cost
+            h_raw_cloud,
+            h_transform,
+            filter_params_,
+            match_params_,
+            search_base_pose,
+            dynamic_pts,
+            best_pose,
+            best_cost,
+            &inlier_count,
+            &inlier_cost,
+            extra_2d_points.empty() ? nullptr : &extra_2d_points
         );
-        if (matched && std::isfinite(best_cost) &&
-            best_cost < match_params_.cost_threshold) {
-            is_lost_ = false;
+        const bool accepted = matched && std::isfinite(best_cost) &&
+                              ((best_cost < match_params_.cost_threshold) ||
+                               (inlier_count >= match_params_.min_inliers &&
+                                inlier_cost < match_params_.inlier_cost_thresh));
+        if (accepted) {
+            is_lost_          = false;
             lost_frame_count_ = 0;
+            matched           = true;
+            last_match_stamp_ = msg->header.stamp;
         } else {
             matched = false;
             dynamic_pts.clear();
@@ -306,6 +439,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             is_lost_          = false;
             lost_frame_count_ = 0;
             matched           = true;
+            has_velocity_     = false;
+            last_match_stamp_ = msg->header.stamp;
             RCLCPP_INFO(
                 this->get_logger(), "[GlobalSearch] Successfully recovered from lost state."
             );
@@ -319,24 +454,71 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             search_base_pose,
             dynamic_pts,
             best_pose,
-            best_cost
+            best_cost,
+            &inlier_count,
+            &inlier_cost,
+            extra_2d_points.empty() ? nullptr : &extra_2d_points
         );
 
-        updateLostState(matched, best_cost);
+        // 動的障害物に対するロバスト合否判定:
+        // 通常の全点平均コストが閾値未満、または
+        // 静止壁/オブジェクトの Inlier 点が十分多く、かつその平均残差が極小であれば合格
+        const bool match_accepted = matched && std::isfinite(best_cost) &&
+                                    ((best_cost < match_params_.cost_threshold) ||
+                                     (inlier_count >= match_params_.min_inliers &&
+                                      inlier_cost < match_params_.inlier_cost_thresh));
+
+        if (match_accepted) {
+            matched           = true;
+            lost_frame_count_ = 0;
+            is_lost_          = false;
+
+            // 速度推定の平滑更新
+            const double dt = (rclcpp::Time(msg->header.stamp) - last_match_stamp_).seconds();
+            if (dt > 0.01 && dt < 0.5) {
+                float measured_vx = (best_pose.x - last_known_pose_.x) / static_cast<float>(dt);
+                float measured_vy = (best_pose.y - last_known_pose_.y) / static_cast<float>(dt);
+                float speed       = std::hypot(measured_vx, measured_vy);
+                if (speed < 4.0f) {
+                    constexpr float alpha = 0.5f;
+                    velocity_x_   = has_velocity_
+                                        ? ((1.0f - alpha) * velocity_x_ + alpha * measured_vx)
+                                        : measured_vx;
+                    velocity_y_   = has_velocity_
+                                        ? ((1.0f - alpha) * velocity_y_ + alpha * measured_vy)
+                                        : measured_vy;
+                    has_velocity_ = true;
+                }
+            }
+            last_match_stamp_ = msg->header.stamp;
+        } else {
+            matched = false;
+            lost_frame_count_++;
+            if (lost_frame_count_ >= lost_threshold_count_) {
+                is_lost_      = true;
+                has_velocity_ = false;
+                RCLCPP_WARN(
+                    this->get_logger(),
+                    "Localization lost! (best_cost: %.4f, inliers: %d, inlier_cost: %.4f)",
+                    best_cost,
+                    inlier_count,
+                    inlier_cost
+                );
+            }
+        }
     }
 
-    if (matched && best_cost < match_params_.cost_threshold) {
+    if (matched) {
         publishPoseAndTransform(msg->header.stamp, best_pose);
     }
 
     std_msgs::msg::Header out_header = msg->header;
     out_header.frame_id              = base_frame_;
-    const bool need_ground = pub_ground_->get_subscription_count() > 0;
-    const bool need_obstacle = pub_obstacle_->get_subscription_count() > 0;
+    const bool need_ground           = pub_ground_->get_subscription_count() > 0;
+    const bool need_obstacle         = pub_obstacle_->get_subscription_count() > 0;
     if (need_ground || need_obstacle) {
         solver_->copyFilteredClouds(
-            need_ground ? &ground_pts : nullptr,
-            need_obstacle ? &obstacle_pts : nullptr
+            need_ground ? &ground_pts : nullptr, need_obstacle ? &obstacle_pts : nullptr
         );
         if (need_ground) publishCloud(pub_ground_, out_header, ground_pts);
         if (need_obstacle) publishCloud(pub_obstacle_, out_header, obstacle_pts);
@@ -396,9 +578,12 @@ void LocalizationNode::fusedPriorCallback(
     const double yaw = tf2::getYaw(pose.orientation);
     if (!std::isfinite(yaw)) return;
     std::lock_guard<std::mutex> lock(pose_mutex_);
-    fused_prior_ = {static_cast<float>(pose.position.x),
-                    static_cast<float>(pose.position.y), static_cast<float>(yaw)};
-    prior_stamp_ = msg->header.stamp;
+    fused_prior_ = {
+        static_cast<float>(pose.position.x),
+        static_cast<float>(pose.position.y),
+        static_cast<float>(yaw)
+    };
+    prior_stamp_    = msg->header.stamp;
     prior_received_ = true;
 }
 
@@ -538,10 +723,10 @@ void LocalizationNode::publishFieldMapMarkers()
         marker.color.b = 0.4f;
         marker.color.a = 0.6f;
 
-        const float height     = obj.z_max - obj.z_min;
-        marker.pose.position.x = obj.center_x;
-        marker.pose.position.y = obj.center_y;
-        marker.pose.position.z = obj.z_min + height / 2.0f;
+        const float height        = obj.z_max - obj.z_min;
+        marker.pose.position.x    = obj.center_x;
+        marker.pose.position.y    = obj.center_y;
+        marker.pose.position.z    = obj.z_min + height / 2.0f;
         marker.pose.orientation.w = 1.0;
 
         if (obj.type == BOX || obj.type == VISUAL_BOX) {
