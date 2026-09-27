@@ -1,4 +1,5 @@
 #include "gn10_pointcloud_localization/cuda/field_objects.cuh"
+#include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
 
 #include <cmath>
 #include <stdexcept>
@@ -62,6 +63,14 @@ int main()
     );
     require(std::abs(pose.x) < 1e-4f);
     require(surface_cost < 1e-4f);
+
+    const float top_cost=matchCost(stream,{0,0,.1f,.2f,.2f,.1f},0,pose);
+    require(top_cost<1e-6f); // Exact horizontal top returns belong to the static map.
+    DeviceCloud top_only({.1f,.1f,.1f,-.1f,.1f,.1f,-.1f,-.1f,.1f,.1f,-.1f,.1f});
+    FieldMatchStats top_quality;float top_robust;std::vector<float> top_dynamic;
+    require(!launchFieldSDFMatcher(stream,top_only.data,4,{0,0,0},0,0,.1,0,.1,
+        .2,.15,-1,1,-1,1,pose,top_robust,top_dynamic,false,.08,.1,1,3,&top_quality,1));
+    require(top_quality.support_count==0&&top_quality.axis_x==0&&top_quality.axis_y==0); // A tabletop alone cannot localize XY/yaw.
 
     const float outside_cost = matchCost(
         stream, {0.5f, 0.0f, 0.0f, 3.0f, 0.0f, 0.0f}, 0.0f, pose
@@ -127,6 +136,19 @@ int main()
     require(!launchFieldSDFMatcher(stream,one_wall.data,100,{0,0,0},
         0,0,0.1f,0,0.1f,0.2f,0.15f,-1,1,-1,1,
         pose,robust_cost,dynamic,false,0.08f,0.1f,50,2,nullptr,10));
+    // A real tilted floor above z=4cm is removed by plane distance, while
+    // output coordinates stay unchanged and a point 5.5cm above it remains.
+    DeviceCloud floor_returns({0,-5,.045f,0,-5,.1f,0,0,.1f});
+    DeviceCloud floor_output(std::vector<float>(9)),obstacle_output(std::vector<float>(9));
+    DeviceCloud transform({1,0,0,0,0,1,0,0,0,0,1,0});
+    int *ground_count,*obstacle_count;checkCuda(cudaMalloc(&ground_count,sizeof(int)));
+    checkCuda(cudaMalloc(&obstacle_count,sizeof(int)));int ground_n=0,obstacle_n=0;
+    launchGroundFilter(stream,floor_returns.data,floor_output.data,obstacle_output.data,transform.data,
+        3,12,.8,0,1.2,.04,ground_count,obstacle_count,&ground_n,&obstacle_n,0,-.007,.01);
+    checkCuda(cudaStreamSynchronize(stream));require(ground_n==1&&obstacle_n==1);
+    float ground_xyz[3];checkCuda(cudaMemcpy(ground_xyz,floor_output.data,sizeof(ground_xyz),cudaMemcpyDeviceToHost));
+    require(std::abs(ground_xyz[1]+5)<1e-6&&std::abs(ground_xyz[2]-.045)<1e-6);
+    checkCuda(cudaFree(ground_count));checkCuda(cudaFree(obstacle_count));
     checkCuda(cudaStreamDestroy(stream));
     return 0;
 }

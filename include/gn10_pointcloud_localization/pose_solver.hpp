@@ -12,6 +12,7 @@ struct GroundFilterParams {
     float robot_height_min{0.0f};
     float robot_height_max{1.2f};
     float ground_z_thresh{0.08f};
+    float floor_a{0},floor_b{0},floor_c{0};
 };
 
 struct MatchingParams {

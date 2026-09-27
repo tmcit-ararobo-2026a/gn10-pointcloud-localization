@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <limits>
 #include "gn10_pointcloud_localization/scan_points.hpp"
+#include "gn10_pointcloud_localization/floor_plane.hpp"
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -67,6 +68,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("filter_params.robot_height_max", 1.2);
     this->declare_parameter("filter_params.ground_z_thresh", 0.08);
     this->declare_parameter("filter_params.max_points", 200000);
+    this->declare_parameter("filter_params.adaptive_floor", true);
 
     this->declare_parameter("matching_params.search_range_xy", 0.30);
     this->declare_parameter("matching_params.search_step_xy", 0.03);
@@ -438,6 +440,10 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
         h_raw_cloud[kept++]=h_raw_cloud[i];h_raw_cloud[kept++]=h_raw_cloud[i+1];h_raw_cloud[kept++]=h_raw_cloud[i+2];
     }
     h_raw_cloud.resize(kept);
+    GroundFilterParams frame_filter=filter_params_;
+    const auto floor=get_parameter("filter_params.adaptive_floor").as_bool() ?
+        gn10::estimateFloor(h_raw_cloud,h_transform,std::min(8.0f,frame_filter.range_max)) : gn10::FloorPlane{};
+    if(floor.valid){frame_filter.floor_a=floor.a;frame_filter.floor_b=floor.b;frame_filter.floor_c=floor.c;}
     last_cloud_stamp_ = stamp;
     const rclcpp::Time match_stamp(static_cast<int64_t>(std::llround(stamp * 1e9)));
     std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
@@ -494,7 +500,7 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
     if (is_lost_ && has_fresh_prior) {
         attempted = true;
         matched = solver_->processPointCloud(
-            h_raw_cloud, h_transform, filter_params_, match_params_, search_base_pose,
+            h_raw_cloud, h_transform, frame_filter, match_params_, search_base_pose,
             dynamic_pts, best_pose, best_cost
         );
         if (matched && std::isfinite(best_cost) &&
@@ -521,7 +527,7 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
             *solver_,
             h_raw_cloud,
             h_transform,
-            filter_params_,
+            frame_filter,
             match_params_,
             current_prior_yaw,
             global_range_yaw_diff_,
@@ -541,7 +547,7 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
         matched = solver_->processPointCloud(
             h_raw_cloud,
             h_transform,
-            filter_params_,
+            frame_filter,
             match_params_,
             search_base_pose,
             dynamic_pts,
@@ -572,7 +578,7 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
         recovery_params.range_xy=std::min(1.5f,match_params_.range_xy+static_cast<float>(map_age)*0.6f);
         PoseCandidate map_pose; float map_cost; std::vector<float> map_dynamic;
         const bool map_matched=solver_->processPointCloud(h_raw_cloud,h_transform,
-            filter_params_,recovery_params,last_known_pose_,map_dynamic,map_pose,map_cost);
+            frame_filter,recovery_params,last_known_pose_,map_dynamic,map_pose,map_cost);
         const auto map_quality=solver_->lastMatchStats();
         attempted=true;
         if (map_matched && map_cost < local_threshold &&
@@ -613,6 +619,8 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
     value("gyro_deskewed",gyro_deskewed);
     value("snapshot_scans",snapshot_scans_); value("scan_span_s",scan.end-scan.start);
     value("input_points",scan.times.size());
+    value("floor_valid",floor.valid);value("floor_a",floor.a);value("floor_b",floor.b);
+    value("floor_c",floor.c);value("floor_rms",floor.rms);value("floor_support",floor.support);
     diagnostics.status.push_back(status);pub_match_diagnostics_->publish(diagnostics);
     if (accepted) {
         publishPoseAndTransform(match_stamp, best_pose);

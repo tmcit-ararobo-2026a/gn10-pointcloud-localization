@@ -92,7 +92,8 @@ bool PoseSolver::processPointCloud(
         d_ground_count_,
         d_obstacle_count_,
         &h_ground_count,
-        &h_obstacle_count
+        &h_obstacle_count,
+        filter_params.floor_a, filter_params.floor_b, filter_params.floor_c
     );
 
     cudaStreamSynchronize(stream_);
@@ -213,7 +214,8 @@ int PoseSolver::prepareObstacleCloud(
         d_ground_count_,
         d_obstacle_count_,
         &h_ground_count,
-        &h_obstacle_count
+        &h_obstacle_count,
+        filter_params.floor_a, filter_params.floor_b, filter_params.floor_c
     );
 
     cudaStreamSynchronize(stream_);

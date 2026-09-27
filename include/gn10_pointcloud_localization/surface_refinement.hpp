@@ -6,26 +6,29 @@
 #include <cmath>
 
 namespace gn10 {
-// Signed point-to-surface residual and outward normal, consistent with the CUDA
-// unsigned box/cylinder distance. Movable/visual geometry is never introduced.
+// Signed 3D point-to-surface residual and horizontal normal, consistent with the
+// CUDA unsigned finite box/cylinder distance. Movable/visual geometry is never introduced.
 inline bool surfaceResidual(const FieldObject& o, double x, double y, double z,
                             double& residual, Eigen::Vector2d& normal) {
     if (o.type==VISUAL_BOX || z<o.z_min-.1 || z>o.z_max+.1) return false;
     const double dx=x-o.center_x,dy=y-o.center_y;
-    if (o.type==CYLINDER) {
-        const double r=std::hypot(dx,dy);
-        if (r<1e-9) return false;
-        normal={dx/r,dy/r}; residual=r-o.param1; return true;
-    }
-    const double ax=std::abs(dx)-o.param1,ay=std::abs(dy)-o.param2;
-    if (ax>0 || ay>0) {
-        const double nx=std::copysign(std::max(0.0,ax),dx);
-        const double ny=std::copysign(std::max(0.0,ay),dy);
-        residual=std::hypot(nx,ny); normal={nx/residual,ny/residual};
-    } else if (ax>ay) {
-        residual=ax;normal={std::copysign(1.0,dx),0};
+    const double dz=std::abs(z-.5*(o.z_min+o.z_max))-.5*(o.z_max-o.z_min);
+    normal.setZero();
+    if(o.type==CYLINDER) {
+        const double r=std::hypot(dx,dy),dr=r-o.param1;
+        const double ar=std::max(dr,0.0),az=std::max(dz,0.0),outside=std::hypot(ar,az);
+        double radial=0;
+        if(outside>0){residual=outside;radial=ar/outside;}
+        else if(dr>dz){residual=dr;radial=1;}else residual=dz;
+        if(radial>0 && r<1e-9)return false;
+        if(r>1e-9)normal={radial*dx/r,radial*dy/r};
     } else {
-        residual=ay;normal={0,std::copysign(1.0,dy)};
+        const double qx=std::abs(dx)-o.param1,qy=std::abs(dy)-o.param2;
+        const double ax=std::max(qx,0.0),ay=std::max(qy,0.0),az=std::max(dz,0.0);
+        const double outside=std::sqrt(ax*ax+ay*ay+az*az);
+        if(outside>0){residual=outside;normal={std::copysign(ax/outside,dx),std::copysign(ay/outside,dy)};}
+        else if(qx>qy && qx>dz){residual=qx;normal={std::copysign(1.0,dx),0};}
+        else if(qy>dz){residual=qy;normal={0,std::copysign(1.0,dy)};}else residual=dz;
     }
     return true;
 }

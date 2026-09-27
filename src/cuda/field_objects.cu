@@ -24,23 +24,31 @@ static cub::KeyValuePair<int, float>* d_out_argmin = nullptr;
 static void* d_temp_storage                        = nullptr;
 static size_t temp_storage_bytes                   = 0;
 
-// Distance to the nearest box surface. A signed SDF would reward points deep
-// inside a solid map object and could cancel positive residuals elsewhere.
-__device__ float distToBoxSurface2D(float px, float py, float cx, float cy, float half_w, float half_d)
+// Distance to finite 3D primitive surfaces. Horizontal faces carry no XY normal.
+__device__ float surfaceDistance3D(const FieldObject& o,float x,float y,float z,unsigned* axes=nullptr)
 {
-    float dx = fabsf(px - cx) - half_w;
-    float dy = fabsf(py - cy) - half_d;
-    float ax = fmaxf(dx, 0.0f);
-    float ay = fmaxf(dy, 0.0f);
-    return fabsf(sqrtf(ax * ax + ay * ay) + fminf(fmaxf(dx, dy), 0.0f));
-}
-
-__device__ float distToCylinder2D(float px, float py, float cx, float cy, float radius)
-{
-    float dx          = px - cx;
-    float dy          = py - cy;
-    float dist_center = sqrtf(dx * dx + dy * dy);
-    return fabsf(dist_center - radius);
+    if(axes)*axes=0;
+    const float dx=x-o.center_x,dy=y-o.center_y;
+    const float dz=fabsf(z-0.5f*(o.z_min+o.z_max))-0.5f*(o.z_max-o.z_min);
+    float nx=0,ny=0,d=FLT_MAX;
+    if(o.type==BOX) {
+        const float qx=fabsf(dx)-o.param1,qy=fabsf(dy)-o.param2;
+        const float ax=fmaxf(qx,0),ay=fmaxf(qy,0),az=fmaxf(dz,0);
+        const float outside=sqrtf(ax*ax+ay*ay+az*az);
+        if(outside>0){d=outside;nx=ax/outside;ny=ay/outside;}
+        else if(qx>qy && qx>dz){d=-qx;nx=1;}
+        else if(qy>dz){d=-qy;ny=1;}
+        else d=-dz;
+    } else if(o.type==CYLINDER) {
+        const float r=hypotf(dx,dy),dr=r-o.param1;
+        const float ar=fmaxf(dr,0),az=fmaxf(dz,0),outside=hypotf(ar,az);
+        float radial=0;
+        if(outside>0){d=outside;radial=ar/outside;}
+        else if(dr>dz){d=-dr;radial=1;}else d=-dz;
+        if(r>1e-6f){nx=radial*fabsf(dx)/r;ny=radial*fabsf(dy)/r;}
+    }
+    if(axes)*axes=(nx>.3f ? 1U:0U)|(ny>.3f ? 2U:0U);
+    return d;
 }
 
 // 全姿勢候補の残差計算カーネル
@@ -105,25 +113,15 @@ __global__ void evaluateFieldSDFKernel(
         for (int o = 0; o < num_objects; ++o) {
             const FieldObject obj = c_map_objects[o];
             if (wz >= (obj.z_min - 0.1f) && wz <= (obj.z_max + 0.1f)) {
-                float d = max_dist_thresh;
-                if (obj.type == CYLINDER) {
-                    d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
-                } else if (obj.type == BOX) {
-                    d = distToBoxSurface2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
-                }
-                if (d < min_d) {
-                    min_d = d;
-                    if (obj.type == CYLINDER) {
-                        float dx=fabsf(wx-obj.center_x),dy=fabsf(wy-obj.center_y);
-                        axes=(dx>0.3f*obj.param1 ? 1U:0U)|(dy>0.3f*obj.param1 ? 2U:0U);
-                    } else {
-                        float dx=fabsf(fabsf(wx-obj.center_x)-obj.param1);
-                        float dy=fabsf(fabsf(wy-obj.center_y)-obj.param2);
-                        axes=dx<dy ? 1U : 2U;
-                    }
-                }
+                unsigned candidate_axes=0;
+                const float d=surfaceDistance3D(obj,wx,wy,wz,&candidate_axes);
+                if(d<min_d){min_d=d;axes=candidate_axes;}
             }
         }
+        // Horizontal faces classify static returns, but cannot support planar
+        // localization. Keep them capped rather than letting tabletop returns
+        // dominate the ranking of a weak XY hypothesis.
+        if (robust_distance > 0 && axes == 0) min_d = cap;
         s_cost[tid] += fminf(min_d, cap);
         if (robust_distance > 0 && min_d < robust_distance) {
             ++s_count[tid];
@@ -201,12 +199,7 @@ __global__ void filterDynamicPointsKernel(
     for (int o = 0; o < num_objects; ++o) {
         const FieldObject obj = c_map_objects[o];
         if (wz >= (obj.z_min - 0.1f) && wz <= (obj.z_max + 0.1f)) {
-            float d = dynamic_dist_thresh;
-            if (obj.type == CYLINDER) {
-                d = distToCylinder2D(wx, wy, obj.center_x, obj.center_y, obj.param1);
-            } else if (obj.type == BOX) {
-                d = distToBoxSurface2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
-            }
+            const float d=surfaceDistance3D(obj,wx,wy,wz);
             if (d < min_d) min_d = d;
         }
     }
