@@ -101,6 +101,8 @@ ament_target_dependencies(gn10_pose_fusion_node
 
 if(BUILD_TESTING)
   enable_testing()
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_test(NAME sensor_stamp_play COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_sensor_stamp_play.py)
   add_executable(test_scan_motion test/test_scan_motion.cpp)
   target_include_directories(test_scan_motion PRIVATE include)
   ament_target_dependencies(test_scan_motion sensor_msgs livox_ros_driver2)
@@ -134,5 +136,7 @@ install(TARGETS
 install(DIRECTORY launch config rviz
   DESTINATION share/${PROJECT_NAME}
 )
+
+install(PROGRAMS scripts/sensor_stamp_play.py DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

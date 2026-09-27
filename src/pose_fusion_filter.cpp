@@ -22,6 +22,23 @@ MatchRejection PoseFusionFilter::lastMatchRejection() const { return last_match_
 
 void PoseFusionFilter::reset() { history_.clear(); }
 
+bool PoseFusionFilter::setMapPose(Pose2d pose)
+{
+    if (history_.empty() || !finite(pose)) return false;
+    auto anchor = history_.back();
+    pose.yaw = wrapYaw(pose.yaw);
+    anchor.map = pose;
+    anchor.valid = true;
+    anchor.match.reset();
+    anchor.covariance = Eigen::Matrix3d::Zero();
+    anchor.covariance(0, 0) = anchor.covariance(1, 1) =
+        std::pow(config_.match_xy_stddev, 2);
+    anchor.covariance(2, 2) = std::pow(config_.match_yaw_stddev, 2);
+    history_.clear();
+    history_.push_back(anchor);
+    return true;
+}
+
 bool PoseFusionFilter::hasPose() const { return !history_.empty() && history_.back().valid; }
 
 double PoseFusionFilter::latestStamp() const
@@ -94,7 +111,9 @@ bool PoseFusionFilter::correct(size_t index)
     );
     const Eigen::Matrix3d S = sample.covariance + R;
     const auto solver = S.ldlt();
-    if (solver.info() != Eigen::Success ||
+    if (innovation.head<2>().norm() > config_.max_match_translation_m ||
+        std::abs(innovation.z()) > config_.max_match_yaw_rad ||
+        solver.info() != Eigen::Success ||
         innovation.dot(solver.solve(innovation)) > config_.innovation_gate) {
         last_match_rejection_ = MatchRejection::Innovation;
         sample.match.reset();

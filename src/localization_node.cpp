@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <limits>
 #include "gn10_pointcloud_localization/scan_points.hpp"
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
@@ -236,7 +237,7 @@ void LocalizationNode::setupROSInterfaces()
     const auto input_type = get_parameter("input_cloud_type").as_string();
     if (input_type == "custom_msg") {
         sub_custom_cloud_ = create_subscription<livox_ros_driver2::msg::CustomMsg>(
-            topic_cloud, rclcpp::SensorDataQoS(),
+            topic_cloud, rclcpp::SensorDataQoS().keep_last(50),
             std::bind(&LocalizationNode::customCloudCallback, this, std::placeholders::_1));
     } else if (input_type == "pointcloud2") {
     sub_cloud_filter_.subscribe(this, topic_cloud, rmw_qos_profile_sensor_data);
@@ -335,6 +336,7 @@ void LocalizationNode::drainClouds()
             auto pending = std::move(pending_clouds_.front());
             pending_clouds_.pop_front();
             processScan(pending.header, std::move(pending.scan));
+            return; // Let odometry and fused-prior callbacks run between scans.
         } else if (known_motion_gap ||
             std::chrono::steady_clock::now() - pending_clouds_.front().received > std::chrono::duration<double>(scan_wait_s_)) {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
@@ -362,7 +364,7 @@ void LocalizationNode::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr
     }
     if (!motion_.samples.empty() && stamp > motion_.samples.back().stamp) {
         const auto& prev=motion_.samples.back();
-        if (stamp-prev.stamp>1.0 || std::hypot(p.position.x-prev.x,p.position.y-prev.y)>2.0 ||
+        if (std::hypot(p.position.x-prev.x,p.position.y-prev.y)>2.0 ||
             std::abs(gn10::angleDifference(tf2::getYaw(q),prev.yaw))>1.5) {
             motion_.samples.clear(); prior_history_.clear();
         }
@@ -373,6 +375,7 @@ void LocalizationNode::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr
 
 void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::ScanPoints scan)
 {
+    const auto processing_started = std::chrono::steady_clock::now();
     float h_transform[12];
     if (!getTransformAsArray(header.frame_id, header.stamp, h_transform)) {
         return;
@@ -403,8 +406,9 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
     const rclcpp::Time match_stamp(static_cast<int64_t>(std::llround(stamp * 1e9)));
     std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
     PoseCandidate best_pose;
-    float best_cost = 0.0f;
+    float best_cost = std::numeric_limits<float>::max();
     bool matched    = false;
+    bool attempted = false;
 
     PoseCandidate search_base_pose;
     bool has_fresh_prior = false;
@@ -444,6 +448,7 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
     float acceptance_threshold = local_threshold;
     // A recent fused pose can reacquire locally even after the map matcher was lost.
     if (is_lost_ && has_fresh_prior) {
+        attempted = true;
         matched = solver_->processPointCloud(
             h_raw_cloud, h_transform, filter_params_, match_params_, search_base_pose,
             dynamic_pts, best_pose, best_cost
@@ -455,10 +460,11 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
         } else {
             matched = false;
             dynamic_pts.clear();
+            ++lost_frame_count_;
         }
     }
 
-    if (is_lost_ && !matched && !has_fresh_prior) {
+    if (is_lost_ && !matched && !has_fresh_prior && !(use_fused_prior_ && prior_received_)) {
         acceptance_threshold = match_params_.cost_threshold;
         float current_prior_yaw = 0.0f;
         {
@@ -466,6 +472,7 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
             current_prior_yaw = search_base_pose.yaw;
         }
 
+        attempted = true;
         best_pose = global_searcher_->search(
             *solver_,
             h_raw_cloud,
@@ -485,7 +492,8 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
                 this->get_logger(), "[GlobalSearch] Successfully recovered from lost state."
             );
         }
-    } else if (!matched && !is_lost_) {
+    } else if (!matched && !is_lost_ && (!use_fused_prior_ || !prior_received_ || has_fresh_prior)) {
+        attempted = true;
         matched = solver_->processPointCloud(
             h_raw_cloud,
             h_transform,
@@ -498,6 +506,7 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
         );
 
         updateLostState(matched, best_cost, local_threshold);
+        matched = matched && std::isfinite(best_cost) && best_cost < local_threshold;
     }
 
     const bool accepted = matched && std::isfinite(best_cost) && best_cost < acceptance_threshold;
@@ -508,15 +517,19 @@ void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::Sc
     status.name="gn10_matcher"; status.hardware_id="field_sdf";
     status.level=accepted ? status.OK : status.WARN;
     status.message=accepted ? "Map support accepted" : "Insufficient map support; no pose measurement";
-    const auto& quality=solver_->lastMatchStats();
+    const auto quality=attempted ? solver_->lastMatchStats() : FieldMatchStats{};
     auto value=[&](const std::string& key, auto v) {
         diagnostic_msgs::msg::KeyValue kv; kv.key=key;kv.value=std::to_string(v);status.values.push_back(kv);
     };
+    value("match_attempted",attempted);
     value("matches_accepted",match_accepted_);value("matches_rejected",match_rejected_);
     value("cost",best_cost);value("threshold",acceptance_threshold);
     value("support_count",quality.support_count);value("support_ratio",quality.support_ratio);
     value("support_sectors",quality.sectors);
     value("axis_x_support",quality.axis_x);value("axis_y_support",quality.axis_y);value("has_motion_prior",has_fresh_prior);
+    value("processing_ms",std::chrono::duration<double,std::milli>(
+        std::chrono::steady_clock::now()-processing_started).count());
+    value("global_recovery_locked",use_fused_prior_ && prior_received_);
     value("timing_drops",timing_drops_);value("deskewed",use_motion_);
     diagnostics.status.push_back(status);pub_match_diagnostics_->publish(diagnostics);
     if (accepted) {

@@ -17,9 +17,13 @@
     fusion:
       constrain_to_floor: true # planar field: map->base_link z/roll/pitch are fixed at zero
       history_s: 5.0
-      max_odom_gap_s: 1.0
+      max_prediction_age_s: 1.0 # stop map TF when no supported map observation remains
+      max_odom_gap_s: 3.0 # a packet gap alone must not erase the established map pose
       max_odom_step_m: 2.0
       max_odom_step_yaw_rad: 1.5
+      max_odom_speed_m_s: 5.0
+      max_odom_rotation_rad_s: 3.0
+      max_floor_tilt_rad: 0.35 # relative to initial base orientation
       max_match_skew_s: 0.15
       process_translation_per_m: 0.03
       process_translation_per_s: 0.05
@@ -27,4 +31,6 @@
       process_yaw_per_s: 0.03
       match_xy_stddev: 0.08
       match_yaw_stddev: 0.08
+      max_match_translation_m: 0.5 # independent of covariance growth
+      max_match_yaw_rad: 0.35
       innovation_gate: 16.27

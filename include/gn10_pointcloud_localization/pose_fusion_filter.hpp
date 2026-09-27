@@ -15,7 +15,7 @@ struct Pose2d {
 
 struct FusionConfig {
     double history_s{5.0};
-    double max_odom_gap_s{1.0};
+    double max_odom_gap_s{3.0};
     double max_odom_step_m{2.0};
     double max_odom_step_yaw_rad{1.5};
     double max_match_skew_s{0.15};
@@ -25,6 +25,8 @@ struct FusionConfig {
     double process_yaw_per_s{0.03};
     double match_xy_stddev{0.08};
     double match_yaw_stddev{0.08};
+    double max_match_translation_m{0.5};
+    double max_match_yaw_rad{0.35};
     double innovation_gate{16.27};  // chi-square 3 DoF, 99.9%
 };
 
@@ -43,6 +45,7 @@ public:
     Pose2d pose() const;
     Eigen::Matrix3d covariance() const;
     void reset();
+    bool setMapPose(Pose2d pose); // Explicit operator initialization at latest odometry.
 
 private:
     struct Match { Pose2d pose; };

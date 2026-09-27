@@ -10,7 +10,7 @@ public:
         const auto output = declare_parameter<std::string>("output_topic", "/gn10/rviz_cloud");
         publisher_ = create_publisher<sensor_msgs::msg::PointCloud2>(output, rclcpp::SensorDataQoS());
         subscriber_ = create_subscription<livox_ros_driver2::msg::CustomMsg>(
-            input, rclcpp::SensorDataQoS(),
+            input, rclcpp::SensorDataQoS().keep_last(50),
             [this](livox_ros_driver2::msg::CustomMsg::ConstSharedPtr msg) {
                 if (publisher_->get_subscription_count() == 0) return;
                 try {
