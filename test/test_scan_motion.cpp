@@ -16,6 +16,9 @@ int main(){
  require(std::abs(predicted.x-5)<1e-5&&std::abs(predicted.y-3.1)<1e-5);
  float rx=1,ry=0;gn10::MotionHistory::transformPoint(a,{1.1,0,0,1.57079632679},rx,ry);
  require(std::abs(rx)<1e-5&&std::abs(ry+1)<1e-5);
+ gn10::MotionHistory gyro(.05);gyro.add({1,0,0,0});gyro.add({1.02,0,0,.04});
+ require(gyro.at(1.01)&&std::abs(gyro.at(1.01)->yaw-.02)<1e-6);
+ gyro.add({1.12,0,0,.04});require(!gyro.at(1.07));
  gn10::MotionHistory gap;gap.add(a);gap.add({1.4,0,0,0});require(!gap.at(1.2));
  sensor_msgs::msg::PointCloud2 msg;msg.header.stamp.sec=1;msg.width=1;msg.height=2;msg.point_step=24;msg.row_step=32;msg.data.resize(64);
  for(const auto& v:std::vector<std::pair<std::string,int>>{{"x",0},{"y",4},{"z",8}}){sensor_msgs::msg::PointField f;f.name=v.first;f.offset=v.second;f.datatype=7;f.count=1;msg.fields.push_back(f);}
@@ -25,6 +28,9 @@ int main(){
  livox_ros_driver2::msg::CustomMsg custom;custom.header=msg.header;custom.timebase=1000000000;custom.point_num=2;
  for(int i=0;i<2;++i){livox_ros_driver2::msg::CustomPoint p;p.x=2;p.y=0;p.z=1;p.offset_time=i*100000000;custom.points.push_back(p);}
  auto native=gn10::decodeScan(custom);require(native.valid&&native.timed&&native.xyz==s.xyz&&native.times==s.times&&native.end==s.end);
+ auto slice=gn10::trailingWindow(native,.02);
+ require(slice.valid&&slice.times.size()==1&&slice.start==native.end&&slice.end==native.end&&slice.xyz.size()==3);
+ require(!gn10::trailingWindow(native,0).valid);
  auto display=gn10::customToPointCloud2(custom);auto decoded_display=gn10::decodeScan(display);
  require(display.header==custom.header&&decoded_display.xyz==native.xyz&&decoded_display.times==native.times&&display.width==2&&display.point_step==24);
  custom.point_num=1;require(!gn10::decodeScan(custom).valid);custom.point_num=2;

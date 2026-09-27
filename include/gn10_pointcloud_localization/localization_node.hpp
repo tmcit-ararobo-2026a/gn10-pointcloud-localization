@@ -94,9 +94,15 @@ private:
     uint64_t timing_drops_{0}, match_accepted_{0}, match_rejected_{0};
     rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pub_match_diagnostics_;
     double scan_wait_s_{2.0};
+    double fallback_window_s_{0.0};
+    double max_match_height_{100.0};
+    uint64_t snapshot_scans_{0};
+    double last_map_match_stamp_{-1.0};
     size_t scan_queue_size_{30};
     bool use_motion_{false};
     gn10::MotionHistory motion_;
+    gn10::MotionHistory gyro_motion_{0.05};
+    double previous_gyro_z_{0.0};
     std::deque<gn10::TimedPose> prior_history_;
     struct PendingCloud { std_msgs::msg::Header header; std::chrono::steady_clock::time_point received; gn10::ScanPoints scan; };
     std::deque<PendingCloud> pending_clouds_;

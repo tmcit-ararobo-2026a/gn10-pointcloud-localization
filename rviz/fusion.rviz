@@ -152,8 +152,8 @@ Visualization Manager:
     Value: false
   - Class: rviz_default_plugins/PointCloud2
     Name: LiDAR input (PointCloud2)
-    Enabled: true
-    Value: true
+    Enabled: false
+    Value: false
     Alpha: 0.45
     Style: Points
     Size (Pixels): 2

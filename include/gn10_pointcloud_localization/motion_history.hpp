@@ -19,6 +19,7 @@ inline double angleDifference(double a, double b)
 class MotionHistory
 {
 public:
+    explicit MotionHistory(double max_gap_s=0.25) : max_gap_s_(max_gap_s) {}
     bool add(TimedPose p)
     {
         if (!std::isfinite(p.stamp) || !std::isfinite(p.x) ||
@@ -45,7 +46,7 @@ public:
         if (std::abs(hi->stamp - t) < 1e-6) return *hi;
         if (hi == samples.begin()) return {};
         const auto lo = std::prev(hi);
-        if (hi->stamp - lo->stamp > 0.25) return {};
+        if (hi->stamp - lo->stamp > max_gap_s_) return {};
         const double a = (t - lo->stamp) / (hi->stamp - lo->stamp);
         return TimedPose{t, lo->x + a * (hi->x - lo->x), lo->y + a * (hi->y - lo->y),
             lo->yaw + a * angleDifference(hi->yaw, lo->yaw)};
@@ -69,5 +70,7 @@ public:
     }
 
     std::deque<TimedPose> samples;
+private:
+    double max_gap_s_;
 };
 }  // namespace gn10

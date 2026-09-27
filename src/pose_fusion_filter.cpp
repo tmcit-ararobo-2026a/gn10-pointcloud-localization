@@ -22,6 +22,27 @@ MatchRejection PoseFusionFilter::lastMatchRejection() const { return last_match_
 
 void PoseFusionFilter::reset() { history_.clear(); }
 
+bool PoseFusionFilter::addMapPrediction(double stamp)
+{
+    if (!hasPose() || !std::isfinite(stamp) || stamp <= latestStamp()) return false;
+    auto next=history_.back();
+    const double dt=stamp-next.stamp;
+    next.stamp=stamp; next.match.reset();
+    // Motion is unknown, rather than an observed zero velocity. No odom output
+    // is generated. The normal innovation and physical correction gates remain.
+    next.covariance(0,0)+=std::pow(0.5*dt,2);
+    next.covariance(1,1)+=std::pow(0.5*dt,2);
+    next.covariance(2,2)+=std::pow(0.5*dt,2);
+    history_.clear();history_.push_back(next);return true;
+}
+
+bool PoseFusionFilter::resynchronizeOdometry(double stamp, Pose2d odom)
+{
+    if (!hasPose() || !finite(odom) || !std::isfinite(stamp) || stamp < latestStamp()) return false;
+    auto next=history_.back();next.stamp=stamp;next.odom=odom;next.match.reset();
+    history_.clear();history_.push_back(next);return true;
+}
+
 bool PoseFusionFilter::setMapPose(Pose2d pose)
 {
     if (history_.empty() || !finite(pose)) return false;
@@ -97,6 +118,11 @@ bool PoseFusionFilter::correct(size_t index)
     Eigen::Matrix3d R = Eigen::Matrix3d::Zero();
     R(0, 0) = R(1, 1) = std::pow(config_.match_xy_stddev, 2);
     R(2, 2) = std::pow(config_.match_yaw_stddev, 2);
+    // Endpoint hold during a missing control bracket is not exact time alignment.
+    // Account for possible robot motion (5 m/s, 3 rad/s) in measurement noise.
+    const double timing_skew=sample.match->timing_skew_s;
+    R(0,0)+=std::pow(5.0*timing_skew,2);R(1,1)+=std::pow(5.0*timing_skew,2);
+    R(2,2)+=std::pow(3.0*timing_skew,2);
     if (!sample.valid) {
         sample.map = measurement;
         sample.map.yaw = wrapYaw(sample.map.yaw);
@@ -222,12 +248,29 @@ bool PoseFusionFilter::addMatch(double stamp, Pose2d pose, bool confirmed_recove
         last_match_rejection_ = MatchRejection::Timestamp;
         return false;
     }
+    // Insert an observed-control interpolation at the actual measurement time.
+    // Never interpolate across a >250 ms motion gap or extrapolate future odometry.
+    auto hi=std::lower_bound(history_.begin(),history_.end(),stamp,
+        [](const auto& sample,double t){return sample.stamp<t;});
+    if (best>1e-4 && hi!=history_.begin() && hi!=history_.end()) {
+        const auto lo=std::prev(hi);
+        const double dt=hi->stamp-lo->stamp;
+        if (dt<=0.25) {
+            const double a=(stamp-lo->stamp)/dt;
+            const Pose2d interpolated{lo->odom.x+a*(hi->odom.x-lo->odom.x),
+                lo->odom.y+a*(hi->odom.y-lo->odom.y),
+                wrapYaw(lo->odom.yaw+a*wrapYaw(hi->odom.yaw-lo->odom.yaw))};
+            const size_t index=static_cast<size_t>(hi-history_.begin());
+            history_.insert(hi,Sample{stamp,interpolated,{},Eigen::Matrix3d::Zero(),false,{}});
+            replayFrom(index);nearest=history_.begin()+index;best=0;
+        }
+    }
     if (nearest->match) {
         last_match_rejection_ = MatchRejection::Duplicate;
         return false;
     }
     const size_t index = static_cast<size_t>(nearest - history_.begin());
-    nearest->match = Match{pose, confirmed_recovery};
+    nearest->match = Match{pose, confirmed_recovery,best};
     if (index == 0) {
         if (!correct(0)) return false;
         replayFrom(1);

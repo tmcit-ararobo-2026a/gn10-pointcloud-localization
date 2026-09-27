@@ -50,10 +50,12 @@ public:
     Pose2d pose() const;
     Eigen::Matrix3d covariance() const;
     void reset();
+    bool addMapPrediction(double stamp); // No observed control: hold pose, increase uncertainty.
+    bool resynchronizeOdometry(double stamp, Pose2d odom); // Start a new control segment, no unknown increment.
     bool setMapPose(Pose2d pose); // Explicit operator initialization at latest odometry.
 
 private:
-    struct Match { Pose2d pose; bool confirmed_recovery{false}; };
+    struct Match { Pose2d pose; bool confirmed_recovery{false}; double timing_skew_s{0.0}; };
     struct Sample {
         double stamp;
         Pose2d odom;

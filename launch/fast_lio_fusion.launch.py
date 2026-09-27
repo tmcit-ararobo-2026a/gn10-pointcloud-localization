@@ -20,6 +20,8 @@ def generate_launch_description():
     matcher_config = LaunchConfiguration('matcher_config')
     fusion_config = LaunchConfiguration('fusion_config')
     fast_lio_config = LaunchConfiguration('fast_lio_config')
+    fallback_window_s = LaunchConfiguration('fallback_window_s')
+    map_only_updates = LaunchConfiguration('map_only_updates')
     initial_pose_local_search = LaunchConfiguration('initial_pose_local_search')
     initial_pose_x = LaunchConfiguration('initial_pose_x')
     initial_pose_y = LaunchConfiguration('initial_pose_y')
@@ -31,6 +33,9 @@ def generate_launch_description():
                               choices=['pointcloud2', 'custom_msg']),
         DeclareLaunchArgument('input_cloud_topic', default_value='/livox/lidar'),
         DeclareLaunchArgument('start_fast_lio', default_value='true'),
+        DeclareLaunchArgument('map_only_updates', default_value='true'),
+        DeclareLaunchArgument('fallback_window_s', default_value='0.0',
+                              description='Short observed cloud window when odometry is missing; 0 disables'),
         DeclareLaunchArgument('matcher_config', default_value=os.path.join(
             share, 'config', 'localization_params.yaml')),
         DeclareLaunchArgument('fusion_config', default_value=os.path.join(
@@ -75,6 +80,7 @@ def generate_launch_description():
                 'fusion.use_prior': True,
                 'fusion.prior_max_age_s': 3.0, # propagate only through observed odometry endpoints
                 'motion.use_odom': True,
+                'motion.fallback_window_s': ParameterValue(fallback_window_s, value_type=float),
                 'initial_pose.use_for_local_search': ParameterValue(
                     initial_pose_local_search, value_type=bool),
                 'initial_pose.x': ParameterValue(initial_pose_x, value_type=float),
@@ -85,7 +91,7 @@ def generate_launch_description():
         Node(
             package='gn10_pointcloud_localization', executable='gn10_pose_fusion_node',
             name='gn10_pose_fusion_node', output='screen',
-            parameters=[fusion_config, {'use_sim_time': use_sim_time}],
+            parameters=[fusion_config, {'use_sim_time': use_sim_time, 'fusion.map_only_updates': ParameterValue(map_only_updates, value_type=bool)}],
         ),
         Node(
             package='tf2_ros', executable='static_transform_publisher',

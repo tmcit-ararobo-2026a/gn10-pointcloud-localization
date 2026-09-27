@@ -23,7 +23,7 @@ def main():
     init = node.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
     match = node.create_publisher(PoseWithCovarianceStamped, '/platform_constraint_raw', 10)
     log = tempfile.TemporaryFile(mode='w+')
-    process = subprocess.Popen([sys.argv[1], '--ros-args', '-p', 'frames.body_frame:=base_link'],
+    process = subprocess.Popen([sys.argv[1], '--ros-args', '-p', 'frames.body_frame:=base_link', '-p', 'fusion.map_only_updates:=true'],
                                stdout=log, stderr=subprocess.STDOUT)
 
     def spin(duration=0.12):
@@ -118,7 +118,24 @@ def main():
         yaw = 2*math.atan2(predicted.orientation.z, predicted.orientation.w)
         map_pose(match, 110.3, predicted.position.x, yaw)
         wait_for(lambda: len(poses) > before)
-        print('PASS: prior continuity, immediate recovery, bounded confirmation and long-gap recovery')
+        # A map observation can update during an unhealthy odometry segment.
+        observed_x=poses[-1].pose.pose.position.x
+        observed_yaw=2*math.atan2(poses[-1].pose.pose.orientation.z,poses[-1].pose.pose.orientation.w)
+        motion(110.4,500)
+        before=len(poses)
+        map_pose(match,110.5,observed_x+.02,observed_yaw)
+        wait_for(lambda: len(poses)>before)
+        assert abs(seconds(poses[-1])-110.5)<1e-6, 'Map-only update has the wrong observation timestamp'
+        before=len(poses)
+        map_pose(match,110.6,observed_x+2,observed_yaw)
+        assert len(poses)==before, 'Unknown odometry authorized a map jump'
+        assert abs(seconds(priors[-1])-110.6)<1e-6, 'Rejected map-only observation stopped the internal prior'
+        for i in range(1,4):
+            motion(110.6+i*.1,500+i*.01)
+        assert abs(priors[-1].pose.pose.position.x-observed_x)<.1, 'Reconnected odometry counted unknown motion'
+        map_pose(match,110.9,observed_x+.02,observed_yaw)
+        wait_for(lambda: len(poses)>before)
+        print('PASS: prior continuity, bounded recovery, map-only update and control resynchronization')
     except Exception:
         log.seek(0)
         print(log.read())

@@ -59,6 +59,7 @@ public:
             declare_parameter<std::string>("frames.odom_frame", "camera_init");
         expected_body_frame_ = declare_parameter<std::string>("frames.body_frame", "body");
         constrain_to_floor_ = declare_parameter<bool>("fusion.constrain_to_floor", true);
+        map_only_enabled_ = declare_parameter<bool>("fusion.map_only_updates", false);
         max_odom_speed_ = declare_parameter("fusion.max_odom_speed_m_s", 5.0);
         max_odom_rotation_rate_ = declare_parameter("fusion.max_odom_rotation_rad_s", 3.0);
         max_floor_tilt_ = declare_parameter("fusion.max_floor_tilt_rad", 0.35);
@@ -214,7 +215,7 @@ private:
 
     void resetMotion()
     {
-        filter_.reset();
+        filter_.reset();map_only_active_=false;
         previous_odom_base_.reset();
         full_odom_history_.clear();
         anchor_odom_base_.reset();
@@ -313,7 +314,11 @@ private:
         base_motion.pose.pose.orientation.z = std::sin(virtual_odom_.yaw * 0.5);
         base_motion.pose.pose.orientation.w = std::cos(virtual_odom_.yaw * 0.5);
         pub_motion_->publish(base_motion);
-        filter_.addOdometry(stamp, virtual_odom_);
+        if (map_only_active_) {
+            if (stamp < filter_.latestStamp()) return;
+            filter_.resynchronizeOdometry(stamp,virtual_odom_);
+            map_only_active_=false; recovery_evidence_.clear();
+        } else filter_.addOdometry(stamp, virtual_odom_);
         latest_motion_stamp_ = msg.header.stamp;
         previous_odom_base_ = odom_base;
         previous_odom_stamp_ = stamp;
@@ -352,6 +357,19 @@ private:
             gn10::wrapYaw(2.0 * std::atan2(p.orientation.z, p.orientation.w))
         };
         const double stamp = seconds(msg.header.stamp);
+        if (map_only_enabled_ && constrain_to_floor_ && filter_.hasPose() && anchor_odom_base_ &&
+            stamp > filter_.latestStamp() && (!odom_healthy_ || map_only_active_ ||
+            stamp-filter_.latestStamp() > 1e-4)) {
+            filter_.addMapPrediction(stamp);map_only_active_=true;
+            if (tryMapMatch(stamp,measurement)) {
+                recordAcceptedMatch(stamp,measurement);++map_only_matches_;
+                publish(msg.header.stamp,*previous_odom_base_,true);
+            } else {
+                recordRejection();
+                publish(msg.header.stamp,*previous_odom_base_,false);
+            }
+            return;
+        }
         if (stamp > filter_.latestStamp() + 0.15) {
             pending_matches_.emplace_back(stamp, measurement);
             if (pending_matches_.size() > 100) {
@@ -375,7 +393,7 @@ private:
     bool tryMapMatch(double stamp, const gn10::Pose2d& measurement)
     {
         if (filter_.addMatch(stamp, measurement)) { recovery_evidence_.clear(); return true; }
-        if (!odom_healthy_ || filter_.lastMatchRejection() != gn10::MatchRejection::Innovation) {
+        if ((!odom_healthy_ && !map_only_active_) || filter_.lastMatchRejection() != gn10::MatchRejection::Innovation) {
             recovery_evidence_.clear(); return false;
         }
         const auto predicted = filter_.predictionAt(stamp);
@@ -390,8 +408,10 @@ private:
             const auto& previous = recovery_evidence_.back();
             if (stamp <= previous.first) return false;
             if (stamp-previous.first > 1.0 ||
-                std::hypot(error.x-previous.second.x,error.y-previous.second.y) > 0.12 ||
-                std::abs(gn10::wrapYaw(error.yaw-previous.second.yaw)) > 0.08)
+                std::hypot(error.x-previous.second.x,error.y-previous.second.y) >
+                    2.0*std::sqrt(2.0)*get_parameter("fusion.match_xy_stddev").as_double() ||
+                std::abs(gn10::wrapYaw(error.yaw-previous.second.yaw)) >
+                    2.0*std::sqrt(2.0)*get_parameter("fusion.match_yaw_stddev").as_double())
                 recovery_evidence_.clear();
         }
         recovery_evidence_.emplace_back(stamp,error);
@@ -427,9 +447,15 @@ private:
         status.name = "GN10 pose fusion";
         status.hardware_id = "gn10_pose_fusion_node";
         const double current_stamp = seconds(array.header.stamp);
-        const double age = filter_.latestStamp() - last_accepted_stamp_;
+        const double age = std::isfinite(last_accepted_stamp_) ?
+            std::max(0.0,filter_.latestStamp()-last_accepted_stamp_) : std::numeric_limits<double>::infinity();
         const double sensor_latency = current_stamp - filter_.latestStamp();
-        if (!odom_healthy_) {
+        if (map_only_active_ && filter_.hasPose()) {
+            status.level=diagnostic_msgs::msg::DiagnosticStatus::WARN;
+            status.message=age<=max_prediction_age_s_ ?
+                "Map observations only; odometry prediction unavailable" :
+                "Map-only mode; awaiting a fresh supported observation";
+        } else if (!odom_healthy_) {
             status.level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
             status.message = "Odometry motion/floor limits exceeded; map TF withheld";
         } else if (last_accepted_stamp_ < recovery_stamp_) {
@@ -454,6 +480,8 @@ private:
         add("recovery_matches", std::to_string(recovery_matches_));
         add("recovery_evidence", std::to_string(recovery_evidence_.size()));
         add("odom_rejected", std::to_string(odom_rejected_));
+        add("map_only_active",map_only_active_ ? "true" : "false");
+        add("map_only_matches",std::to_string(map_only_matches_));
         add("odom_healthy", odom_healthy_ ? "true" : "false");
         add("sensor_latency_s", std::isfinite(sensor_latency) ? std::to_string(sensor_latency) : "never");
         add("odom_received", std::to_string(odom_received_));
@@ -516,6 +544,8 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_motion_;
     gn10::PoseFusionFilter filter_;
     bool constrain_to_floor_{true};
+    bool map_only_enabled_{false},map_only_active_{false};
+    size_t map_only_matches_{0};
     std::string map_frame_, base_frame_, lidar_frame_, expected_odom_frame_, expected_body_frame_;
     Eigen::Isometry3d lidar_to_imu_;
     std::optional<Eigen::Isometry3d> body_to_base_;

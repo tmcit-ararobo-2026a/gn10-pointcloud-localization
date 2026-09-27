@@ -37,8 +37,8 @@ inline bool refineSurfaces(const std::vector<float>& cloud,
                            const PoseCandidate& initial, PoseCandidate& result, bool* observable=nullptr) {
     if (observable) *observable=false;
     Eigen::Vector3d pose(initial.x,initial.y,initial.yaw);
-    const size_t count=cloud.size()/3, stride=std::max(size_t(1),(count+4095)/4096);
-    for (int iteration=0;iteration<3;++iteration) {
+    const size_t count=cloud.size()/3, stride=std::max(size_t(1),(count+1023)/1024);
+    for (int iteration=0;iteration<2;++iteration) {
         Eigen::Matrix3d H=Eigen::Matrix3d::Zero();Eigen::Vector3d b=Eigen::Vector3d::Zero();
         const double c=std::cos(pose.z()),s=std::sin(pose.z());int supported=0;
         for (size_t i=0;i<count;i+=stride) {

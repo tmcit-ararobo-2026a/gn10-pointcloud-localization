@@ -13,6 +13,30 @@ bool near(double actual, double expected, double tolerance = 1e-6)
 
 int main()
 {
+    {
+        gn10::PoseFusionFilter map_only({});
+        require(!map_only.addMapPrediction(1.0));
+        map_only.addOdometry(1.0,{0,0,0});require(map_only.addMatch(1.0,{10,0,0}));
+        const auto covariance=map_only.covariance();
+        require(map_only.addMapPrediction(1.2));require(near(map_only.pose().x,10));
+        require(map_only.covariance()(0,0)>covariance(0,0));
+        require(!map_only.addMapPrediction(1.1));
+        require(!map_only.addMatch(1.2,{12,0,0})); // unknown control is not permission for a jump
+        require(map_only.addMatch(1.2,{10.1,0,0}));
+        const double observed=map_only.pose().x;
+        require(!map_only.resynchronizeOdometry(1.1,{20,0,0}));
+        require(map_only.resynchronizeOdometry(1.3,{20,0,0}));require(near(map_only.pose().x,observed));
+        map_only.addOdometry(1.4,{20.1,0,0});require(near(map_only.pose().x,observed+.1));
+    }
+
+    {
+        gn10::PoseFusionFilter timed({});timed.addOdometry(0,{0,0,0});
+        require(timed.addMatch(0,{10,0,0}));timed.addOdometry(.1,{.2,0,0});
+        require(timed.addMatch(.04,{10.08,0,0}));
+        require(near(timed.pose().x,10.2)); // No 4 cm correction caused by the nearest endpoint.
+        require(!timed.addMatch(.04,{10.08,0,0}));
+        require(timed.lastMatchRejection()==gn10::MatchRejection::Duplicate);
+    }
     gn10::PoseFusionFilter filter({});
     filter.addOdometry(0.0, {0.0, 0.0, 3.13});
     require(!filter.hasPose());
