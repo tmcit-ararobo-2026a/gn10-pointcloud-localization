@@ -59,16 +59,6 @@ public:
             declare_parameter<std::string>("frames.odom_frame", "camera_init");
         expected_body_frame_ = declare_parameter<std::string>("frames.body_frame", "body");
         constrain_to_floor_ = declare_parameter<bool>("fusion.constrain_to_floor", true);
-        map_only_enabled_ = declare_parameter<bool>("fusion.map_only_updates", false);
-        max_odom_speed_ = declare_parameter("fusion.max_odom_speed_m_s", 5.0);
-        max_odom_rotation_rate_ = declare_parameter("fusion.max_odom_rotation_rad_s", 3.0);
-        max_floor_tilt_ = declare_parameter("fusion.max_floor_tilt_rad", 0.35);
-        max_prediction_age_s_ = declare_parameter("fusion.max_prediction_age_s", 1.0);
-        if (!std::isfinite(max_odom_speed_) || max_odom_speed_ <= 0 ||
-            !std::isfinite(max_odom_rotation_rate_) || max_odom_rotation_rate_ <= 0 ||
-            !std::isfinite(max_floor_tilt_) || max_floor_tilt_ <= 0 ||
-            !std::isfinite(max_prediction_age_s_) || max_prediction_age_s_ <= 0)
-            throw std::runtime_error("Odometry health limits must be finite and positive");
         const auto extrinsic = declare_parameter<std::vector<double>>(
             "imu_to_lidar.xyz", {-0.011, -0.02329, 0.04412}
         );
@@ -100,8 +90,6 @@ public:
         publisher_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
             output_topic, 20
         );
-        prior_publisher_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-            declare_parameter<std::string>("topics.matching_prior", "/gn10/matching_prior"), 50);
         odom_subscription_ = create_subscription<nav_msgs::msg::Odometry>(
             odom_topic, 20,
             [this](nav_msgs::msg::Odometry::ConstSharedPtr msg) { onOdometry(*msg); }
@@ -112,26 +100,6 @@ public:
                 onMatch(*msg);
             }
         );
-        initial_pose_subscription_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-            "/initialpose", 10,
-            [this](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr msg) {
-                if (msg->header.frame_id != map_frame_ || !previous_odom_base_ ||
-                    !odom_healthy_) return;
-                const auto& p = msg->pose.pose;
-                const auto& q = p.orientation;
-                const double norm = q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w;
-                if (!std::isfinite(norm) || std::abs(norm-1.0) > 0.01) return;
-                const gn10::Pose2d pose{p.position.x, p.position.y,
-                    std::atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))};
-                if (!filter_.setMapPose(pose)) return;
-                pending_matches_.clear(); recovery_evidence_.clear();
-                anchor_odom_base_ = *previous_odom_base_;
-                anchor_map_yaw_ = pose.yaw;
-                last_accepted_stamp_ = filter_.latestStamp();
-                recovery_stamp_ = last_accepted_stamp_;
-                publish(latest_motion_stamp_, *previous_odom_base_);
-                RCLCPP_INFO(get_logger(), "Map pose explicitly initialized by /initialpose");
-            });
         diagnostics_publisher_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
             "/gn10_pose_fusion/diagnostics", 10
         );
@@ -168,23 +136,12 @@ private:
             declare_parameter("fusion.match_xy_stddev", config.match_xy_stddev);
         config.match_yaw_stddev =
             declare_parameter("fusion.match_yaw_stddev", config.match_yaw_stddev);
-        config.max_match_translation_m = declare_parameter(
-            "fusion.max_match_translation_m", config.max_match_translation_m);
-        config.max_match_yaw_rad = declare_parameter(
-            "fusion.max_match_yaw_rad", config.max_match_yaw_rad);
-        config.max_recovery_translation_m = declare_parameter("fusion.max_recovery_translation_m", config.max_recovery_translation_m);
-        config.max_recovery_yaw_rad = declare_parameter("fusion.max_recovery_yaw_rad", config.max_recovery_yaw_rad);
-        config.recovery_step_m = declare_parameter("fusion.recovery_step_m", config.recovery_step_m);
-        config.recovery_step_yaw_rad = declare_parameter("fusion.recovery_step_yaw_rad", config.recovery_step_yaw_rad);
         config.innovation_gate =
             declare_parameter("fusion.innovation_gate", config.innovation_gate);
         if (config.history_s <= 0 || config.max_odom_gap_s <= 0 ||
             config.max_odom_step_m <= 0 || config.max_odom_step_yaw_rad <= 0 ||
             config.max_match_skew_s <= 0 || config.match_xy_stddev <= 0 ||
-            config.match_yaw_stddev <= 0 || config.max_match_translation_m <= 0 ||
-            config.max_match_yaw_rad <= 0 || config.max_recovery_translation_m <= 0 ||
-            config.max_recovery_yaw_rad <= 0 || config.recovery_step_m <= 0 ||
-            config.recovery_step_yaw_rad <= 0 || config.innovation_gate <= 0) {
+            config.match_yaw_stddev <= 0 || config.innovation_gate <= 0) {
             throw std::runtime_error("Fusion time, measurement noise and gate must be positive");
         }
         return config;
@@ -215,15 +172,12 @@ private:
 
     void resetMotion()
     {
-        filter_.reset();map_only_active_=false;
+        filter_.reset();
         previous_odom_base_.reset();
         full_odom_history_.clear();
         anchor_odom_base_.reset();
-        pending_matches_.clear(); recovery_evidence_.clear();
+        pending_matches_.clear();
         virtual_odom_ = {};
-        initial_floor_rotation_.reset();
-        odom_healthy_ = true; healthy_streak_ = 0;
-        recovery_stamp_ = -std::numeric_limits<double>::infinity();
         last_accepted_stamp_ = std::numeric_limits<double>::quiet_NaN();
     }
 
@@ -264,46 +218,20 @@ private:
         const double stamp = seconds(msg.header.stamp);
         const Eigen::Isometry3d odom_base = poseToEigen(msg.pose.pose) * *body_to_base_;
         if (!std::isfinite(stamp) || !odom_base.translation().allFinite()) return;
-        if (!initial_floor_rotation_) initial_floor_rotation_ = odom_base.linear();
-        bool usable = true;
         if (previous_odom_base_) {
             const double dt = stamp - previous_odom_stamp_;
             if (dt <= 0.0 && dt >= -0.5) return;
             const Eigen::Isometry3d delta = previous_odom_base_->inverse() * odom_base;
             const double rotation = Eigen::AngleAxisd(delta.linear()).angle();
-            if (dt < -0.5) {
-                resetMotion(); // A new bag time epoch, not a loss of sensor packets.
-                initial_floor_rotation_ = odom_base.linear();
+            if (dt <= 0.0 || dt > max_odom_gap_s_ ||
+                delta.translation().norm() > max_odom_step_m_ ||
+                rotation > max_odom_step_yaw_rad_) {
+                resetMotion();
             } else {
-                const auto relative = initial_floor_rotation_->transpose() * odom_base.linear();
-                const double tilt = std::acos(std::clamp(relative(2, 2), -1.0, 1.0));
-                usable = dt > 0 && dt <= max_odom_gap_s_ &&
-                    delta.translation().norm() <= max_odom_step_m_ &&
-                    rotation <= max_odom_step_yaw_rad_ &&
-                    delta.translation().norm()/dt <= max_odom_speed_ &&
-                    rotation/dt <= max_odom_rotation_rate_ &&
-                    (!constrain_to_floor_ || tilt <= max_floor_tilt_);
-                if (usable && odom_healthy_) {
-                    virtual_odom_ = gn10::integrateBodyMotion(
-                        virtual_odom_, *previous_odom_base_, odom_base);
-                }
+                virtual_odom_ = gn10::integrateBodyMotion(
+                    virtual_odom_, *previous_odom_base_, odom_base
+                );
             }
-        }
-        previous_odom_base_ = odom_base;
-        previous_odom_stamp_ = stamp;
-        if (!usable) {
-            ++odom_rejected_; odom_healthy_ = false; healthy_streak_ = 0;
-            recovery_stamp_ = std::numeric_limits<double>::infinity();
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-                "Odometry failed motion/floor limits; withholding map TF, retaining map anchor");
-            return;
-        }
-        if (!odom_healthy_) {
-            if (++healthy_streak_ < 3) return;
-            // Start a new continuous segment without applying the rejected displacement.
-            // Its gap remains visible to the deskewer; no fabricated scan motion.
-            odom_healthy_ = true;
-            recovery_stamp_ = stamp;
         }
         nav_msgs::msg::Odometry base_motion;
         base_motion.header = msg.header;
@@ -314,12 +242,7 @@ private:
         base_motion.pose.pose.orientation.z = std::sin(virtual_odom_.yaw * 0.5);
         base_motion.pose.pose.orientation.w = std::cos(virtual_odom_.yaw * 0.5);
         pub_motion_->publish(base_motion);
-        if (map_only_active_) {
-            if (stamp < filter_.latestStamp()) return;
-            filter_.resynchronizeOdometry(stamp,virtual_odom_);
-            map_only_active_=false; recovery_evidence_.clear();
-        } else filter_.addOdometry(stamp, virtual_odom_);
-        latest_motion_stamp_ = msg.header.stamp;
+        filter_.addOdometry(stamp, virtual_odom_);
         previous_odom_base_ = odom_base;
         previous_odom_stamp_ = stamp;
         full_odom_history_.emplace_back(stamp, odom_base);
@@ -333,18 +256,14 @@ private:
                 ++it;
                 continue;
             }
-            if (!tryMapMatch(it->first, it->second)) {
+            if (!filter_.addMatch(it->first, it->second)) {
                 recordRejection();
             } else {
                 recordAcceptedMatch(it->first, it->second);
             }
             it = pending_matches_.erase(it);
         }
-        if (filter_.hasPose() && anchor_odom_base_) {
-            const bool allow_map_output = last_accepted_stamp_ >= recovery_stamp_ &&
-                stamp-last_accepted_stamp_ <= max_prediction_age_s_;
-            publish(msg.header.stamp, odom_base, allow_map_output);
-        }
+        if (filter_.hasPose() && anchor_odom_base_) publish(msg.header.stamp, odom_base);
     }
 
     void onMatch(const geometry_msgs::msg::PoseWithCovarianceStamped& msg)
@@ -357,19 +276,6 @@ private:
             gn10::wrapYaw(2.0 * std::atan2(p.orientation.z, p.orientation.w))
         };
         const double stamp = seconds(msg.header.stamp);
-        if (map_only_enabled_ && constrain_to_floor_ && filter_.hasPose() && anchor_odom_base_ &&
-            stamp > filter_.latestStamp() && (!odom_healthy_ || map_only_active_ ||
-            stamp-filter_.latestStamp() > 1e-4)) {
-            filter_.addMapPrediction(stamp);map_only_active_=true;
-            if (tryMapMatch(stamp,measurement)) {
-                recordAcceptedMatch(stamp,measurement);++map_only_matches_;
-                publish(msg.header.stamp,*previous_odom_base_,true);
-            } else {
-                recordRejection();
-                publish(msg.header.stamp,*previous_odom_base_,false);
-            }
-            return;
-        }
         if (stamp > filter_.latestStamp() + 0.15) {
             pending_matches_.emplace_back(stamp, measurement);
             if (pending_matches_.size() > 100) {
@@ -378,48 +284,11 @@ private:
             }
             return;
         }
-        if (!tryMapMatch(stamp, measurement)) {
+        if (!filter_.addMatch(stamp, measurement)) {
             recordRejection();
         } else {
             recordAcceptedMatch(stamp, measurement);
-            if (previous_odom_base_ && filter_.hasPose() && anchor_odom_base_) {
-                const bool allow_map_output = odom_healthy_ && last_accepted_stamp_ >= recovery_stamp_ &&
-                    filter_.latestStamp()-last_accepted_stamp_ <= max_prediction_age_s_;
-                publish(latest_motion_stamp_, full_odom_history_.back().second, allow_map_output);
-            }
         }
-    }
-
-    bool tryMapMatch(double stamp, const gn10::Pose2d& measurement)
-    {
-        if (filter_.addMatch(stamp, measurement)) { recovery_evidence_.clear(); return true; }
-        if ((!odom_healthy_ && !map_only_active_) || filter_.lastMatchRejection() != gn10::MatchRejection::Innovation) {
-            recovery_evidence_.clear(); return false;
-        }
-        const auto predicted = filter_.predictionAt(stamp);
-        if (!predicted) return false;
-        const gn10::Pose2d error{measurement.x-predicted->x, measurement.y-predicted->y,
-            gn10::wrapYaw(measurement.yaw-predicted->yaw)};
-        if (std::hypot(error.x,error.y) > get_parameter("fusion.max_recovery_translation_m").as_double() ||
-            std::abs(error.yaw) > get_parameter("fusion.max_recovery_yaw_rad").as_double()) {
-            recovery_evidence_.clear(); return false;
-        }
-        if (!recovery_evidence_.empty()) {
-            const auto& previous = recovery_evidence_.back();
-            if (stamp <= previous.first) return false;
-            if (stamp-previous.first > 1.0 ||
-                std::hypot(error.x-previous.second.x,error.y-previous.second.y) >
-                    2.0*std::sqrt(2.0)*get_parameter("fusion.match_xy_stddev").as_double() ||
-                std::abs(gn10::wrapYaw(error.yaw-previous.second.yaw)) >
-                    2.0*std::sqrt(2.0)*get_parameter("fusion.match_yaw_stddev").as_double())
-                recovery_evidence_.clear();
-        }
-        recovery_evidence_.emplace_back(stamp,error);
-        if (recovery_evidence_.size() > 3) recovery_evidence_.pop_front();
-        if (recovery_evidence_.size() < 3 || stamp-recovery_evidence_.front().first < 0.19) return false;
-        if (!filter_.addMatch(stamp, measurement, true)) return false;
-        ++recovery_matches_; recovery_evidence_.clear();
-        return true;
     }
 
     void recordRejection()
@@ -447,26 +316,13 @@ private:
         status.name = "GN10 pose fusion";
         status.hardware_id = "gn10_pose_fusion_node";
         const double current_stamp = seconds(array.header.stamp);
-        const double age = std::isfinite(last_accepted_stamp_) ?
-            std::max(0.0,filter_.latestStamp()-last_accepted_stamp_) : std::numeric_limits<double>::infinity();
-        const double sensor_latency = current_stamp - filter_.latestStamp();
-        if (map_only_active_ && filter_.hasPose()) {
-            status.level=diagnostic_msgs::msg::DiagnosticStatus::WARN;
-            status.message=age<=max_prediction_age_s_ ?
-                "Map observations only; odometry prediction unavailable" :
-                "Map-only mode; awaiting a fresh supported observation";
-        } else if (!odom_healthy_) {
-            status.level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
-            status.message = "Odometry motion/floor limits exceeded; map TF withheld";
-        } else if (last_accepted_stamp_ < recovery_stamp_) {
-            status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
-            status.message = "Motion recovered; waiting for a new local map match";
-        } else if (!filter_.hasPose()) {
+        const double age = current_stamp - last_accepted_stamp_;
+        if (!filter_.hasPose()) {
             status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
             status.message = "Waiting for FAST-LIO odometry and first accepted map match";
-        } else if (!std::isfinite(age) || age < 0.0 || age > max_prediction_age_s_) {
+        } else if (!std::isfinite(age) || age < 0.0 || age > 1.0) {
             status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
-            status.message = "Map match is stale; map TF withheld beyond prediction limit";
+            status.message = "FAST-LIO prediction only; map match is stale";
         } else {
             status.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
             status.message = "Recent map match accepted";
@@ -477,13 +333,6 @@ private:
             item.value = value;
             status.values.push_back(std::move(item));
         };
-        add("recovery_matches", std::to_string(recovery_matches_));
-        add("recovery_evidence", std::to_string(recovery_evidence_.size()));
-        add("odom_rejected", std::to_string(odom_rejected_));
-        add("map_only_active",map_only_active_ ? "true" : "false");
-        add("map_only_matches",std::to_string(map_only_matches_));
-        add("odom_healthy", odom_healthy_ ? "true" : "false");
-        add("sensor_latency_s", std::isfinite(sensor_latency) ? std::to_string(sensor_latency) : "never");
         add("odom_received", std::to_string(odom_received_));
         add("raw_matches_received", std::to_string(raw_matches_received_));
         add("matches_accepted", std::to_string(matches_accepted_));
@@ -500,7 +349,7 @@ private:
 
     void publish(
         const builtin_interfaces::msg::Time& stamp,
-        const Eigen::Isometry3d& odom_base, bool allow_map_output = true
+        const Eigen::Isometry3d& odom_base
     )
     {
         const auto state = filter_.pose();
@@ -526,9 +375,6 @@ private:
         pose.pose.covariance[14] = 0.1;  // z, roll and pitch have no map measurement.
         pose.pose.covariance[21] = 0.1;
         pose.pose.covariance[28] = 0.1;
-        // Prediction is an internal search aid, not an accepted map measurement/TF.
-        prior_publisher_->publish(pose);
-        if (!allow_map_output) return;
         publisher_->publish(pose);
 
         geometry_msgs::msg::TransformStamped transform;
@@ -544,8 +390,6 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_motion_;
     gn10::PoseFusionFilter filter_;
     bool constrain_to_floor_{true};
-    bool map_only_enabled_{false},map_only_active_{false};
-    size_t map_only_matches_{0};
     std::string map_frame_, base_frame_, lidar_frame_, expected_odom_frame_, expected_body_frame_;
     Eigen::Isometry3d lidar_to_imu_;
     std::optional<Eigen::Isometry3d> body_to_base_;
@@ -555,8 +399,7 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_subscription_;
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
         match_subscription_;
-    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initial_pose_subscription_;
-    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr publisher_, prior_publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr publisher_;
     rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_publisher_;
     rclcpp::TimerBase::SharedPtr diagnostics_timer_;
     std::deque<std::pair<double, gn10::Pose2d>> pending_matches_;
@@ -565,18 +408,9 @@ private:
     std::optional<Eigen::Isometry3d> anchor_odom_base_;
     gn10::Pose2d virtual_odom_;
     double previous_odom_stamp_{0.0};
-    builtin_interfaces::msg::Time latest_motion_stamp_;
-    std::deque<std::pair<double, gn10::Pose2d>> recovery_evidence_;
-    size_t recovery_matches_{0};
     double anchor_map_yaw_{0.0};
-    double recovery_stamp_{-std::numeric_limits<double>::infinity()};
     double history_s_{5.0};
-    double max_odom_gap_s_{3.0};
-    double max_prediction_age_s_{1.0};
-    double max_odom_speed_{5.0}, max_odom_rotation_rate_{3.0}, max_floor_tilt_{0.35};
-    std::optional<Eigen::Matrix3d> initial_floor_rotation_;
-    bool odom_healthy_{true};
-    size_t healthy_streak_{0}, odom_rejected_{0};
+    double max_odom_gap_s_{1.0};
     double max_odom_step_m_{2.0};
     double max_odom_step_yaw_rad_{1.5};
     size_t odom_received_{0};

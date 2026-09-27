@@ -71,7 +71,6 @@ target_link_libraries(gn10_pointcloud_localization_node
 ament_target_dependencies(gn10_pointcloud_localization_node
   rclcpp
   sensor_msgs
-  livox_ros_driver2
   nav_msgs
   diagnostic_msgs
   geometry_msgs
@@ -82,10 +81,6 @@ ament_target_dependencies(gn10_pointcloud_localization_node
   visualization_msgs
   nlohmann_json
 )
-
-add_executable(livox_rviz_bridge src/livox_rviz_bridge.cpp)
-target_include_directories(livox_rviz_bridge PRIVATE include)
-ament_target_dependencies(livox_rviz_bridge rclcpp sensor_msgs livox_ros_driver2)
 
 add_executable(livox_pointcloud_bridge src/livox_pointcloud_bridge.cpp)
 ament_target_dependencies(livox_pointcloud_bridge rclcpp sensor_msgs livox_ros_driver2)
@@ -101,21 +96,9 @@ ament_target_dependencies(gn10_pose_fusion_node
 
 if(BUILD_TESTING)
   enable_testing()
-  find_package(Python3 COMPONENTS Interpreter REQUIRED)
-  add_test(NAME fusion_feedback COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_fusion_feedback.py $<TARGET_FILE:gn10_pose_fusion_node>)
-  set_tests_properties(fusion_feedback PROPERTIES TIMEOUT 30)
-  add_test(NAME sensor_stamp_play COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_sensor_stamp_play.py)
-  add_executable(test_floor_plane test/test_floor_plane.cpp)
-  target_include_directories(test_floor_plane PRIVATE include)
-  target_link_libraries(test_floor_plane Eigen3::Eigen)
-  add_test(NAME floor_plane COMMAND test_floor_plane)
-  add_executable(test_surface_refinement test/test_surface_refinement.cpp)
-  target_include_directories(test_surface_refinement PRIVATE include)
-  target_link_libraries(test_surface_refinement Eigen3::Eigen CUDA::cudart)
-  add_test(NAME surface_refinement COMMAND test_surface_refinement)
   add_executable(test_scan_motion test/test_scan_motion.cpp)
   target_include_directories(test_scan_motion PRIVATE include)
-  ament_target_dependencies(test_scan_motion sensor_msgs livox_ros_driver2)
+  ament_target_dependencies(test_scan_motion sensor_msgs)
   add_test(NAME scan_motion COMMAND test_scan_motion)
   add_executable(test_pose_fusion_filter test/test_pose_fusion_filter.cpp)
   target_link_libraries(test_pose_fusion_filter gn10_pose_fusion_filter)
@@ -138,7 +121,6 @@ endif()
 install(TARGETS 
   gn10_pointcloud_localization_node
   livox_pointcloud_bridge
-  livox_rviz_bridge
   gn10_pose_fusion_node
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -146,7 +128,5 @@ install(TARGETS
 install(DIRECTORY launch config rviz
   DESTINATION share/${PROJECT_NAME}
 )
-
-install(PROGRAMS scripts/sensor_stamp_play.py DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

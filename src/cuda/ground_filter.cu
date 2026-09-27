@@ -10,7 +10,7 @@ __global__ void filterGroundKernel(
     float robot_radius,
     float robot_height_min,
     float robot_height_max,
-    float ground_z_thresh, float floor_a, float floor_b, float floor_c,
+    float ground_z_thresh,
     int* ground_count,
     int* obstacle_count
 )
@@ -38,9 +38,8 @@ __global__ void filterGroundKernel(
         return;
     }
 
-    // Signed distance to the observed floor; output coordinates stay in base_link.
-    const float floor_distance=(zb-floor_a*xb-floor_b*yb-floor_c)*rsqrtf(1+floor_a*floor_a+floor_b*floor_b);
-    if (floor_distance <= ground_z_thresh) {
+    // 地面 / 障害物の分離 (base_link 基準の Z 閾値)
+    if (zb <= ground_z_thresh) {
         int g_idx                 = atomicAdd(ground_count, 1);
         out_ground[g_idx * 3 + 0] = xb;
         out_ground[g_idx * 3 + 1] = yb;
@@ -68,7 +67,7 @@ void launchGroundFilter(
     int* d_ground_count,
     int* d_obstacle_count,
     int* h_ground_count,
-    int* h_obstacle_count, float floor_a, float floor_b, float floor_c
+    int* h_obstacle_count
 )
 {
     cudaMemsetAsync(d_ground_count, 0, sizeof(int), stream);
@@ -87,7 +86,7 @@ void launchGroundFilter(
         robot_radius,
         robot_height_min,
         robot_height_max,
-        ground_z_thresh, floor_a, floor_b, floor_c,
+        ground_z_thresh,
         d_ground_count,
         d_obstacle_count
     );

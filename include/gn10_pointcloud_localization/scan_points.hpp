@@ -7,21 +7,6 @@
 
 namespace gn10 {
 struct ScanPoints { std::vector<float> xyz; std::vector<double> times; double start{0}, end{0}; bool valid{false}, timed{false}; };
-// Keep actual returns from a short acquisition interval. No point/time synthesis.
-inline ScanPoints trailingWindow(const ScanPoints& scan, double width_s) {
-    ScanPoints out;
-    if (!scan.valid || !scan.timed || !std::isfinite(width_s) || width_s <= 0 ||
-        scan.xyz.size() != scan.times.size()*3) return out;
-    const double begin=scan.end-width_s;
-    out.start=scan.end; out.end=scan.end; out.timed=true;
-    for (size_t i=0;i<scan.times.size();++i) {
-        if (scan.times[i] < begin || scan.times[i] > scan.end) continue;
-        out.start=std::min(out.start,scan.times[i]);
-        out.times.push_back(scan.times[i]);
-        out.xyz.insert(out.xyz.end(),scan.xyz.begin()+3*i,scan.xyz.begin()+3*i+3);
-    }
-    out.valid=!out.times.empty(); return out;
-}
 // MID360 timestamp: absolute nanoseconds (FLOAT64), or relative offset_time (UINT32 ns).
 // Preserve row padding. Never infer point times from array order.
 inline ScanPoints decodeScan(const sensor_msgs::msg::PointCloud2& msg) {

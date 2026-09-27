@@ -19,34 +19,28 @@ inline double angleDifference(double a, double b)
 class MotionHistory
 {
 public:
-    explicit MotionHistory(double max_gap_s=0.25) : max_gap_s_(max_gap_s) {}
     bool add(TimedPose p)
     {
         if (!std::isfinite(p.stamp) || !std::isfinite(p.x) ||
             !std::isfinite(p.y) || !std::isfinite(p.yaw)) return false;
         if (!samples.empty() && p.stamp <= samples.back().stamp) return false;
         samples.push_back(p);
-        while (samples.size() > 2 && p.stamp - samples.front().stamp > 5.0)
+        while (samples.size() > 2 && p.stamp - samples.front().stamp > 2.0)
             samples.pop_front();
         return true;
     }
 
     std::optional<TimedPose> at(double t) const
     {
-        // FAST-LIO may remove the last few returns during point filtering.
-        // Hold an endpoint only within 100 us; larger gaps remain unavailable.
-        constexpr double endpoint_slack_s = 1e-4;
-        if (samples.empty() || t < samples.front().stamp - endpoint_slack_s ||
-            t > samples.back().stamp + endpoint_slack_s) return {};
-        if (t <= samples.front().stamp) return samples.front();
-        if (t >= samples.back().stamp) return samples.back();
+        if (samples.empty() || t < samples.front().stamp - 1e-6 ||
+            t > samples.back().stamp + 1e-6) return {};
         const auto hi = std::lower_bound(samples.begin(), samples.end(), t,
             [](const auto& p, double v) { return p.stamp < v; });
         if (hi == samples.end()) return samples.back();
         if (std::abs(hi->stamp - t) < 1e-6) return *hi;
         if (hi == samples.begin()) return {};
         const auto lo = std::prev(hi);
-        if (hi->stamp - lo->stamp > max_gap_s_) return {};
+        if (hi->stamp - lo->stamp > 0.25) return {};
         const double a = (t - lo->stamp) / (hi->stamp - lo->stamp);
         return TimedPose{t, lo->x + a * (hi->x - lo->x), lo->y + a * (hi->y - lo->y),
             lo->yaw + a * angleDifference(hi->yaw, lo->yaw)};
@@ -70,7 +64,5 @@ public:
     }
 
     std::deque<TimedPose> samples;
-private:
-    double max_gap_s_;
 };
 }  // namespace gn10

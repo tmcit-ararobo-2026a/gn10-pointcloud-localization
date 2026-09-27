@@ -15,7 +15,7 @@ struct Pose2d {
 
 struct FusionConfig {
     double history_s{5.0};
-    double max_odom_gap_s{3.0};
+    double max_odom_gap_s{1.0};
     double max_odom_step_m{2.0};
     double max_odom_step_yaw_rad{1.5};
     double max_match_skew_s{0.15};
@@ -25,12 +25,6 @@ struct FusionConfig {
     double process_yaw_per_s{0.03};
     double match_xy_stddev{0.08};
     double match_yaw_stddev{0.08};
-    double max_match_translation_m{0.5};
-    double max_match_yaw_rad{0.35};
-    double max_recovery_translation_m{0.75};
-    double max_recovery_yaw_rad{0.75};
-    double recovery_step_m{0.10};
-    double recovery_step_yaw_rad{0.10};
     double innovation_gate{16.27};  // chi-square 3 DoF, 99.9%
 };
 
@@ -42,20 +36,16 @@ public:
     explicit PoseFusionFilter(FusionConfig config);
 
     void addOdometry(double stamp, Pose2d pose);
-    bool addMatch(double stamp, Pose2d pose, bool confirmed_recovery = false);
-    std::optional<Pose2d> predictionAt(double stamp) const;
+    bool addMatch(double stamp, Pose2d pose);
     MatchRejection lastMatchRejection() const;
     bool hasPose() const;
     double latestStamp() const;
     Pose2d pose() const;
     Eigen::Matrix3d covariance() const;
     void reset();
-    bool addMapPrediction(double stamp); // No observed control: hold pose, increase uncertainty.
-    bool resynchronizeOdometry(double stamp, Pose2d odom); // Start a new control segment, no unknown increment.
-    bool setMapPose(Pose2d pose); // Explicit operator initialization at latest odometry.
 
 private:
-    struct Match { Pose2d pose; bool confirmed_recovery{false}; double timing_skew_s{0.0}; };
+    struct Match { Pose2d pose; };
     struct Sample {
         double stamp;
         Pose2d odom;

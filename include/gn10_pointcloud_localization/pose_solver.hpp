@@ -12,7 +12,6 @@ struct GroundFilterParams {
     float robot_height_min{0.0f};
     float robot_height_max{1.2f};
     float ground_z_thresh{0.08f};
-    float floor_a{0},floor_b{0},floor_c{0};
 };
 
 struct MatchingParams {
@@ -21,7 +20,6 @@ struct MatchingParams {
     float range_yaw{0.15f};
     float step_yaw{0.02f};
     bool fine_refine{true};
-    bool continuous_refine{true};
     bool robust_local{false};
     float robust_distance{0.08f};
     float robust_cost_threshold{0.045f};
@@ -85,7 +83,6 @@ public:
 
 private:
     FieldMatchStats stats_;
-    std::vector<FieldObject> matching_map_;
     int max_points_;
     cudaStream_t stream_{nullptr};
 

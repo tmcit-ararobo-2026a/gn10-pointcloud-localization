@@ -16,6 +16,5 @@ void launchGroundFilter(
     int* d_ground_count,
     int* d_obstacle_count,
     int* h_ground_count,
-    int* h_obstacle_count,
-    float floor_a = 0, float floor_b = 0, float floor_c = 0
+    int* h_obstacle_count
 );

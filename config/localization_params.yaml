@@ -1,6 +1,5 @@
 /**:
   ros__parameters:
-    input_cloud_type: "pointcloud2" # pointcloud2 or custom_msg (startup selection)
     map_source_type: "json" # "json" または "ros2_param"
     map_file_path: ""       # 空文字列の場合はパッケージ相対パス等を使用
     
@@ -20,16 +19,11 @@
       output_pose: "/platform_constraint"
       output_markers: "/field_map_markers"
 
-    motion:
-      scan_wait_s: 2.0 # wait bound only; process as soon as TF/odometry are ready
-      scan_queue_size: 30
-
     filter_params:
       max_range: 12.0
       robot_radius: 0.8
       robot_height_min: 0.0
       robot_height_max: 1.2
-      adaptive_floor: false # experimental: validate continuity before enabling # constrained measured plane, classification only
       ground_z_thresh: 0.04
       max_points: 200000
 
@@ -38,7 +32,6 @@
       search_step_xy: 0.05
       search_range_yaw: 0.6
       search_step_yaw: 0.05
-      continuous_refine: true # bounded surface refinement and SE(2) observability check
       fine_refine: true # 125 local candidates around the coarse best pose
       robust_local: true
       robust_distance: 0.08

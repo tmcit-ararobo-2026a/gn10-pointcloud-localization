@@ -354,7 +354,7 @@ bool launchFieldSDFMatcher(
         const float ratio = static_cast<float>(quality.count) / num_points;
         const int sectors = __builtin_popcount(quality.sectors);
         out_best_cost = quality.count > 0 ? quality.residual_sum / quality.count : FLT_MAX;
-        if (stats) *stats = {quality.count,ratio,sectors,quality.axis_x,quality.axis_y,out_best_cost,h_argmin.value};
+        if (stats) *stats = {quality.count,ratio,sectors,quality.axis_x,quality.axis_y,out_best_cost};
         if (quality.count < min_support_count || ratio < min_support_ratio ||
             sectors < min_support_sectors || quality.axis_x < min_axis_support || quality.axis_y < min_axis_support) {
             out_best_cost = FLT_MAX;

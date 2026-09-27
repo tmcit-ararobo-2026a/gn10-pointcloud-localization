@@ -6,22 +6,18 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
     share = get_package_share_directory('gn10_pointcloud_localization')
-    input_type = LaunchConfiguration('input_cloud_type')
-    input_topic = LaunchConfiguration('input_cloud_topic')
     use_sim_time = LaunchConfiguration('use_sim_time')
     start_fast_lio = LaunchConfiguration('start_fast_lio')
     matcher_config = LaunchConfiguration('matcher_config')
     fusion_config = LaunchConfiguration('fusion_config')
     fast_lio_config = LaunchConfiguration('fast_lio_config')
-    fallback_window_s = LaunchConfiguration('fallback_window_s')
-    map_only_updates = LaunchConfiguration('map_only_updates')
     initial_pose_local_search = LaunchConfiguration('initial_pose_local_search')
     initial_pose_x = LaunchConfiguration('initial_pose_x')
     initial_pose_y = LaunchConfiguration('initial_pose_y')
@@ -29,13 +25,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument('input_cloud_type', default_value='pointcloud2',
-                              choices=['pointcloud2', 'custom_msg']),
-        DeclareLaunchArgument('input_cloud_topic', default_value='/livox/lidar'),
         DeclareLaunchArgument('start_fast_lio', default_value='true'),
-        DeclareLaunchArgument('map_only_updates', default_value='true'),
-        DeclareLaunchArgument('fallback_window_s', default_value='0.0',
-                              description='Short observed cloud window when odometry is missing; 0 disables'),
         DeclareLaunchArgument('matcher_config', default_value=os.path.join(
             share, 'config', 'localization_params.yaml')),
         DeclareLaunchArgument('fusion_config', default_value=os.path.join(
@@ -49,21 +39,11 @@ def generate_launch_description():
         Node(
             package='gn10_pointcloud_localization', executable='livox_pointcloud_bridge',
             name='livox_pointcloud_bridge', output='screen',
-            parameters=[{'use_sim_time': use_sim_time, 'input_topic': input_topic}],
-            condition=IfCondition(PythonExpression([
-                "'", start_fast_lio, "'.lower() == 'true' and '", input_type,
-                "' == 'pointcloud2'"
-            ])),
+            parameters=[{'use_sim_time': use_sim_time}], condition=IfCondition(start_fast_lio),
         ),
         Node(
             package='fast_lio', executable='fastlio_mapping', name='fast_lio',
-            output='screen', parameters=[fast_lio_config, {
-                'use_sim_time': use_sim_time,
-                'common.lid_topic': ParameterValue(PythonExpression([
-                    "'/livox/lidar_custom' if '", input_type,
-                    "' == 'pointcloud2' else '", input_topic, "'"
-                ]), value_type=str),
-            }],
+            output='screen', parameters=[fast_lio_config, {'use_sim_time': use_sim_time}],
             condition=IfCondition(start_fast_lio),
         ),
         Node(
@@ -72,15 +52,11 @@ def generate_launch_description():
             name='gn10_pointcloud_localization_node', output='screen',
             parameters=[matcher_config, {
                 'use_sim_time': use_sim_time,
-                'input_cloud_type': input_type,
-                'topics.input_cloud': input_topic,
                 'publish_tf': False,
                 'topics.output_pose': '/platform_constraint_raw',
-                'topics.fused_prior': '/gn10/matching_prior',
+                'topics.fused_prior': '/platform_constraint',
                 'fusion.use_prior': True,
-                'fusion.prior_max_age_s': 3.0, # propagate only through observed odometry endpoints
                 'motion.use_odom': True,
-                'motion.fallback_window_s': ParameterValue(fallback_window_s, value_type=float),
                 'initial_pose.use_for_local_search': ParameterValue(
                     initial_pose_local_search, value_type=bool),
                 'initial_pose.x': ParameterValue(initial_pose_x, value_type=float),
@@ -91,7 +67,7 @@ def generate_launch_description():
         Node(
             package='gn10_pointcloud_localization', executable='gn10_pose_fusion_node',
             name='gn10_pose_fusion_node', output='screen',
-            parameters=[fusion_config, {'use_sim_time': use_sim_time, 'fusion.map_only_updates': ParameterValue(map_only_updates, value_type=bool)}],
+            parameters=[fusion_config, {'use_sim_time': use_sim_time}],
         ),
         Node(
             package='tf2_ros', executable='static_transform_publisher',

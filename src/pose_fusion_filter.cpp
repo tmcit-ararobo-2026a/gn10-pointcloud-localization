@@ -22,44 +22,6 @@ MatchRejection PoseFusionFilter::lastMatchRejection() const { return last_match_
 
 void PoseFusionFilter::reset() { history_.clear(); }
 
-bool PoseFusionFilter::addMapPrediction(double stamp)
-{
-    if (!hasPose() || !std::isfinite(stamp) || stamp <= latestStamp()) return false;
-    auto next=history_.back();
-    const double dt=stamp-next.stamp;
-    next.stamp=stamp; next.match.reset();
-    // Motion is unknown, rather than an observed zero velocity. No odom output
-    // is generated. The normal innovation and physical correction gates remain.
-    next.covariance(0,0)+=std::pow(0.5*dt,2);
-    next.covariance(1,1)+=std::pow(0.5*dt,2);
-    next.covariance(2,2)+=std::pow(0.5*dt,2);
-    history_.clear();history_.push_back(next);return true;
-}
-
-bool PoseFusionFilter::resynchronizeOdometry(double stamp, Pose2d odom)
-{
-    if (!hasPose() || !finite(odom) || !std::isfinite(stamp) || stamp < latestStamp()) return false;
-    auto next=history_.back();next.stamp=stamp;next.odom=odom;next.match.reset();
-    history_.clear();history_.push_back(next);return true;
-}
-
-bool PoseFusionFilter::setMapPose(Pose2d pose)
-{
-    if (history_.empty() || !finite(pose)) return false;
-    auto anchor = history_.back();
-    pose.yaw = wrapYaw(pose.yaw);
-    anchor.map = pose;
-    anchor.valid = true;
-    anchor.match.reset();
-    anchor.covariance = Eigen::Matrix3d::Zero();
-    anchor.covariance(0, 0) = anchor.covariance(1, 1) =
-        std::pow(config_.match_xy_stddev, 2);
-    anchor.covariance(2, 2) = std::pow(config_.match_yaw_stddev, 2);
-    history_.clear();
-    history_.push_back(anchor);
-    return true;
-}
-
 bool PoseFusionFilter::hasPose() const { return !history_.empty() && history_.back().valid; }
 
 double PoseFusionFilter::latestStamp() const
@@ -118,11 +80,6 @@ bool PoseFusionFilter::correct(size_t index)
     Eigen::Matrix3d R = Eigen::Matrix3d::Zero();
     R(0, 0) = R(1, 1) = std::pow(config_.match_xy_stddev, 2);
     R(2, 2) = std::pow(config_.match_yaw_stddev, 2);
-    // Endpoint hold during a missing control bracket is not exact time alignment.
-    // Account for possible robot motion (5 m/s, 3 rad/s) in measurement noise.
-    const double timing_skew=sample.match->timing_skew_s;
-    R(0,0)+=std::pow(5.0*timing_skew,2);R(1,1)+=std::pow(5.0*timing_skew,2);
-    R(2,2)+=std::pow(3.0*timing_skew,2);
     if (!sample.valid) {
         sample.map = measurement;
         sample.map.yaw = wrapYaw(sample.map.yaw);
@@ -137,25 +94,13 @@ bool PoseFusionFilter::correct(size_t index)
     );
     const Eigen::Matrix3d S = sample.covariance + R;
     const auto solver = S.ldlt();
-    const bool recovery = sample.match->confirmed_recovery;
-    const double translation_limit = recovery ? config_.max_recovery_translation_m : config_.max_match_translation_m;
-    const double yaw_limit = recovery ? config_.max_recovery_yaw_rad : config_.max_match_yaw_rad;
-    if (innovation.head<2>().norm() > translation_limit ||
-        std::abs(innovation.z()) > yaw_limit || solver.info() != Eigen::Success ||
-        (!recovery && innovation.dot(solver.solve(innovation)) > config_.innovation_gate)) {
+    if (solver.info() != Eigen::Success ||
+        innovation.dot(solver.solve(innovation)) > config_.innovation_gate) {
         last_match_rejection_ = MatchRejection::Innovation;
         sample.match.reset();
         return false;
     }
-    Eigen::Matrix3d K = sample.covariance * solver.solve(Eigen::Matrix3d::Identity());
-    if (recovery) {
-        // Scale the gain, including the covariance update, to bound the actual correction.
-        const Eigen::Vector3d proposed = K * innovation;
-        const double scale = std::min({1.0,
-            config_.recovery_step_m / std::max(proposed.head<2>().norm(), 1e-12),
-            config_.recovery_step_yaw_rad / std::max(std::abs(proposed.z()), 1e-12)});
-        K *= scale;
-    }
+    const Eigen::Matrix3d K = sample.covariance * solver.solve(Eigen::Matrix3d::Identity());
     const Eigen::Vector3d change = K * innovation;
     sample.map.x += change.x();
     sample.map.y += change.y();
@@ -183,23 +128,8 @@ void PoseFusionFilter::addOdometry(double stamp, Pose2d pose)
             pose.x - history_.back().odom.x, pose.y - history_.back().odom.y
         );
         const double yaw_step = std::abs(wrapYaw(pose.yaw - history_.back().odom.yaw));
-        if (dt > config_.max_odom_gap_s) {
-            // Keep a search anchor across a missing motion segment, without integrating
-            // the unknown displacement or declaring it a fresh map observation.
-            auto anchor = history_.back();
-            anchor.stamp = stamp;
-            anchor.odom = pose;
-            anchor.match.reset();
-            if (anchor.valid) {
-                anchor.covariance(0,0) += std::pow(config_.process_translation_per_s,2)*dt;
-                anchor.covariance(1,1) += std::pow(config_.process_translation_per_s,2)*dt;
-                anchor.covariance(2,2) += std::pow(config_.process_yaw_per_s,2)*dt;
-            }
-            history_.clear(); history_.push_back(anchor);
-            return;
-        }
-        if (dt <= 0.0) {
-            if (dt < -0.5) reset();
+        if (dt <= 0.0 || dt > config_.max_odom_gap_s) {
+            if (dt < -0.5 || dt > config_.max_odom_gap_s) reset();
             else return;
         } else if (step > config_.max_odom_step_m ||
                    yaw_step > config_.max_odom_step_yaw_rad) {
@@ -215,16 +145,7 @@ void PoseFusionFilter::addOdometry(double stamp, Pose2d pose)
     }
 }
 
-std::optional<Pose2d> PoseFusionFilter::predictionAt(double stamp) const
-{
-    if (!std::isfinite(stamp) || history_.empty()) return {};
-    const auto nearest = std::min_element(history_.begin(), history_.end(),
-        [stamp](const auto& a, const auto& b) { return std::abs(a.stamp-stamp) < std::abs(b.stamp-stamp); });
-    if (!nearest->valid || std::abs(nearest->stamp-stamp) > config_.max_match_skew_s) return {};
-    return nearest->map;
-}
-
-bool PoseFusionFilter::addMatch(double stamp, Pose2d pose, bool confirmed_recovery)
+bool PoseFusionFilter::addMatch(double stamp, Pose2d pose)
 {
     last_match_rejection_ = MatchRejection::None;
     if (history_.empty()) {
@@ -248,29 +169,12 @@ bool PoseFusionFilter::addMatch(double stamp, Pose2d pose, bool confirmed_recove
         last_match_rejection_ = MatchRejection::Timestamp;
         return false;
     }
-    // Insert an observed-control interpolation at the actual measurement time.
-    // Never interpolate across a >250 ms motion gap or extrapolate future odometry.
-    auto hi=std::lower_bound(history_.begin(),history_.end(),stamp,
-        [](const auto& sample,double t){return sample.stamp<t;});
-    if (best>1e-4 && hi!=history_.begin() && hi!=history_.end()) {
-        const auto lo=std::prev(hi);
-        const double dt=hi->stamp-lo->stamp;
-        if (dt<=0.25) {
-            const double a=(stamp-lo->stamp)/dt;
-            const Pose2d interpolated{lo->odom.x+a*(hi->odom.x-lo->odom.x),
-                lo->odom.y+a*(hi->odom.y-lo->odom.y),
-                wrapYaw(lo->odom.yaw+a*wrapYaw(hi->odom.yaw-lo->odom.yaw))};
-            const size_t index=static_cast<size_t>(hi-history_.begin());
-            history_.insert(hi,Sample{stamp,interpolated,{},Eigen::Matrix3d::Zero(),false,{}});
-            replayFrom(index);nearest=history_.begin()+index;best=0;
-        }
-    }
     if (nearest->match) {
         last_match_rejection_ = MatchRejection::Duplicate;
         return false;
     }
     const size_t index = static_cast<size_t>(nearest - history_.begin());
-    nearest->match = Match{pose, confirmed_recovery,best};
+    nearest->match = Match{pose};
     if (index == 0) {
         if (!correct(0)) return false;
         replayFrom(1);

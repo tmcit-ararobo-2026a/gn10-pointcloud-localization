@@ -3,7 +3,6 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include "gn10_pointcloud_localization/surface_refinement.hpp"
 
 #include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
 
@@ -45,7 +44,6 @@ void PoseSolver::setMap(const std::vector<FieldObject>& host_map)
     for (const auto& object : host_map) {
         if (object.type != VISUAL_BOX) matching_map.push_back(object);
     }
-    matching_map_ = matching_map;
     uploadFieldMapToGPU(matching_map);
 }
 
@@ -92,8 +90,7 @@ bool PoseSolver::processPointCloud(
         d_ground_count_,
         d_obstacle_count_,
         &h_ground_count,
-        &h_obstacle_count,
-        filter_params.floor_a, filter_params.floor_b, filter_params.floor_c
+        &h_obstacle_count
     );
 
     cudaStreamSynchronize(stream_);
@@ -155,26 +152,6 @@ bool PoseSolver::processPointCloud(
         out_dynamic_pts.clear();
     }
 
-    if (pose_matched && match_params.robust_local && match_params.continuous_refine) {
-        stats_.initial_residual=out_best_cost;
-        std::vector<float> obstacle;
-        copyFilteredClouds(nullptr,&obstacle);
-        PoseCandidate refined;
-        bool observable=false;
-        if (gn10::refineSurfaces(obstacle,matching_map_,match_params.robust_distance,out_best_pose,refined,&observable)) {
-            PoseCandidate checked; float cost; FieldMatchStats quality; std::vector<float> dynamic;
-            const bool valid=launchFieldSDFMatcher(stream_,d_obstacle_,h_obstacle_count,refined,
-                0,0,1,0,1,match_params.max_dist_thresh,match_params.dynamic_dist_thresh,
-                match_params.field_min_x,match_params.field_max_x,match_params.field_min_y,match_params.field_max_y,
-                checked,cost,dynamic,true,match_params.robust_distance,match_params.min_support_ratio,
-                match_params.min_support_count,match_params.min_support_sectors,&quality,match_params.min_axis_support);
-            if (valid && cost<match_params.robust_cost_threshold && quality.ranking_cost<=stats_.ranking_cost) {
-                quality.initial_residual=stats_.initial_residual;quality.refined=true;
-                out_best_pose=checked;out_best_cost=cost;stats_=quality;out_dynamic_pts=std::move(dynamic);
-            }
-        }
-        if (!observable) { pose_matched=false; out_best_cost=std::numeric_limits<float>::max(); out_dynamic_pts.clear(); }
-    }
     return pose_matched;
 }
 
@@ -214,8 +191,7 @@ int PoseSolver::prepareObstacleCloud(
         d_ground_count_,
         d_obstacle_count_,
         &h_ground_count,
-        &h_obstacle_count,
-        filter_params.floor_a, filter_params.floor_b, filter_params.floor_c
+        &h_obstacle_count
     );
 
     cudaStreamSynchronize(stream_);
