@@ -37,6 +37,7 @@
       search_step_xy: 0.05
       search_range_yaw: 0.6
       search_step_yaw: 0.05
+      continuous_refine: true # bounded surface refinement and SE(2) observability check
       fine_refine: true # 125 local candidates around the coarse best pose
       robust_local: true
       robust_distance: 0.08

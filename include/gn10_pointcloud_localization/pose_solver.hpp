@@ -20,6 +20,7 @@ struct MatchingParams {
     float range_yaw{0.15f};
     float step_yaw{0.02f};
     bool fine_refine{true};
+    bool continuous_refine{true};
     bool robust_local{false};
     float robust_distance{0.08f};
     float robust_cost_threshold{0.045f};
@@ -83,6 +84,7 @@ public:
 
 private:
     FieldMatchStats stats_;
+    std::vector<FieldObject> matching_map_;
     int max_points_;
     cudaStream_t stream_{nullptr};
 

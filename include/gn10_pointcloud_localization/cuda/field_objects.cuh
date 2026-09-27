@@ -12,7 +12,7 @@ struct FieldObject {
     float param1, param2;
 };
 
-struct FieldMatchStats { int support_count{0}; float support_ratio{0}; int sectors{0}; int axis_x{0}, axis_y{0}; float residual{0}; };
+struct FieldMatchStats { int support_count{0}; float support_ratio{0}; int sectors{0}; int axis_x{0}, axis_y{0}; float residual{0}; float ranking_cost{0}; float initial_residual{0}; bool refined{false}; };
 
 struct PoseCandidate {
     float x, y, yaw;

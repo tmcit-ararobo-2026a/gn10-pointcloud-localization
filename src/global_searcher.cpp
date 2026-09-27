@@ -94,6 +94,24 @@ PoseCandidate GlobalSearcher::search(
         out_best_cost = std::numeric_limits<float>::max();
         return best_coarse_pose;
     }
+    // A low all-point cost does not prove three-degree-of-freedom map support.
+    // Validate the global winner with the same geometry/observability checks as
+    // local tracking, while retaining the original all-point acceptance gate.
+    if (match_params.robust_local && out_best_cost < match_params.cost_threshold) {
+        auto validation=match_params;
+        validation.range_xy=0; validation.range_yaw=0; validation.fine_refine=false;
+        float supported_cost; PoseCandidate validated;
+        if (!solver.processPointCloud(h_raw_cloud,h_transform,filter_params,validation,
+                refined_pose,dummy_dynamic,validated,supported_cost) ||
+            supported_cost >= validation.robust_cost_threshold) {
+            out_best_cost=std::numeric_limits<float>::max();return refined_pose;
+        }
+        refined_pose=validated;
+        PoseCandidate checked;
+        if (!solver.evaluateGlobalSDF(solver.prepareObstacleCloud(h_raw_cloud,h_transform,filter_params),
+                refined_pose,0,0,1,0,1,match_params,checked,out_best_cost))
+            out_best_cost=std::numeric_limits<float>::max();
+    }
     if (refined_pose.x < config_.range_min_x || refined_pose.x > config_.range_max_x ||
         refined_pose.y < config_.range_min_y || refined_pose.y > config_.range_max_y) {
         RCLCPP_WARN(logger_, "[GlobalSearch] Refined pose is outside the configured start area.");
