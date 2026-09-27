@@ -80,3 +80,5 @@ FAST-LIO本体を変更したり、地図補正をFAST-LIOへ入力したりは�
 - 交互に変わる候補は復帰根拠にせず、一貫した3観測だけで補正する。
 - 補正が0.1m・0.1radを超えない。
 - 長い運動欠落後も探索基準を失わず、新しい観測で復帰する。
+
+2026-09-28の床面・3D表面・速度誤差推定を含む再検証は [continuous_localization_validation.md](continuous_localization_validation.md) を参照。このページの数値は7726e66時点の履歴。

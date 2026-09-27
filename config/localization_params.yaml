@@ -29,7 +29,7 @@
       robot_radius: 0.8
       robot_height_min: 0.0
       robot_height_max: 1.2
-      adaptive_floor: true # constrained measured plane, classification only
+      adaptive_floor: false # experimental: validate continuity before enabling # constrained measured plane, classification only
       ground_z_thresh: 0.04
       max_points: 200000
 

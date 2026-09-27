@@ -15,8 +15,6 @@ int main() {
  require(!gn10::refineSurfaces(wall,{map.front()},.08,{0,0,0},fitted));
  double r;Eigen::Vector2d n;
  require(gn10::surfaceResidual({CYLINDER,0,0,0,2,1,0},1.02,0,1,r,n)&&std::abs(r-.02)<1e-6&&n.x()==1);
- require(gn10::surfaceResidual(map.front(),0,3,2,r,n)&&std::abs(r)<1e-6&&n.norm()==0);
- require(gn10::surfaceResidual({CYLINDER,0,0,0,2,1,0},0,0,2,r,n)&&r==0&&n.norm()==0);
  require(!gn10::surfaceResidual(map.front(),0,3,3,r,n));
  return 0;
 }

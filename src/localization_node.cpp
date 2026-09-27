@@ -68,7 +68,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("filter_params.robot_height_max", 1.2);
     this->declare_parameter("filter_params.ground_z_thresh", 0.08);
     this->declare_parameter("filter_params.max_points", 200000);
-    this->declare_parameter("filter_params.adaptive_floor", true);
+    this->declare_parameter("filter_params.adaptive_floor", false);
 
     this->declare_parameter("matching_params.search_range_xy", 0.30);
     this->declare_parameter("matching_params.search_step_xy", 0.03);

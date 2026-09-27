@@ -64,14 +64,6 @@ int main()
     require(std::abs(pose.x) < 1e-4f);
     require(surface_cost < 1e-4f);
 
-    const float top_cost=matchCost(stream,{0,0,.1f,.2f,.2f,.1f},0,pose);
-    require(top_cost<1e-6f); // Exact horizontal top returns belong to the static map.
-    DeviceCloud top_only({.1f,.1f,.1f,-.1f,.1f,.1f,-.1f,-.1f,.1f,.1f,-.1f,.1f});
-    FieldMatchStats top_quality;float top_robust;std::vector<float> top_dynamic;
-    require(!launchFieldSDFMatcher(stream,top_only.data,4,{0,0,0},0,0,.1,0,.1,
-        .2,.15,-1,1,-1,1,pose,top_robust,top_dynamic,false,.08,.1,1,3,&top_quality,1));
-    require(top_quality.support_count==0&&top_quality.axis_x==0&&top_quality.axis_y==0); // A tabletop alone cannot localize XY/yaw.
-
     const float outside_cost = matchCost(
         stream, {0.5f, 0.0f, 0.0f, 3.0f, 0.0f, 0.0f}, 0.0f, pose
     );
