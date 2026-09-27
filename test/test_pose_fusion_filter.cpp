@@ -34,6 +34,12 @@ int main()
     require(!filter.addMatch(10.0, {1.0, 1.0, 0.0}));
     require(filter.lastMatchRejection() == gn10::MatchRejection::Timestamp);
 
+    const auto held = filter.pose();
+    filter.addOdometry(4.0, {0.0, 0.0, 0.0});
+    require(filter.hasPose());
+    require(near(filter.pose().x, held.x));
+    require(!filter.predictionAt(0.2));
+    filter.reset();
     filter.addOdometry(4.0, {0.0, 0.0, 0.0});
     require(!filter.hasPose());
     require(filter.addMatch(4.0, {1.0, 1.0, 0.0}));
@@ -65,5 +71,18 @@ int main()
     require(!bounded.addMatch(0.0, {})); // old epoch/history cannot undo initialization
     bounded.reset();
     require(!bounded.setMapPose({}));
+    gn10::PoseFusionFilter recovery(noisy);
+    recovery.addOdometry(0.0, {});
+    require(recovery.addMatch(0.0, {}));
+    recovery.addOdometry(0.1, {});
+    require(!recovery.addMatch(0.1, {0.65, 0, 0.65}));
+    require(recovery.predictionAt(0.1).has_value());
+    require(recovery.addMatch(0.1, {0.65, 0, 0.65}, true));
+    require(recovery.pose().x > 0 && recovery.pose().x <= 0.100001);
+    require(recovery.pose().yaw > 0 && recovery.pose().yaw <= 0.100001);
+    require(recovery.covariance().diagonal().minCoeff() > 0);
+    recovery.addOdometry(0.2, {});
+    require(!recovery.addMatch(0.2, {5, 0, 0}, true));
+    require(!recovery.predictionAt(10).has_value());
     return 0;
 }

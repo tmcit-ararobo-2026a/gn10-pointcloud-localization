@@ -33,4 +33,8 @@
       match_yaw_stddev: 0.08
       max_match_translation_m: 0.5 # independent of covariance growth
       max_match_yaw_rad: 0.35
+      max_recovery_translation_m: 0.75 # only after three consistent local map observations
+      max_recovery_yaw_rad: 0.75
+      recovery_step_m: 0.10
+      recovery_step_yaw_rad: 0.10
       innovation_gate: 16.27

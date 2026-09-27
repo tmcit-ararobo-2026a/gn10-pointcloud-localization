@@ -610,7 +610,9 @@ void LocalizationNode::fusedPriorCallback(
     prior_stamp_ = msg->header.stamp;
     prior_received_ = true;
     const double t=prior_stamp_.seconds();
-    if (prior_history_.empty() || t>prior_history_.back().stamp) {
+    if (!prior_history_.empty() && std::abs(t-prior_history_.back().stamp) < 1e-6) {
+        prior_history_.back() = {t,pose.position.x,pose.position.y,yaw};
+    } else if (prior_history_.empty() || t>prior_history_.back().stamp) {
         prior_history_.push_back({t,pose.position.x,pose.position.y,yaw});
         while(prior_history_.size()>2 && t-prior_history_.front().stamp>5.0) prior_history_.pop_front();
     }
@@ -647,7 +649,9 @@ void LocalizationNode::updateLostState(bool matched, float best_cost, float thre
             lost_threshold_count_
         );
         if (lost_frame_count_ >= lost_threshold_count_) {
-            RCLCPP_ERROR(this->get_logger(), "Localization lost! Transitioning to Global Search.");
+            RCLCPP_ERROR(this->get_logger(), "%s", use_fused_prior_ && prior_received_ ?
+                "Localization lost; continuing local matching with internal prior" :
+                "Localization lost! Transitioning to Global Search.");
             is_lost_ = true;
         }
     } else {

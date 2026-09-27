@@ -71,7 +71,7 @@ def generate_launch_description():
                 'topics.input_cloud': input_topic,
                 'publish_tf': False,
                 'topics.output_pose': '/platform_constraint_raw',
-                'topics.fused_prior': '/platform_constraint',
+                'topics.fused_prior': '/gn10/matching_prior',
                 'fusion.use_prior': True,
                 'fusion.prior_max_age_s': 3.0, # propagate only through observed odometry endpoints
                 'motion.use_odom': True,

@@ -111,15 +111,25 @@ bool PoseFusionFilter::correct(size_t index)
     );
     const Eigen::Matrix3d S = sample.covariance + R;
     const auto solver = S.ldlt();
-    if (innovation.head<2>().norm() > config_.max_match_translation_m ||
-        std::abs(innovation.z()) > config_.max_match_yaw_rad ||
-        solver.info() != Eigen::Success ||
-        innovation.dot(solver.solve(innovation)) > config_.innovation_gate) {
+    const bool recovery = sample.match->confirmed_recovery;
+    const double translation_limit = recovery ? config_.max_recovery_translation_m : config_.max_match_translation_m;
+    const double yaw_limit = recovery ? config_.max_recovery_yaw_rad : config_.max_match_yaw_rad;
+    if (innovation.head<2>().norm() > translation_limit ||
+        std::abs(innovation.z()) > yaw_limit || solver.info() != Eigen::Success ||
+        (!recovery && innovation.dot(solver.solve(innovation)) > config_.innovation_gate)) {
         last_match_rejection_ = MatchRejection::Innovation;
         sample.match.reset();
         return false;
     }
-    const Eigen::Matrix3d K = sample.covariance * solver.solve(Eigen::Matrix3d::Identity());
+    Eigen::Matrix3d K = sample.covariance * solver.solve(Eigen::Matrix3d::Identity());
+    if (recovery) {
+        // Scale the gain, including the covariance update, to bound the actual correction.
+        const Eigen::Vector3d proposed = K * innovation;
+        const double scale = std::min({1.0,
+            config_.recovery_step_m / std::max(proposed.head<2>().norm(), 1e-12),
+            config_.recovery_step_yaw_rad / std::max(std::abs(proposed.z()), 1e-12)});
+        K *= scale;
+    }
     const Eigen::Vector3d change = K * innovation;
     sample.map.x += change.x();
     sample.map.y += change.y();
@@ -147,8 +157,23 @@ void PoseFusionFilter::addOdometry(double stamp, Pose2d pose)
             pose.x - history_.back().odom.x, pose.y - history_.back().odom.y
         );
         const double yaw_step = std::abs(wrapYaw(pose.yaw - history_.back().odom.yaw));
-        if (dt <= 0.0 || dt > config_.max_odom_gap_s) {
-            if (dt < -0.5 || dt > config_.max_odom_gap_s) reset();
+        if (dt > config_.max_odom_gap_s) {
+            // Keep a search anchor across a missing motion segment, without integrating
+            // the unknown displacement or declaring it a fresh map observation.
+            auto anchor = history_.back();
+            anchor.stamp = stamp;
+            anchor.odom = pose;
+            anchor.match.reset();
+            if (anchor.valid) {
+                anchor.covariance(0,0) += std::pow(config_.process_translation_per_s,2)*dt;
+                anchor.covariance(1,1) += std::pow(config_.process_translation_per_s,2)*dt;
+                anchor.covariance(2,2) += std::pow(config_.process_yaw_per_s,2)*dt;
+            }
+            history_.clear(); history_.push_back(anchor);
+            return;
+        }
+        if (dt <= 0.0) {
+            if (dt < -0.5) reset();
             else return;
         } else if (step > config_.max_odom_step_m ||
                    yaw_step > config_.max_odom_step_yaw_rad) {
@@ -164,7 +189,16 @@ void PoseFusionFilter::addOdometry(double stamp, Pose2d pose)
     }
 }
 
-bool PoseFusionFilter::addMatch(double stamp, Pose2d pose)
+std::optional<Pose2d> PoseFusionFilter::predictionAt(double stamp) const
+{
+    if (!std::isfinite(stamp) || history_.empty()) return {};
+    const auto nearest = std::min_element(history_.begin(), history_.end(),
+        [stamp](const auto& a, const auto& b) { return std::abs(a.stamp-stamp) < std::abs(b.stamp-stamp); });
+    if (!nearest->valid || std::abs(nearest->stamp-stamp) > config_.max_match_skew_s) return {};
+    return nearest->map;
+}
+
+bool PoseFusionFilter::addMatch(double stamp, Pose2d pose, bool confirmed_recovery)
 {
     last_match_rejection_ = MatchRejection::None;
     if (history_.empty()) {
@@ -193,7 +227,7 @@ bool PoseFusionFilter::addMatch(double stamp, Pose2d pose)
         return false;
     }
     const size_t index = static_cast<size_t>(nearest - history_.begin());
-    nearest->match = Match{pose};
+    nearest->match = Match{pose, confirmed_recovery};
     if (index == 0) {
         if (!correct(0)) return false;
         replayFrom(1);

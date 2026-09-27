@@ -102,6 +102,8 @@ ament_target_dependencies(gn10_pose_fusion_node
 if(BUILD_TESTING)
   enable_testing()
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_test(NAME fusion_feedback COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_fusion_feedback.py $<TARGET_FILE:gn10_pose_fusion_node>)
+  set_tests_properties(fusion_feedback PROPERTIES TIMEOUT 30)
   add_test(NAME sensor_stamp_play COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_sensor_stamp_play.py)
   add_executable(test_scan_motion test/test_scan_motion.cpp)
   target_include_directories(test_scan_motion PRIVATE include)

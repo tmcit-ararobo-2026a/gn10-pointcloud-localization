@@ -27,6 +27,10 @@ struct FusionConfig {
     double match_yaw_stddev{0.08};
     double max_match_translation_m{0.5};
     double max_match_yaw_rad{0.35};
+    double max_recovery_translation_m{0.75};
+    double max_recovery_yaw_rad{0.75};
+    double recovery_step_m{0.10};
+    double recovery_step_yaw_rad{0.10};
     double innovation_gate{16.27};  // chi-square 3 DoF, 99.9%
 };
 
@@ -38,7 +42,8 @@ public:
     explicit PoseFusionFilter(FusionConfig config);
 
     void addOdometry(double stamp, Pose2d pose);
-    bool addMatch(double stamp, Pose2d pose);
+    bool addMatch(double stamp, Pose2d pose, bool confirmed_recovery = false);
+    std::optional<Pose2d> predictionAt(double stamp) const;
     MatchRejection lastMatchRejection() const;
     bool hasPose() const;
     double latestStamp() const;
@@ -48,7 +53,7 @@ public:
     bool setMapPose(Pose2d pose); // Explicit operator initialization at latest odometry.
 
 private:
-    struct Match { Pose2d pose; };
+    struct Match { Pose2d pose; bool confirmed_recovery{false}; };
     struct Sample {
         double stamp;
         Pose2d odom;

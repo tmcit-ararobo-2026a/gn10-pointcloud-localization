@@ -110,3 +110,11 @@ ros2 run gn10_pointcloud_localization sensor_stamp_play.py \
 この操作は位置の正しさを自動判定しない。オドメトリ異常中は操作を受け付けない。
 
 通常速度での比較結果と残る制限は[09-03-walk検証記録](walk_bag_validation.md)を参照。
+
+## 停止後にマッチングが再開しない問題の修正
+
+表示TF停止時に事前姿勢も止めていた循環を修正した。
+FAST-LIOの標準Odometryから作る探索用姿勢は/gn10/matching_priorへ継続配信する。
+表示用の/platform_constraintとmap TFは、地図観測の年齢・オドメトリ健全性で制御する。
+launchのコマンドとRVizのFixed Frame=mapは従来と同じ。
+[復帰検証記録](map_recovery_validation.md)に09-03-gameとwalkの結果を記載。

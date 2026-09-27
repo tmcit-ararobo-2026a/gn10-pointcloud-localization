@@ -99,6 +99,8 @@ public:
         publisher_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
             output_topic, 20
         );
+        prior_publisher_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            declare_parameter<std::string>("topics.matching_prior", "/gn10/matching_prior"), 50);
         odom_subscription_ = create_subscription<nav_msgs::msg::Odometry>(
             odom_topic, 20,
             [this](nav_msgs::msg::Odometry::ConstSharedPtr msg) { onOdometry(*msg); }
@@ -121,13 +123,12 @@ public:
                 const gn10::Pose2d pose{p.position.x, p.position.y,
                     std::atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))};
                 if (!filter_.setMapPose(pose)) return;
-                pending_matches_.clear();
+                pending_matches_.clear(); recovery_evidence_.clear();
                 anchor_odom_base_ = *previous_odom_base_;
                 anchor_map_yaw_ = pose.yaw;
                 last_accepted_stamp_ = filter_.latestStamp();
                 recovery_stamp_ = last_accepted_stamp_;
-                const rclcpp::Time stamp(static_cast<int64_t>(std::llround(last_accepted_stamp_*1e9)));
-                publish(stamp, *previous_odom_base_);
+                publish(latest_motion_stamp_, *previous_odom_base_);
                 RCLCPP_INFO(get_logger(), "Map pose explicitly initialized by /initialpose");
             });
         diagnostics_publisher_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
@@ -170,13 +171,19 @@ private:
             "fusion.max_match_translation_m", config.max_match_translation_m);
         config.max_match_yaw_rad = declare_parameter(
             "fusion.max_match_yaw_rad", config.max_match_yaw_rad);
+        config.max_recovery_translation_m = declare_parameter("fusion.max_recovery_translation_m", config.max_recovery_translation_m);
+        config.max_recovery_yaw_rad = declare_parameter("fusion.max_recovery_yaw_rad", config.max_recovery_yaw_rad);
+        config.recovery_step_m = declare_parameter("fusion.recovery_step_m", config.recovery_step_m);
+        config.recovery_step_yaw_rad = declare_parameter("fusion.recovery_step_yaw_rad", config.recovery_step_yaw_rad);
         config.innovation_gate =
             declare_parameter("fusion.innovation_gate", config.innovation_gate);
         if (config.history_s <= 0 || config.max_odom_gap_s <= 0 ||
             config.max_odom_step_m <= 0 || config.max_odom_step_yaw_rad <= 0 ||
             config.max_match_skew_s <= 0 || config.match_xy_stddev <= 0 ||
             config.match_yaw_stddev <= 0 || config.max_match_translation_m <= 0 ||
-            config.max_match_yaw_rad <= 0 || config.innovation_gate <= 0) {
+            config.max_match_yaw_rad <= 0 || config.max_recovery_translation_m <= 0 ||
+            config.max_recovery_yaw_rad <= 0 || config.recovery_step_m <= 0 ||
+            config.recovery_step_yaw_rad <= 0 || config.innovation_gate <= 0) {
             throw std::runtime_error("Fusion time, measurement noise and gate must be positive");
         }
         return config;
@@ -211,7 +218,7 @@ private:
         previous_odom_base_.reset();
         full_odom_history_.clear();
         anchor_odom_base_.reset();
-        pending_matches_.clear();
+        pending_matches_.clear(); recovery_evidence_.clear();
         virtual_odom_ = {};
         initial_floor_rotation_.reset();
         odom_healthy_ = true; healthy_streak_ = 0;
@@ -307,6 +314,7 @@ private:
         base_motion.pose.pose.orientation.w = std::cos(virtual_odom_.yaw * 0.5);
         pub_motion_->publish(base_motion);
         filter_.addOdometry(stamp, virtual_odom_);
+        latest_motion_stamp_ = msg.header.stamp;
         previous_odom_base_ = odom_base;
         previous_odom_stamp_ = stamp;
         full_odom_history_.emplace_back(stamp, odom_base);
@@ -320,16 +328,18 @@ private:
                 ++it;
                 continue;
             }
-            if (!filter_.addMatch(it->first, it->second)) {
+            if (!tryMapMatch(it->first, it->second)) {
                 recordRejection();
             } else {
                 recordAcceptedMatch(it->first, it->second);
             }
             it = pending_matches_.erase(it);
         }
-        if (filter_.hasPose() && anchor_odom_base_ && last_accepted_stamp_ >= recovery_stamp_ &&
-            stamp-last_accepted_stamp_ <= max_prediction_age_s_)
-            publish(msg.header.stamp, odom_base);
+        if (filter_.hasPose() && anchor_odom_base_) {
+            const bool allow_map_output = last_accepted_stamp_ >= recovery_stamp_ &&
+                stamp-last_accepted_stamp_ <= max_prediction_age_s_;
+            publish(msg.header.stamp, odom_base, allow_map_output);
+        }
     }
 
     void onMatch(const geometry_msgs::msg::PoseWithCovarianceStamped& msg)
@@ -350,11 +360,46 @@ private:
             }
             return;
         }
-        if (!filter_.addMatch(stamp, measurement)) {
+        if (!tryMapMatch(stamp, measurement)) {
             recordRejection();
         } else {
             recordAcceptedMatch(stamp, measurement);
+            if (previous_odom_base_ && filter_.hasPose() && anchor_odom_base_) {
+                const bool allow_map_output = odom_healthy_ && last_accepted_stamp_ >= recovery_stamp_ &&
+                    filter_.latestStamp()-last_accepted_stamp_ <= max_prediction_age_s_;
+                publish(latest_motion_stamp_, full_odom_history_.back().second, allow_map_output);
+            }
         }
+    }
+
+    bool tryMapMatch(double stamp, const gn10::Pose2d& measurement)
+    {
+        if (filter_.addMatch(stamp, measurement)) { recovery_evidence_.clear(); return true; }
+        if (!odom_healthy_ || filter_.lastMatchRejection() != gn10::MatchRejection::Innovation) {
+            recovery_evidence_.clear(); return false;
+        }
+        const auto predicted = filter_.predictionAt(stamp);
+        if (!predicted) return false;
+        const gn10::Pose2d error{measurement.x-predicted->x, measurement.y-predicted->y,
+            gn10::wrapYaw(measurement.yaw-predicted->yaw)};
+        if (std::hypot(error.x,error.y) > get_parameter("fusion.max_recovery_translation_m").as_double() ||
+            std::abs(error.yaw) > get_parameter("fusion.max_recovery_yaw_rad").as_double()) {
+            recovery_evidence_.clear(); return false;
+        }
+        if (!recovery_evidence_.empty()) {
+            const auto& previous = recovery_evidence_.back();
+            if (stamp <= previous.first) return false;
+            if (stamp-previous.first > 1.0 ||
+                std::hypot(error.x-previous.second.x,error.y-previous.second.y) > 0.12 ||
+                std::abs(gn10::wrapYaw(error.yaw-previous.second.yaw)) > 0.08)
+                recovery_evidence_.clear();
+        }
+        recovery_evidence_.emplace_back(stamp,error);
+        if (recovery_evidence_.size() > 3) recovery_evidence_.pop_front();
+        if (recovery_evidence_.size() < 3 || stamp-recovery_evidence_.front().first < 0.19) return false;
+        if (!filter_.addMatch(stamp, measurement, true)) return false;
+        ++recovery_matches_; recovery_evidence_.clear();
+        return true;
     }
 
     void recordRejection()
@@ -406,6 +451,8 @@ private:
             item.value = value;
             status.values.push_back(std::move(item));
         };
+        add("recovery_matches", std::to_string(recovery_matches_));
+        add("recovery_evidence", std::to_string(recovery_evidence_.size()));
         add("odom_rejected", std::to_string(odom_rejected_));
         add("odom_healthy", odom_healthy_ ? "true" : "false");
         add("sensor_latency_s", std::isfinite(sensor_latency) ? std::to_string(sensor_latency) : "never");
@@ -425,7 +472,7 @@ private:
 
     void publish(
         const builtin_interfaces::msg::Time& stamp,
-        const Eigen::Isometry3d& odom_base
+        const Eigen::Isometry3d& odom_base, bool allow_map_output = true
     )
     {
         const auto state = filter_.pose();
@@ -451,6 +498,9 @@ private:
         pose.pose.covariance[14] = 0.1;  // z, roll and pitch have no map measurement.
         pose.pose.covariance[21] = 0.1;
         pose.pose.covariance[28] = 0.1;
+        // Prediction is an internal search aid, not an accepted map measurement/TF.
+        prior_publisher_->publish(pose);
+        if (!allow_map_output) return;
         publisher_->publish(pose);
 
         geometry_msgs::msg::TransformStamped transform;
@@ -476,7 +526,7 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
         match_subscription_;
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initial_pose_subscription_;
-    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr publisher_, prior_publisher_;
     rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_publisher_;
     rclcpp::TimerBase::SharedPtr diagnostics_timer_;
     std::deque<std::pair<double, gn10::Pose2d>> pending_matches_;
@@ -485,6 +535,9 @@ private:
     std::optional<Eigen::Isometry3d> anchor_odom_base_;
     gn10::Pose2d virtual_odom_;
     double previous_odom_stamp_{0.0};
+    builtin_interfaces::msg::Time latest_motion_stamp_;
+    std::deque<std::pair<double, gn10::Pose2d>> recovery_evidence_;
+    size_t recovery_matches_{0};
     double anchor_map_yaw_{0.0};
     double recovery_stamp_{-std::numeric_limits<double>::infinity()};
     double history_s_{5.0};
