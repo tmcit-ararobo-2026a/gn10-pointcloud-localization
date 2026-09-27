@@ -92,6 +92,41 @@ int main()
     require(std::abs(coarse_pose.x) < 1e-4f);
     require(std::abs(fine_pose.x - 0.02f) < 1e-4f);
     require(fine_cost < coarse_cost - 0.005f);
+    // Dense moving objects must not raise the accepted map-support residual.
+    std::vector<float> occluded;
+    for (int i=0;i<20;++i) {
+        const float y=-0.2f+i*0.02f;
+        occluded.insert(occluded.end(),{-0.5f,y,0.0f,0.5f,y,0.0f,
+            y,-0.5f,0.0f,y,0.5f,0.0f});
+    }
+    for(int i=0;i<400;++i) occluded.insert(occluded.end(),{0.0f,0.0f,0.0f});
+    DeviceCloud clutter(occluded);
+    FieldMatchStats quality;
+    float robust_cost;
+    require(launchFieldSDFMatcher(stream,clutter.data,480,{0,0,0},
+        0.2f,0.0f,0.02f,0.0f,0.01f,0.2f,0.15f,-1,1,-1,1,
+        pose,robust_cost,dynamic,false,0.08f,0.1f,50,3,&quality,10));
+    require(std::abs(pose.x)<1e-4f && robust_cost<1e-4f);
+    require(quality.support_count==80 && quality.sectors>=3);
+    // A single visible surface cannot validate the whole pose.
+    std::vector<float> cluster;
+    for(int i=0;i<100;++i)cluster.insert(cluster.end(),{0.5f,0.0f,0.0f});
+    DeviceCloud single(cluster);
+    require(!launchFieldSDFMatcher(stream,single.data,100,{0,0,0},
+        0,0,0.1f,0,0.1f,0.2f,0.15f,-1,1,-1,1,
+        pose,robust_cost,dynamic,false,0.08f,0.1f,50,3));
+    // No mapped surface evidence: never accept a low inlier-only cost.
+    DeviceCloud outside({3,3,0,4,4,0});
+    require(!launchFieldSDFMatcher(stream,outside.data,2,{0,0,0},
+        0,0,0.1f,0,0.1f,0.2f,0.15f,-1,1,-1,1,
+        pose,robust_cost,dynamic,false,0.08f,0.1f,1,1));
+    // Many directions on one wall still cannot constrain motion along that wall.
+    std::vector<float> wall;
+    for(int i=0;i<100;++i)wall.insert(wall.end(),{-0.4f+i*0.008f,0.5f,0.0f});
+    DeviceCloud one_wall(wall);
+    require(!launchFieldSDFMatcher(stream,one_wall.data,100,{0,0,0},
+        0,0,0.1f,0,0.1f,0.2f,0.15f,-1,1,-1,1,
+        pose,robust_cost,dynamic,false,0.08f,0.1f,50,2,nullptr,10));
     checkCuda(cudaStreamDestroy(stream));
     return 0;
 }

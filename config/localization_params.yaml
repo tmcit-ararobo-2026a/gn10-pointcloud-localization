@@ -33,6 +33,13 @@
       search_range_yaw: 0.6
       search_step_yaw: 0.05
       fine_refine: true # 125 local candidates around the coarse best pose
+      robust_local: true
+      robust_distance: 0.08
+      robust_cost_threshold: 0.045 # mean residual of supported map points only
+      min_support_ratio: 0.10
+      min_support_count: 100
+      min_support_sectors: 3 # eight angular sectors
+      min_axis_support: 10 # reject translation along a single wall
       max_dist_thresh: 0.2
       cost_threshold: 0.165  # all-point mean clipped unsigned surface distance [m]
 

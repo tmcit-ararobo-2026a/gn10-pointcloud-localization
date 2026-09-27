@@ -59,6 +59,7 @@ bool PoseSolver::processPointCloud(
 )
 {
     int num_points = static_cast<int>(h_raw_cloud.size() / 3);
+    stats_ = {};
     ground_count_ = 0;
     obstacle_count_ = 0;
     if (num_points == 0 || num_points > max_points_) {
@@ -96,6 +97,7 @@ bool PoseSolver::processPointCloud(
     ground_count_ = h_ground_count;
     obstacle_count_ = h_obstacle_count;
 
+    stats_ = {};
     bool pose_matched = false;
     if (h_obstacle_count > 50) {
         PoseCandidate coarse_pose{};
@@ -120,7 +122,10 @@ bool PoseSolver::processPointCloud(
             coarse_pose,
             coarse_cost,
             match_params.fine_refine ? ignored_dynamic : out_dynamic_pts,
-            !match_params.fine_refine
+            !match_params.fine_refine,
+            match_params.robust_local ? match_params.robust_distance : 0.0f,
+            match_params.min_support_ratio, match_params.min_support_count,
+            match_params.min_support_sectors, &stats_, match_params.min_axis_support
         );
         out_best_pose = coarse_pose;
         out_best_cost = coarse_cost;
@@ -136,7 +141,10 @@ bool PoseSolver::processPointCloud(
                 match_params.max_dist_thresh, match_params.dynamic_dist_thresh,
                 match_params.field_min_x, match_params.field_max_x,
                 match_params.field_min_y, match_params.field_max_y,
-                out_best_pose, out_best_cost, out_dynamic_pts, true
+                out_best_pose, out_best_cost, out_dynamic_pts, true,
+                match_params.robust_local ? match_params.robust_distance : 0.0f,
+                match_params.min_support_ratio, match_params.min_support_count,
+                match_params.min_support_sectors, &stats_, match_params.min_axis_support
             );
         }
     } else {

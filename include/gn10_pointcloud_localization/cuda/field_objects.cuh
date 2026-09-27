@@ -12,6 +12,8 @@ struct FieldObject {
     float param1, param2;
 };
 
+struct FieldMatchStats { int support_count{0}; float support_ratio{0}; int sectors{0}; int axis_x{0}, axis_y{0}; float residual{0}; };
+
 struct PoseCandidate {
     float x, y, yaw;
 };
@@ -41,7 +43,13 @@ bool launchFieldSDFMatcher(
     PoseCandidate& out_best_pose,
     float& out_best_cost,
     std::vector<float>& out_dynamic_pts,
-    bool extract_dynamic = true  // false の場合は動的点群抽出カーネルとD2H転送を一切実行しない
+    bool extract_dynamic = true,
+    float robust_distance = 0.0f,
+    float min_support_ratio = 0.0f,
+    int min_support_count = 0,
+    int min_support_sectors = 0,
+    FieldMatchStats* stats = nullptr,
+    int min_axis_support = 0
 );
 
 #ifdef __cplusplus

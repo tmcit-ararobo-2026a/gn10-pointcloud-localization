@@ -6,6 +6,9 @@
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cmath>
+#include <cstring>
+#include <algorithm>
+#include "gn10_pointcloud_localization/scan_points.hpp"
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -65,6 +68,15 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.search_range_yaw", 0.15);
     this->declare_parameter("matching_params.search_step_yaw", 0.02);
     this->declare_parameter("matching_params.fine_refine", true);
+    this->declare_parameter("matching_params.robust_local", true);
+    this->declare_parameter("matching_params.robust_distance", 0.08);
+    this->declare_parameter("matching_params.robust_cost_threshold", 0.045);
+    this->declare_parameter("matching_params.min_support_ratio", 0.10);
+    this->declare_parameter("matching_params.min_support_count", 100);
+    this->declare_parameter("matching_params.min_support_sectors", 3);
+    this->declare_parameter("matching_params.min_axis_support", 10);
+    this->declare_parameter("motion.use_odom", false);
+    this->declare_parameter("topics.motion_odom", "/gn10/odom_base");
     this->declare_parameter("matching_params.max_dist_thresh", 0.20);
     this->declare_parameter("matching_params.cost_threshold", 0.165);
     this->declare_parameter("matching_params.dynamic_dist_thresh", 0.15);
@@ -110,6 +122,14 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("matching_params.search_range_yaw").as_double());
     match_params_.step_yaw =
         static_cast<float>(this->get_parameter("matching_params.search_step_yaw").as_double());
+    use_motion_ = get_parameter("motion.use_odom").as_bool();
+    match_params_.robust_local = get_parameter("matching_params.robust_local").as_bool();
+    match_params_.robust_distance = get_parameter("matching_params.robust_distance").as_double();
+    match_params_.robust_cost_threshold = get_parameter("matching_params.robust_cost_threshold").as_double();
+    match_params_.min_support_ratio = get_parameter("matching_params.min_support_ratio").as_double();
+    match_params_.min_support_count = get_parameter("matching_params.min_support_count").as_int();
+    match_params_.min_axis_support = get_parameter("matching_params.min_axis_support").as_int();
+    match_params_.min_support_sectors = get_parameter("matching_params.min_support_sectors").as_int();
     match_params_.fine_refine = this->get_parameter("matching_params.fine_refine").as_bool();
     match_params_.max_dist_thresh =
         static_cast<float>(this->get_parameter("matching_params.max_dist_thresh").as_double());
@@ -125,6 +145,13 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("matching_params.field_min_y").as_double());
     match_params_.field_max_y =
         static_cast<float>(this->get_parameter("matching_params.field_max_y").as_double());
+
+    if (match_params_.robust_distance <= 0 || match_params_.robust_distance >= match_params_.max_dist_thresh ||
+        match_params_.robust_cost_threshold <= 0 || match_params_.robust_cost_threshold >= match_params_.robust_distance ||
+        match_params_.min_axis_support < 1 || match_params_.step_xy <= 0 || match_params_.step_yaw <= 0 ||
+        match_params_.range_xy < 0 || match_params_.range_yaw < 0 || match_params_.min_support_count < 1 || match_params_.min_support_ratio <= 0 ||
+        match_params_.min_support_ratio > 1 || match_params_.min_support_sectors < 1 || match_params_.min_support_sectors > 8)
+        throw std::invalid_argument("Invalid robust matching parameters");
 
     global_range_min_x_ =
         static_cast<float>(this->get_parameter("global_search.range_min_x").as_double());
@@ -220,6 +247,15 @@ void LocalizationNode::setupROSInterfaces()
             );
     }
 
+    pub_match_diagnostics_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
+        "/gn10_matcher/diagnostics", 10);
+    if (use_motion_) {
+        sub_motion_ = create_subscription<nav_msgs::msg::Odometry>(
+            get_parameter("topics.motion_odom").as_string(), 50,
+            std::bind(&LocalizationNode::odometryCallback, this, std::placeholders::_1));
+        motion_timer_ = create_wall_timer(std::chrono::milliseconds(10),
+            std::bind(&LocalizationNode::drainClouds, this));
+    }
     pub_dynamic_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         this->get_parameter("topics.output_dynamic").as_string(), 10
     );
@@ -243,12 +279,89 @@ void LocalizationNode::setupROSInterfaces()
 
 void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
+    if (!use_motion_) { processCloud(msg); return; }
+    auto scan = gn10::decodeScan(*msg);
+    if (!scan.valid || !scan.timed) {
+        ++timing_drops_;
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+            "Dropping scan: motion mode requires valid timestamp(ns FLOAT64) or offset_time(ns UINT32)");
+        return;
+    }
+    if (pending_clouds_.size() >= 5) { pending_clouds_.pop_front(); ++timing_drops_; }
+    pending_clouds_.push_back({msg, std::chrono::steady_clock::now(), std::move(scan)});
+}
+
+void LocalizationNode::drainClouds()
+{
+    while (!pending_clouds_.empty()) {
+        const auto& scan = pending_clouds_.front().scan;
+        if (motion_.at(scan.start) && motion_.at(scan.end)) {
+            auto pending = std::move(pending_clouds_.front());
+            pending_clouds_.pop_front();
+            processCloud(pending.msg, std::move(pending.scan));
+        } else if (std::chrono::steady_clock::now() - pending_clouds_.front().received > std::chrono::milliseconds(300)) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                "Dropping scan: odometry does not cover scan start/end (no extrapolation)");
+            pending_clouds_.pop_front(); ++timing_drops_;
+        } else break;
+    }
+}
+
+void LocalizationNode::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
+{
+    if (msg->child_frame_id != base_frame_ || msg->header.frame_id.empty()) return;
+    const auto& p = msg->pose.pose;
+    const auto& q = p.orientation;
+    const double norm = q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w;
+    if (!std::isfinite(norm) || std::abs(norm-1.0)>0.01) return;
+    const double stamp = rclcpp::Time(msg->header.stamp).seconds();
+    if ((!motion_.samples.empty() && stamp < motion_.samples.back().stamp - 0.5) ||
+        (!motion_frame_.empty() && motion_frame_ != msg->header.frame_id)) {
+        motion_.samples.clear(); prior_history_.clear(); pending_clouds_.clear();
+        prior_received_ = false; last_cloud_stamp_ = -1.0;
+    }
+    if (!motion_.samples.empty() && stamp > motion_.samples.back().stamp) {
+        const auto& prev=motion_.samples.back();
+        if (stamp-prev.stamp>0.25 || std::hypot(p.position.x-prev.x,p.position.y-prev.y)>2.0 ||
+            std::abs(gn10::angleDifference(tf2::getYaw(q),prev.yaw))>1.5) {
+            motion_.samples.clear(); prior_history_.clear();
+        }
+    }
+    motion_frame_ = msg->header.frame_id;
+    motion_.add({stamp,p.position.x,p.position.y,tf2::getYaw(q)});
+}
+
+void LocalizationNode::processCloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg, gn10::ScanPoints scan)
+{
     float h_transform[12];
     if (!getTransformAsArray(msg->header.frame_id, msg->header.stamp, h_transform)) {
         return;
     }
 
-    std::vector<float> h_raw_cloud = extractPointsFromMsg(msg);
+    if (!scan.valid) scan = gn10::decodeScan(*msg);
+    if (!scan.valid) return;
+    const double stamp = use_motion_ ? scan.end : scan.start;
+    if (stamp <= last_cloud_stamp_) return; // duplicates/out-of-order clouds cannot rewind state
+    std::vector<float> h_raw_cloud = std::move(scan.xyz);
+    if (use_motion_) {
+        const auto end_pose = motion_.at(stamp);
+        if (!end_pose) return;
+        // Convert LiDAR -> base at each acquisition time, then deskew to scan end.
+        for (size_t i=0; i<scan.times.size(); ++i) {
+            const auto at = motion_.at(scan.times[i]);
+            if (!at) return; // gap in motion history: do not manufacture a measurement
+            const float x=h_raw_cloud[3*i],y=h_raw_cloud[3*i+1],z=h_raw_cloud[3*i+2];
+            float bx=h_transform[0]*x+h_transform[1]*y+h_transform[2]*z+h_transform[3];
+            float by=h_transform[4]*x+h_transform[5]*y+h_transform[6]*z+h_transform[7];
+            float bz=h_transform[8]*x+h_transform[9]*y+h_transform[10]*z+h_transform[11];
+            gn10::MotionHistory::transformPoint(*at,*end_pose,bx,by);
+            h_raw_cloud[3*i]=bx; h_raw_cloud[3*i+1]=by; h_raw_cloud[3*i+2]=bz;
+        }
+        const float identity[12]={1,0,0,0,0,1,0,0,0,0,1,0};
+        std::copy(identity,identity+12,h_transform);
+    }
+    last_cloud_stamp_ = stamp;
+    const rclcpp::Time match_stamp(static_cast<int64_t>(std::llround(stamp * 1e9)));
     std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
     PoseCandidate best_pose;
     float best_cost = 0.0f;
@@ -259,15 +372,37 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     {
         std::lock_guard<std::mutex> lock(pose_mutex_);
         search_base_pose = predicted_pose_;
-        if (use_fused_prior_ && prior_received_) {
-            const double age = (rclcpp::Time(msg->header.stamp) - prior_stamp_).seconds();
-            if (std::abs(age) <= prior_max_age_s_) {
-                search_base_pose = fused_prior_;
-                has_fresh_prior = true;
+        if (!use_fused_prior_ && !imu_history_.empty()) {
+            const auto hi=std::upper_bound(imu_history_.begin(),imu_history_.end(),stamp,
+                [](double t,const auto& p){return t<p.stamp;});
+            if (hi!=imu_history_.begin()) {
+                const auto lo=std::prev(hi);
+                if (stamp-lo->stamp<=0.1) search_base_pose.yaw = last_known_pose_.yaw +
+                    lo->yaw - match_integrated_yaw_;
+            }
+        }
+        if (use_fused_prior_) {
+            // Use a past map prior propagated by continuous odometry to the exact scan end.
+            for (auto it=prior_history_.rbegin();it!=prior_history_.rend();++it) {
+                if (it->stamp > stamp + 1e-6) continue;
+                if (stamp-it->stamp > prior_max_age_s_) break;
+                auto from=motion_.at(it->stamp),to=motion_.at(stamp);
+                if (use_motion_ && from && to) {
+                    const auto p=gn10::MotionHistory::advance(*it,*from,*to);
+                    search_base_pose={static_cast<float>(p.x),static_cast<float>(p.y),static_cast<float>(p.yaw)};
+                    has_fresh_prior=true;
+                } else if (!use_motion_) {
+                    search_base_pose={static_cast<float>(it->x),static_cast<float>(it->y),static_cast<float>(it->yaw)};
+                    has_fresh_prior=true;
+                }
+                break;
             }
         }
     }
 
+    const float local_threshold = match_params_.robust_local ?
+        match_params_.robust_cost_threshold : match_params_.cost_threshold;
+    float acceptance_threshold = local_threshold;
     // A recent fused pose can reacquire locally even after the map matcher was lost.
     if (is_lost_ && has_fresh_prior) {
         matched = solver_->processPointCloud(
@@ -275,7 +410,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             dynamic_pts, best_pose, best_cost
         );
         if (matched && std::isfinite(best_cost) &&
-            best_cost < match_params_.cost_threshold) {
+            best_cost < local_threshold) {
             is_lost_ = false;
             lost_frame_count_ = 0;
         } else {
@@ -284,11 +419,12 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     }
 
-    if (is_lost_ && !matched) {
+    if (is_lost_ && !matched && !has_fresh_prior) {
+        acceptance_threshold = match_params_.cost_threshold;
         float current_prior_yaw = 0.0f;
         {
             std::lock_guard<std::mutex> lock(pose_mutex_);
-            current_prior_yaw = predicted_pose_.yaw;
+            current_prior_yaw = search_base_pose.yaw;
         }
 
         best_pose = global_searcher_->search(
@@ -310,7 +446,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                 this->get_logger(), "[GlobalSearch] Successfully recovered from lost state."
             );
         }
-    } else if (!matched) {
+    } else if (!matched && !is_lost_) {
         matched = solver_->processPointCloud(
             h_raw_cloud,
             h_transform,
@@ -322,15 +458,35 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             best_cost
         );
 
-        updateLostState(matched, best_cost);
+        updateLostState(matched, best_cost, local_threshold);
     }
 
-    if (matched && best_cost < match_params_.cost_threshold) {
-        publishPoseAndTransform(msg->header.stamp, best_pose);
+    const bool accepted = matched && std::isfinite(best_cost) && best_cost < acceptance_threshold;
+    if (accepted) ++match_accepted_; else ++match_rejected_;
+    diagnostic_msgs::msg::DiagnosticArray diagnostics;
+    diagnostics.header.stamp=match_stamp;
+    diagnostic_msgs::msg::DiagnosticStatus status;
+    status.name="gn10_matcher"; status.hardware_id="field_sdf";
+    status.level=accepted ? status.OK : status.WARN;
+    status.message=accepted ? "Map support accepted" : "Insufficient map support; no pose measurement";
+    const auto& quality=solver_->lastMatchStats();
+    auto value=[&](const std::string& key, auto v) {
+        diagnostic_msgs::msg::KeyValue kv; kv.key=key;kv.value=std::to_string(v);status.values.push_back(kv);
+    };
+    value("matches_accepted",match_accepted_);value("matches_rejected",match_rejected_);
+    value("cost",best_cost);value("threshold",acceptance_threshold);
+    value("support_count",quality.support_count);value("support_ratio",quality.support_ratio);
+    value("support_sectors",quality.sectors);
+    value("axis_x_support",quality.axis_x);value("axis_y_support",quality.axis_y);value("has_motion_prior",has_fresh_prior);
+    value("timing_drops",timing_drops_);value("deskewed",use_motion_);
+    diagnostics.status.push_back(status);pub_match_diagnostics_->publish(diagnostics);
+    if (accepted) {
+        publishPoseAndTransform(match_stamp, best_pose);
     }
 
     std_msgs::msg::Header out_header = msg->header;
     out_header.frame_id              = base_frame_;
+    out_header.stamp = match_stamp;
     const bool need_ground = pub_ground_->get_subscription_count() > 0;
     const bool need_obstacle = pub_obstacle_->get_subscription_count() > 0;
     if (need_ground || need_obstacle) {
@@ -348,16 +504,15 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
     std::lock_guard<std::mutex> lock(pose_mutex_);
 
-    static Eigen::Matrix3d R_base_imu = Eigen::Matrix3d::Identity();
-    static bool tf_initialized        = false;
-
-    if (!tf_initialized) {
+    if (use_fused_prior_ || use_motion_) return;
+    if (imu_frame_ != msg->header.frame_id) {
         try {
             geometry_msgs::msg::TransformStamped transform_stamped =
                 tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, tf2::TimePointZero);
             const Eigen::Affine3d eigen_tf = tf2::transformToEigen(transform_stamped);
-            R_base_imu                     = eigen_tf.rotation();
-            tf_initialized                 = true;
+            imu_rotation_ = eigen_tf.rotation();
+            imu_frame_ = msg->header.frame_id;
+            imu_initialized_ = false;
         } catch (const tf2::TransformException&) {
             return;
         }
@@ -370,20 +525,19 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
     }
 
     const double dt = (rclcpp::Time(msg->header.stamp) - last_imu_stamp_).seconds();
+    if (dt <= 0.0) return;
     last_imu_stamp_ = msg->header.stamp;
-
-    if (dt <= 0.0 || dt > 0.5) {
-        imu_initialized_ = false;
-        return;
-    }
+    if (dt > 0.5) return;
 
     const Eigen::Vector3d omega_imu(
         msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z
     );
-    const Eigen::Vector3d omega_base = R_base_imu * omega_imu;
-
-    predicted_pose_.yaw += static_cast<float>(omega_base.z() * dt);
-    predicted_pose_.yaw = std::atan2(std::sin(predicted_pose_.yaw), std::cos(predicted_pose_.yaw));
+    const Eigen::Vector3d omega_base = imu_rotation_ * omega_imu;
+    if (!omega_base.allFinite()) return;
+    integrated_yaw_ += omega_base.z() * dt;
+    imu_history_.push_back({rclcpp::Time(msg->header.stamp).seconds(),integrated_yaw_});
+    while (imu_history_.size()>2 && imu_history_.back().stamp-imu_history_.front().stamp>2.0)
+        imu_history_.pop_front();
 }
 
 void LocalizationNode::fusedPriorCallback(
@@ -393,13 +547,21 @@ void LocalizationNode::fusedPriorCallback(
     if (msg->header.frame_id != map_frame_) return;
     const auto& pose = msg->pose.pose;
     if (!std::isfinite(pose.position.x) || !std::isfinite(pose.position.y)) return;
-    const double yaw = tf2::getYaw(pose.orientation);
+    const auto& q=pose.orientation;
+    const double norm=q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w;
+    if (!std::isfinite(norm) || std::abs(norm-1.0)>0.01) return;
+    const double yaw = tf2::getYaw(q);
     if (!std::isfinite(yaw)) return;
     std::lock_guard<std::mutex> lock(pose_mutex_);
     fused_prior_ = {static_cast<float>(pose.position.x),
                     static_cast<float>(pose.position.y), static_cast<float>(yaw)};
     prior_stamp_ = msg->header.stamp;
     prior_received_ = true;
+    const double t=prior_stamp_.seconds();
+    if (prior_history_.empty() || t>prior_history_.back().stamp) {
+        prior_history_.push_back({t,pose.position.x,pose.position.y,yaw});
+        while(prior_history_.size()>2 && t-prior_history_.front().stamp>2.0) prior_history_.pop_front();
+    }
 }
 
 bool LocalizationNode::getTransformAsArray(
@@ -425,23 +587,12 @@ std::vector<float> LocalizationNode::extractPointsFromMsg(
     const sensor_msgs::msg::PointCloud2::SharedPtr& msg
 )
 {
-    std::vector<float> raw_cloud;
-    raw_cloud.reserve(msg->width * msg->height * 3);
-
-    sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x"), iter_y(*msg, "y"),
-        iter_z(*msg, "z");
-    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
-        if (std::isnan(*iter_x)) continue;
-        raw_cloud.push_back(*iter_x);
-        raw_cloud.push_back(*iter_y);
-        raw_cloud.push_back(*iter_z);
-    }
-    return raw_cloud;
+    return gn10::decodeScan(*msg).xyz;
 }
 
-void LocalizationNode::updateLostState(bool matched, float best_cost)
+void LocalizationNode::updateLostState(bool matched, float best_cost, float threshold)
 {
-    if (!matched || std::isnan(best_cost) || best_cost > match_params_.cost_threshold) {
+    if (!matched || std::isnan(best_cost) || best_cost > threshold) {
         lost_frame_count_++;
         RCLCPP_WARN(
             this->get_logger(),
@@ -463,6 +614,9 @@ void LocalizationNode::publishPoseAndTransform(const rclcpp::Time& stamp, const 
 {
     {
         std::lock_guard<std::mutex> lock(pose_mutex_);
+        const auto hi=std::upper_bound(imu_history_.begin(),imu_history_.end(),stamp.seconds(),
+            [](double t,const auto& p){return t<p.stamp;});
+        if (hi!=imu_history_.begin()) match_integrated_yaw_=std::prev(hi)->yaw;
         last_known_pose_ = pose;
         predicted_pose_  = pose;
     }

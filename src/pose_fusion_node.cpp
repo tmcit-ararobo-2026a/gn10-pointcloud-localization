@@ -85,6 +85,8 @@ public:
         const auto output_topic = declare_parameter<std::string>(
             "topics.output", "/platform_constraint"
         );
+        pub_motion_ = create_publisher<nav_msgs::msg::Odometry>(
+            declare_parameter<std::string>("topics.motion_output", "/gn10/odom_base"), 50);
         publisher_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
             output_topic, 20
         );
@@ -148,6 +150,10 @@ private:
     bool initializeExtrinsic()
     {
         if (body_to_base_) return true;
+        if (expected_body_frame_ == base_frame_) {
+            body_to_base_ = Eigen::Isometry3d::Identity();
+            return true;
+        }
         try {
             const auto base_to_lidar = tf_buffer_->lookupTransform(
                 base_frame_, lidar_frame_, tf2::TimePointZero
@@ -227,6 +233,15 @@ private:
                 );
             }
         }
+        nav_msgs::msg::Odometry base_motion;
+        base_motion.header = msg.header;
+        base_motion.header.frame_id = "gn10_motion_odom"; // origin at the first valid base pose
+        base_motion.child_frame_id = base_frame_;
+        base_motion.pose.pose.position.x = virtual_odom_.x;
+        base_motion.pose.pose.position.y = virtual_odom_.y;
+        base_motion.pose.pose.orientation.z = std::sin(virtual_odom_.yaw * 0.5);
+        base_motion.pose.pose.orientation.w = std::cos(virtual_odom_.yaw * 0.5);
+        pub_motion_->publish(base_motion);
         filter_.addOdometry(stamp, virtual_odom_);
         previous_odom_base_ = odom_base;
         previous_odom_stamp_ = stamp;
@@ -372,6 +387,7 @@ private:
         broadcaster_->sendTransform(transform);
     }
 
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_motion_;
     gn10::PoseFusionFilter filter_;
     bool constrain_to_floor_{true};
     std::string map_frame_, base_frame_, lidar_frame_, expected_odom_frame_, expected_body_frame_;

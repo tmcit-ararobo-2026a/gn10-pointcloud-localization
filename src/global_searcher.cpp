@@ -77,17 +77,23 @@ PoseCandidate GlobalSearcher::search(
     // Raw 点群による局所リファイン処理
     std::vector<float> dummy_dynamic;
     PoseCandidate refined_pose;
-    solver.processPointCloud(
+    auto strict_params = match_params;
+    strict_params.robust_local = false; // Never relax full-field reacquisition.
+    const bool refined = solver.processPointCloud(
         h_raw_cloud,
         h_transform,
         filter_params,
-        match_params,
+        strict_params,
         best_coarse_pose,
         dummy_dynamic,
         refined_pose,
         out_best_cost
     );
 
+    if (!refined) {
+        out_best_cost = std::numeric_limits<float>::max();
+        return best_coarse_pose;
+    }
     if (refined_pose.x < config_.range_min_x || refined_pose.x > config_.range_max_x ||
         refined_pose.y < config_.range_min_y || refined_pose.y > config_.range_max_y) {
         RCLCPP_WARN(logger_, "[GlobalSearch] Refined pose is outside the configured start area.");

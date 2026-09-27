@@ -8,10 +8,16 @@
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <memory>
+#include <Eigen/Core>
+#include <nav_msgs/msg/odometry.hpp>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include "gn10_pointcloud_localization/motion_history.hpp"
+#include "gn10_pointcloud_localization/scan_points.hpp"
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/header.hpp>
 #include <vector>
 #include <visualization_msgs/msg/marker_array.hpp>
 
@@ -33,6 +39,9 @@ private:
 
     // Callbacks
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+    void processCloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg, gn10::ScanPoints scan = {});
+    void drainClouds();
+    void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
     void fusedPriorCallback(
         const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg
@@ -43,7 +52,7 @@ private:
         const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
     );
     std::vector<float> extractPointsFromMsg(const sensor_msgs::msg::PointCloud2::SharedPtr& msg);
-    void updateLostState(bool matched, float best_cost);
+    void updateLostState(bool matched, float best_cost, float threshold);
     void publishPoseAndTransform(const rclcpp::Time& stamp, const PoseCandidate& pose);
 
     void publishCloud(
@@ -80,6 +89,22 @@ private:
     rclcpp::Time prior_stamp_;
     PoseCandidate fused_prior_;
     bool prior_received_{false};
+    uint64_t timing_drops_{0}, match_accepted_{0}, match_rejected_{0};
+    rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pub_match_diagnostics_;
+    bool use_motion_{false};
+    gn10::MotionHistory motion_;
+    std::deque<gn10::TimedPose> prior_history_;
+    struct PendingCloud { sensor_msgs::msg::PointCloud2::SharedPtr msg; std::chrono::steady_clock::time_point received; gn10::ScanPoints scan; };
+    std::deque<PendingCloud> pending_clouds_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_motion_;
+    rclcpp::TimerBase::SharedPtr motion_timer_;
+    std::string motion_frame_;
+    double last_cloud_stamp_{-1.0};
+    Eigen::Matrix3d imu_rotation_{Eigen::Matrix3d::Identity()};
+    std::string imu_frame_;
+    struct YawSample { double stamp, yaw; };
+    std::deque<YawSample> imu_history_;
+    double integrated_yaw_{0.0}, match_integrated_yaw_{0.0};
 
     // Pose State & Recovery State
     std::mutex pose_mutex_;

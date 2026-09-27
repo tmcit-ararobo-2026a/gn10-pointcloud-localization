@@ -13,6 +13,8 @@ static int g_num_map_objects = 0;
 
 static PoseCandidate* d_candidates = nullptr;
 static float* d_costs              = nullptr;
+struct MatchQuality { float residual_sum; int count; unsigned sectors; int axis_x, axis_y; };
+static MatchQuality* d_quality = nullptr;
 static int g_max_candidates        = 0;
 
 static uint8_t* d_is_dynamic = nullptr;
@@ -48,6 +50,9 @@ __global__ void evaluateFieldSDFKernel(
     int num_objects,
     const PoseCandidate* __restrict__ candidates,
     float* __restrict__ out_costs,
+    MatchQuality* __restrict__ out_quality,
+    float robust_distance,
+    float min_support_ratio, int min_support_count, int min_support_sectors, int min_axis_support,
     float max_dist_thresh,
     float field_min_x,
     float field_max_x,
@@ -65,6 +70,15 @@ __global__ void evaluateFieldSDFKernel(
     float cos_y = cosf(ryaw);
     float sin_y = sinf(ryaw);
 
+    __shared__ int s_axis_x[256], s_axis_y[256];
+    s_axis_x[tid]=0; s_axis_y[tid]=0;
+    __shared__ int s_count[256];
+    __shared__ unsigned s_sectors[256];
+    __shared__ float s_residual[256];
+    s_count[tid] = 0;
+    s_sectors[tid] = 0;
+    s_residual[tid] = 0.0f;
+    const float cap = robust_distance > 0 ? robust_distance : max_dist_thresh;
     __shared__ float s_cost[256];
     s_cost[tid]        = 0.0f;
 
@@ -81,11 +95,12 @@ __global__ void evaluateFieldSDFKernel(
         if (wx < field_min_x || wx > field_max_x || wy < field_min_y || wy > field_max_y) {
             // Keep every input point in the denominator. Otherwise a global
             // candidate can win by moving most returns outside the field.
-            s_cost[tid] += max_dist_thresh;
+            s_cost[tid] += cap;
             continue;
         }
 
         float min_d = max_dist_thresh;
+        unsigned axes=0;
 
         for (int o = 0; o < num_objects; ++o) {
             const FieldObject obj = c_map_objects[o];
@@ -96,22 +111,50 @@ __global__ void evaluateFieldSDFKernel(
                 } else if (obj.type == BOX) {
                     d = distToBoxSurface2D(wx, wy, obj.center_x, obj.center_y, obj.param1, obj.param2);
                 }
-                if (d < min_d) min_d = d;
+                if (d < min_d) {
+                    min_d = d;
+                    if (obj.type == CYLINDER) {
+                        float dx=fabsf(wx-obj.center_x),dy=fabsf(wy-obj.center_y);
+                        axes=(dx>0.3f*obj.param1 ? 1U:0U)|(dy>0.3f*obj.param1 ? 2U:0U);
+                    } else {
+                        float dx=fabsf(fabsf(wx-obj.center_x)-obj.param1);
+                        float dy=fabsf(fabsf(wy-obj.center_y)-obj.param2);
+                        axes=dx<dy ? 1U : 2U;
+                    }
+                }
             }
         }
-        s_cost[tid] += (min_d < max_dist_thresh) ? min_d : max_dist_thresh;
+        s_cost[tid] += fminf(min_d, cap);
+        if (robust_distance > 0 && min_d < robust_distance) {
+            ++s_count[tid];
+            s_axis_x[tid]+=(axes&1U)!=0; s_axis_y[tid]+=(axes&2U)!=0;
+            s_residual[tid] += min_d;
+            // Angular coverage prevents one small cluster from claiming a match.
+            int sector = static_cast<int>((atan2f(ly, lx) + 3.14159265f) * (8.0f / 6.2831853f));
+            sector = max(0, min(7, sector));
+            s_sectors[tid] |= 1U << sector;
+        }
     }
     __syncthreads();
 
     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
         if (tid < s) {
+            s_axis_x[tid] += s_axis_x[tid+s]; s_axis_y[tid] += s_axis_y[tid+s];
             s_cost[tid] += s_cost[tid + s];
+            s_residual[tid] += s_residual[tid + s];
+            s_count[tid] += s_count[tid + s];
+            s_sectors[tid] |= s_sectors[tid + s];
         }
         __syncthreads();
     }
 
     if (tid == 0) {
         out_costs[pose_idx] = s_cost[0] / static_cast<float>(num_points);
+        if (robust_distance > 0 && (s_count[0] < min_support_count ||
+            static_cast<float>(s_count[0]) / num_points < min_support_ratio ||
+            __popc(s_sectors[0]) < min_support_sectors ||
+            s_axis_x[0] < min_axis_support || s_axis_y[0] < min_axis_support)) out_costs[pose_idx] = FLT_MAX;
+        out_quality[pose_idx] = {s_residual[0], s_count[0], s_sectors[0], s_axis_x[0], s_axis_y[0]};
     }
 }
 
@@ -201,9 +244,16 @@ bool launchFieldSDFMatcher(
     PoseCandidate& out_best_pose,
     float& out_best_cost,
     std::vector<float>& out_dynamic_pts,
-    bool extract_dynamic
+    bool extract_dynamic,
+    float robust_distance,
+    float min_support_ratio,
+    int min_support_count,
+    int min_support_sectors,
+    FieldMatchStats* stats,
+    int min_axis_support
 )
 {
+    if (stats) *stats = {};
     if (num_points <= 0 || g_num_map_objects <= 0) return false;
 
     // 姿勢候補の生成 (Host)
@@ -223,12 +273,14 @@ bool launchFieldSDFMatcher(
     if (num_candidates > g_max_candidates) {
         if (d_candidates) cudaFree(d_candidates);
         if (d_costs) cudaFree(d_costs);
+        if (d_quality) cudaFree(d_quality);
         if (d_out_argmin) cudaFree(d_out_argmin);
         if (d_temp_storage) cudaFree(d_temp_storage);
 
         g_max_candidates = num_candidates * 2;
         cudaMalloc(&d_candidates, g_max_candidates * sizeof(PoseCandidate));
         cudaMalloc(&d_costs, g_max_candidates * sizeof(float));
+        cudaMalloc(&d_quality, g_max_candidates * sizeof(MatchQuality));
         cudaMalloc(&d_out_argmin, sizeof(cub::KeyValuePair<int, float>));
 
         // CUBの作業用テンポラリメモリ領域のサイズ計算
@@ -264,6 +316,9 @@ bool launchFieldSDFMatcher(
         g_num_map_objects,
         d_candidates,
         d_costs,
+        d_quality,
+        robust_distance,
+        min_support_ratio, min_support_count, min_support_sectors, min_axis_support,
         max_dist_thresh,
         field_min_x,
         field_max_x,
@@ -292,6 +347,21 @@ bool launchFieldSDFMatcher(
     int best_idx  = h_argmin.key;
     out_best_cost = h_argmin.value;
     out_best_pose = h_candidates[best_idx];
+    if (robust_distance > 0) {
+        MatchQuality quality{};
+        cudaMemcpyAsync(&quality, d_quality + best_idx, sizeof(quality), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        const float ratio = static_cast<float>(quality.count) / num_points;
+        const int sectors = __builtin_popcount(quality.sectors);
+        out_best_cost = quality.count > 0 ? quality.residual_sum / quality.count : FLT_MAX;
+        if (stats) *stats = {quality.count,ratio,sectors,quality.axis_x,quality.axis_y,out_best_cost};
+        if (quality.count < min_support_count || ratio < min_support_ratio ||
+            sectors < min_support_sectors || quality.axis_x < min_axis_support || quality.axis_y < min_axis_support) {
+            out_best_cost = FLT_MAX;
+            out_dynamic_pts.clear();
+            return false;
+        }
+    }
 
     // 動的点群のフィルタリング(GPU)
     out_dynamic_pts.clear();
@@ -341,8 +411,6 @@ bool launchFieldSDFMatcher(
             }
         }
     }
-
-    return true;
 
     return true;
 }

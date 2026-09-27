@@ -56,6 +56,7 @@ def generate_launch_description():
                 'topics.output_pose': '/platform_constraint_raw',
                 'topics.fused_prior': '/platform_constraint',
                 'fusion.use_prior': True,
+                'motion.use_odom': True,
                 'initial_pose.use_for_local_search': ParameterValue(
                     initial_pose_local_search, value_type=bool),
                 'initial_pose.x': ParameterValue(initial_pose_x, value_type=float),

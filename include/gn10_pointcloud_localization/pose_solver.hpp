@@ -20,6 +20,13 @@ struct MatchingParams {
     float range_yaw{0.15f};
     float step_yaw{0.02f};
     bool fine_refine{true};
+    bool robust_local{false};
+    float robust_distance{0.08f};
+    float robust_cost_threshold{0.045f};
+    float min_support_ratio{0.10f};
+    int min_support_count{100};
+    int min_support_sectors{3};
+    int min_axis_support{10};
     float max_dist_thresh{0.20f};
     float cost_threshold{0.165f};
     float dynamic_dist_thresh{0.15f};
@@ -35,6 +42,7 @@ public:
     explicit PoseSolver(int max_points = 200000);
     ~PoseSolver();
 
+    const FieldMatchStats& lastMatchStats() const { return stats_; }
     void setMap(const std::vector<FieldObject>& host_map);
 
     // 通常追従用（GroundFilter + SDF Matcher + Dynamic Point 抽出）
@@ -74,6 +82,7 @@ public:
     );
 
 private:
+    FieldMatchStats stats_;
     int max_points_;
     cudaStream_t stream_{nullptr};
 
