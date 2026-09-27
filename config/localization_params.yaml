@@ -20,6 +20,10 @@
       output_pose: "/platform_constraint"
       output_markers: "/field_map_markers"
 
+    motion:
+      scan_wait_s: 2.0 # wait bound only; process as soon as TF/odometry are ready
+      scan_queue_size: 30
+
     filter_params:
       max_range: 12.0
       robot_radius: 0.8

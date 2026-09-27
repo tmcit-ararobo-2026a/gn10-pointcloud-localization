@@ -15,6 +15,8 @@ def generate_launch_description():
     input_topic = LaunchConfiguration('input_cloud_topic')
     use_sim_time = LaunchConfiguration('use_sim_time')
     return LaunchDescription([
+        DeclareLaunchArgument('rviz_fixed_frame', default_value='map',
+                              description='RViz fixed frame (map by default)'),
         DeclareLaunchArgument('rviz_config', default_value=os.path.join(share, 'rviz', 'fusion.rviz')),
         IncludeLaunchDescription(PythonLaunchDescriptionSource(
             os.path.join(share, 'launch', 'fast_lio_fusion.launch.py'))),
@@ -26,7 +28,8 @@ def generate_launch_description():
         ),
         Node(
             package='rviz2', executable='rviz2', name='rviz2', output='screen',
-            arguments=['-d', LaunchConfiguration('rviz_config')],
+            arguments=['-d', LaunchConfiguration('rviz_config'),
+                       '-f', LaunchConfiguration('rviz_fixed_frame')],
             parameters=[{'use_sim_time': use_sim_time}],
             remappings=[('/gn10/rviz_cloud', PythonExpression([
                 "'", input_topic, "' if '", input_type,

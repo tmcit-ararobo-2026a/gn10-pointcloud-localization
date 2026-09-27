@@ -8,6 +8,7 @@ void require(bool v) {if(!v)throw std::runtime_error("scan motion check failed")
 int main(){
  gn10::MotionHistory h;require(h.add({1,0,0,3.13}));require(h.add({1.1,0.1,0,-3.13}));
  auto p=h.at(1.05);require(p&&std::abs(p->x-.05)<1e-6&&std::abs(std::abs(p->yaw)-3.14159265)<1e-5);
+ require(h.at(1.10005)&&!h.at(1.1002));
  require(!h.at(.99)&&!h.at(1.11)&&!h.add({1.05,0,0,0}));
  gn10::TimedPose a{1,0,0,0}, b{1.1,.1,0,0};float x=2,y=1;
  gn10::MotionHistory::transformPoint(a,b,x,y);require(std::abs(x-1.9)<1e-5&&y==1);

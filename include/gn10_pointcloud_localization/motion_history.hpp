@@ -25,15 +25,20 @@ public:
             !std::isfinite(p.y) || !std::isfinite(p.yaw)) return false;
         if (!samples.empty() && p.stamp <= samples.back().stamp) return false;
         samples.push_back(p);
-        while (samples.size() > 2 && p.stamp - samples.front().stamp > 2.0)
+        while (samples.size() > 2 && p.stamp - samples.front().stamp > 5.0)
             samples.pop_front();
         return true;
     }
 
     std::optional<TimedPose> at(double t) const
     {
-        if (samples.empty() || t < samples.front().stamp - 1e-6 ||
-            t > samples.back().stamp + 1e-6) return {};
+        // FAST-LIO may remove the last few returns during point filtering.
+        // Hold an endpoint only within 100 us; larger gaps remain unavailable.
+        constexpr double endpoint_slack_s = 1e-4;
+        if (samples.empty() || t < samples.front().stamp - endpoint_slack_s ||
+            t > samples.back().stamp + endpoint_slack_s) return {};
+        if (t <= samples.front().stamp) return samples.front();
+        if (t >= samples.back().stamp) return samples.back();
         const auto hi = std::lower_bound(samples.begin(), samples.end(), t,
             [](const auto& p, double v) { return p.stamp < v; });
         if (hi == samples.end()) return samples.back();

@@ -93,6 +93,8 @@ private:
     bool prior_received_{false};
     uint64_t timing_drops_{0}, match_accepted_{0}, match_rejected_{0};
     rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pub_match_diagnostics_;
+    double scan_wait_s_{2.0};
+    size_t scan_queue_size_{30};
     bool use_motion_{false};
     gn10::MotionHistory motion_;
     std::deque<gn10::TimedPose> prior_history_;

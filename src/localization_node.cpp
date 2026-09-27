@@ -80,6 +80,8 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.min_support_sectors", 3);
     this->declare_parameter("matching_params.min_axis_support", 10);
     this->declare_parameter("motion.use_odom", false);
+    this->declare_parameter("motion.scan_wait_s", 2.0);
+    this->declare_parameter("motion.scan_queue_size", 30);
     this->declare_parameter("topics.motion_odom", "/gn10/odom_base");
     this->declare_parameter("matching_params.max_dist_thresh", 0.20);
     this->declare_parameter("matching_params.cost_threshold", 0.165);
@@ -127,6 +129,12 @@ void LocalizationNode::declareAndGetParameters()
     match_params_.step_yaw =
         static_cast<float>(this->get_parameter("matching_params.search_step_yaw").as_double());
     use_motion_ = get_parameter("motion.use_odom").as_bool();
+    scan_wait_s_ = get_parameter("motion.scan_wait_s").as_double();
+    const auto queue_size = get_parameter("motion.scan_queue_size").as_int();
+    if (!std::isfinite(scan_wait_s_) || scan_wait_s_ <= 0 || scan_wait_s_ > 4.0 ||
+        queue_size < 1 || queue_size > 100)
+        throw std::invalid_argument("Invalid scan wait/queue parameters");
+    scan_queue_size_ = static_cast<size_t>(queue_size);
     match_params_.robust_local = get_parameter("matching_params.robust_local").as_bool();
     match_params_.robust_distance = get_parameter("matching_params.robust_distance").as_double();
     match_params_.robust_cost_threshold = get_parameter("matching_params.robust_cost_threshold").as_double();
@@ -309,7 +317,7 @@ void LocalizationNode::enqueueScan(const std_msgs::msg::Header& header, gn10::Sc
             "Dropping invalid scan (motion mode requires consistent per-point timestamps)");
         return;
     }
-    if (pending_clouds_.size() >= 5) { pending_clouds_.pop_front(); ++timing_drops_; }
+    if (pending_clouds_.size() >= scan_queue_size_) { pending_clouds_.pop_front(); ++timing_drops_; }
     pending_clouds_.push_back({header, std::chrono::steady_clock::now(), std::move(scan)});
 }
 
@@ -320,13 +328,20 @@ void LocalizationNode::drainClouds()
         const auto& header = pending_clouds_.front().header;
         const bool tf_ready = tf_buffer_->canTransform(base_frame_, header.frame_id, rclcpp::Time(header.stamp));
         const bool motion_ready = !use_motion_ || (motion_.at(scan.start) && motion_.at(scan.end));
+        const bool known_motion_gap = use_motion_ && !motion_ready && !motion_.samples.empty() &&
+            (scan.start < motion_.samples.front().stamp - 1e-4 ||
+             scan.end <= motion_.samples.back().stamp + 1e-4);
         if (tf_ready && motion_ready) {
             auto pending = std::move(pending_clouds_.front());
             pending_clouds_.pop_front();
             processScan(pending.header, std::move(pending.scan));
-        } else if (std::chrono::steady_clock::now() - pending_clouds_.front().received > std::chrono::milliseconds(300)) {
+        } else if (known_motion_gap ||
+            std::chrono::steady_clock::now() - pending_clouds_.front().received > std::chrono::duration<double>(scan_wait_s_)) {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-                "Dropping scan: TF or scan-start/end odometry unavailable (no extrapolation)");
+                "Dropping scan: TF=%d odom_start=%d odom_end=%d scan=%.6f..%.6f history=%.6f..%.6f",
+                tf_ready, static_cast<bool>(motion_.at(scan.start)), static_cast<bool>(motion_.at(scan.end)),
+                scan.start, scan.end, motion_.samples.empty() ? 0.0 : motion_.samples.front().stamp,
+                motion_.samples.empty() ? 0.0 : motion_.samples.back().stamp);
             pending_clouds_.pop_front(); ++timing_drops_;
         } else break;
     }
@@ -347,7 +362,7 @@ void LocalizationNode::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr
     }
     if (!motion_.samples.empty() && stamp > motion_.samples.back().stamp) {
         const auto& prev=motion_.samples.back();
-        if (stamp-prev.stamp>0.25 || std::hypot(p.position.x-prev.x,p.position.y-prev.y)>2.0 ||
+        if (stamp-prev.stamp>1.0 || std::hypot(p.position.x-prev.x,p.position.y-prev.y)>2.0 ||
             std::abs(gn10::angleDifference(tf2::getYaw(q),prev.yaw))>1.5) {
             motion_.samples.clear(); prior_history_.clear();
         }
@@ -584,7 +599,7 @@ void LocalizationNode::fusedPriorCallback(
     const double t=prior_stamp_.seconds();
     if (prior_history_.empty() || t>prior_history_.back().stamp) {
         prior_history_.push_back({t,pose.position.x,pose.position.y,yaw});
-        while(prior_history_.size()>2 && t-prior_history_.front().stamp>2.0) prior_history_.pop_front();
+        while(prior_history_.size()>2 && t-prior_history_.front().stamp>5.0) prior_history_.pop_front();
     }
 }
 

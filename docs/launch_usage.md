@@ -28,7 +28,7 @@ bag再生ではuse_sim_time:=trueを追加し、bagは別ターミナルから--
 
 ## RVizの設定
 
-- Fixed Frame: map
+- Fixed Frame: map（既定）。rviz_fixed_frameで別の基準フレームも指定できる。
 - フィールド地図: /field_map_markers（Transient Local）
 - 入力点群: PointCloud2。CustomMsg時は/gn10/rviz_cloudへ変換して表示。
 - PointCloud2入力時は元入力トピックをそのまま表示し、表示用変換ノードは起動しない。
@@ -49,3 +49,37 @@ CustomMsgの12秒分の再生で、RVizのOpenGL描画初期化、設定され�
 表示用PointCloud2出力120件を確認した。XYZ・header・点時刻を保持するテストを含む
 CTest5件も通過。PointCloud2既定入力ではRVizが/livox/lidarを直接購読することを確認。
 Qt offscreenではOgreの描画窓を作れなかったため、通常のxcb表示モードで検証した。
+
+## 09-03-walkで入力点群が出なかった原因と対応
+
+このbagのCustomMsgはpoint_num/timebase/offset_timeが正しく、変換条件を満たす。
+修正前のmap表示では、有効なmap→base_linkがない間、入力点群のTF待ちが続いて
+RVizのメッセージキューがあふれ、点群を表示できなかった。
+RVizの基準はmapを維持する。rviz_fixed_frameで基準フレームを明示指定できるが、
+有効なmap→base_linkがない状態で正しいmap点群を表示することはできない。
+
+```bash
+ros2 launch gn10_pointcloud_localization fast_lio_fusion_rviz.launch.py \
+  input_cloud_type:=custom_msg input_cloud_topic:=/livox/lidar use_sim_time:=true
+ros2 bag play /home/lambda/bag_files/09-03-walk --clock --topics /livox/lidar /livox/imu
+```
+
+bagは約105.6秒でLiDAR500件。メッセージ時刻は記録時刻より13–14秒古く、
+LiDARのヘッダー時刻間隔は中央値約100ms、最大約2.1秒の欠落がある。
+GN10が移動履歴不足でスキャンを破棄することは、表示用変換の失敗とは別。
+このbagで正しいフィールド自己位置が推定できることは未確認。
+
+### 修正後の再生結果
+
+同じ取り付け条件で09-03-walk全体を2倍再生した。RVizはmap表示を維持し、
+use_sim_time=trueと--clockを使用した。表示用PointCloud2は365件、
+地図マッチング処理228回（採用169回）、融合姿勢/map→base_linkは328件を記録。
+修正前の最初20秒の再現では、表示用PointCloud2は59件出ていたがmap TFは0件だった。
+比較区間が異なるため件数の比率を改善率とは扱わない。
+
+原因は表示用変換ではなく、オドメトリ待ちが短すぎてマッチングへ点群が届かなかったこと。
+待機を既定2秒・30スキャン、履歴を5秒にした。揃えば待機上限を待たずに即処理する。
+後から補えない既知の履歴欠落は即座に破棄し、後続の有効スキャンを処理する。
+FAST-LIOの末尾点間引きによる100µs以内の終端差は端の姿勢で扱う。
+それ以上の時刻欠落を外挿してmap TFを作ることはしない。
+推定の欠落は残っており、連続したmap表示や正しい絶対位置を保証する結果ではない。
