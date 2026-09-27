@@ -83,6 +83,10 @@ ament_target_dependencies(gn10_pointcloud_localization_node
   nlohmann_json
 )
 
+add_executable(livox_rviz_bridge src/livox_rviz_bridge.cpp)
+target_include_directories(livox_rviz_bridge PRIVATE include)
+ament_target_dependencies(livox_rviz_bridge rclcpp sensor_msgs livox_ros_driver2)
+
 add_executable(livox_pointcloud_bridge src/livox_pointcloud_bridge.cpp)
 ament_target_dependencies(livox_pointcloud_bridge rclcpp sensor_msgs livox_ros_driver2)
 
@@ -122,6 +126,7 @@ endif()
 install(TARGETS 
   gn10_pointcloud_localization_node
   livox_pointcloud_bridge
+  livox_rviz_bridge
   gn10_pose_fusion_node
   DESTINATION lib/${PROJECT_NAME}
 )
