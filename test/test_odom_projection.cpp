@@ -42,5 +42,13 @@ int main()
     require(near(fused.translation().z(), 0.05));
     require(near(std::atan2(fused.linear()(1, 0), fused.linear()(0, 0)), 1.2));
     require(near(fused.linear().determinant(), 1.0));
+    const auto level = gn10::reconstructMapBase({5.3, 2.4, 1.2}, first, 1.0, second, true);
+    require(near(level.translation().z(), 0.0));
+    require(near(level.translation().x(), 5.3));
+    require(near(level.translation().y(), 2.4));
+    require(near(level.linear()(2, 2), 1.0));
+    require(near(level.linear()(2, 0), 0.0));
+    require(near(level.linear()(2, 1), 0.0));
+    require(near(std::atan2(level.linear()(1, 0), level.linear()(0, 0)), 1.2));
     return 0;
 }

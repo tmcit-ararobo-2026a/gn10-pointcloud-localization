@@ -27,9 +27,17 @@ Eigen::Isometry3d reconstructMapBase(
     Pose2d fused,
     const Eigen::Isometry3d& anchor_odom_base,
     double anchor_map_yaw,
-    const Eigen::Isometry3d& current_odom_base
+    const Eigen::Isometry3d& current_odom_base,
+    bool constrain_to_floor
 )
 {
+    if (constrain_to_floor) {
+        Eigen::Isometry3d result = Eigen::Isometry3d::Identity();
+        result.linear() = Eigen::AngleAxisd(fused.yaw, Eigen::Vector3d::UnitZ())
+                              .toRotationMatrix();
+        result.translation() = Eigen::Vector3d(fused.x, fused.y, 0.0);
+        return result;
+    }
     const Eigen::Isometry3d relative = anchor_odom_base.inverse() * current_odom_base;
     const Eigen::Matrix3d anchored_rotation =
         Eigen::AngleAxisd(anchor_map_yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix() *

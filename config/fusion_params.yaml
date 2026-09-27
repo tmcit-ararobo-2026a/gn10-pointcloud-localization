@@ -15,6 +15,7 @@
       xyz: [-0.011, -0.02329, 0.04412]
       rpy: [0.0, 0.0, 0.0]
     fusion:
+      constrain_to_floor: true # planar field: map->base_link z/roll/pitch are fixed at zero
       history_s: 5.0
       max_odom_gap_s: 1.0
       max_odom_step_m: 2.0

@@ -58,6 +58,7 @@ public:
         expected_odom_frame_ =
             declare_parameter<std::string>("frames.odom_frame", "camera_init");
         expected_body_frame_ = declare_parameter<std::string>("frames.body_frame", "body");
+        constrain_to_floor_ = declare_parameter<bool>("fusion.constrain_to_floor", true);
         const auto extrinsic = declare_parameter<std::vector<double>>(
             "imu_to_lidar.xyz", {-0.011, -0.02329, 0.04412}
         );
@@ -339,7 +340,7 @@ private:
         const auto state = filter_.pose();
         const auto covariance = filter_.covariance();
         const Eigen::Isometry3d map_base = gn10::reconstructMapBase(
-            state, *anchor_odom_base_, anchor_map_yaw_, odom_base
+            state, *anchor_odom_base_, anchor_map_yaw_, odom_base, constrain_to_floor_
         );
         const Eigen::Quaterniond q(map_base.linear());
         geometry_msgs::msg::PoseWithCovarianceStamped pose;
@@ -372,6 +373,7 @@ private:
     }
 
     gn10::PoseFusionFilter filter_;
+    bool constrain_to_floor_{true};
     std::string map_frame_, base_frame_, lidar_frame_, expected_odom_frame_, expected_body_frame_;
     Eigen::Isometry3d lidar_to_imu_;
     std::optional<Eigen::Isometry3d> body_to_base_;

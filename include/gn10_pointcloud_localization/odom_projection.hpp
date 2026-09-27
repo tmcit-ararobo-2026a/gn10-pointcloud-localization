@@ -15,13 +15,14 @@ Pose2d integrateBodyMotion(
 );
 
 // Anchor FAST-LIO's arbitrary 3D world to a level map pose at the first match.
-// Subsequent x, y and yaw come from the fusion filter; relative height and tilt
-// come from FAST-LIO, so the map TF can transform the raw LiDAR cloud correctly.
+// x, y and yaw come from fusion. With constrain_to_floor, z/roll/pitch are zero;
+// otherwise FAST-LIO relative height and tilt are retained without map correction.
 Eigen::Isometry3d reconstructMapBase(
     Pose2d fused,
     const Eigen::Isometry3d& anchor_odom_base,
     double anchor_map_yaw,
-    const Eigen::Isometry3d& current_odom_base
+    const Eigen::Isometry3d& current_odom_base,
+    bool constrain_to_floor = false
 );
 
 }  // namespace gn10
