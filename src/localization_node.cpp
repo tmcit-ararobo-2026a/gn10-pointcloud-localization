@@ -45,6 +45,10 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("frames.base_frame", "base_link");
 
     this->declare_parameter("topics.input_cloud", "/livox/lidar");
+    rcl_interfaces::msg::ParameterDescriptor input_type_descriptor;
+    input_type_descriptor.read_only = true;
+    input_type_descriptor.description = "LiDAR message type selected at startup: pointcloud2 or custom_msg";
+    this->declare_parameter("input_cloud_type", "pointcloud2", input_type_descriptor);
     this->declare_parameter("topics.input_imu", "/livox/imu");
     this->declare_parameter("topics.output_dynamic", "/dynamic_cloud");
     this->declare_parameter("topics.output_ground", "/ground_cloud");
@@ -221,6 +225,12 @@ void LocalizationNode::setupROSInterfaces()
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     std::string topic_cloud = this->get_parameter("topics.input_cloud").as_string();
+    const auto input_type = get_parameter("input_cloud_type").as_string();
+    if (input_type == "custom_msg") {
+        sub_custom_cloud_ = create_subscription<livox_ros_driver2::msg::CustomMsg>(
+            topic_cloud, rclcpp::SensorDataQoS(),
+            std::bind(&LocalizationNode::customCloudCallback, this, std::placeholders::_1));
+    } else if (input_type == "pointcloud2") {
     sub_cloud_filter_.subscribe(this, topic_cloud, rmw_qos_profile_sensor_data);
     tf_filter_ = std::make_shared<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>>(
         sub_cloud_filter_,
@@ -232,6 +242,10 @@ void LocalizationNode::setupROSInterfaces()
         std::chrono::milliseconds(100)
     );
     tf_filter_->registerCallback(&LocalizationNode::cloudCallback, this);
+    } else {
+        throw std::invalid_argument("input_cloud_type must be pointcloud2 or custom_msg");
+    }
+    RCLCPP_INFO(get_logger(), "LiDAR input: %s (%s)", topic_cloud.c_str(), input_type.c_str());
 
     std::string topic_imu = this->get_parameter("topics.input_imu").as_string();
     sub_imu_              = this->create_subscription<sensor_msgs::msg::Imu>(
@@ -253,9 +267,9 @@ void LocalizationNode::setupROSInterfaces()
         sub_motion_ = create_subscription<nav_msgs::msg::Odometry>(
             get_parameter("topics.motion_odom").as_string(), 50,
             std::bind(&LocalizationNode::odometryCallback, this, std::placeholders::_1));
-        motion_timer_ = create_wall_timer(std::chrono::milliseconds(10),
-            std::bind(&LocalizationNode::drainClouds, this));
     }
+    motion_timer_ = create_wall_timer(std::chrono::milliseconds(10),
+        std::bind(&LocalizationNode::drainClouds, this));
     pub_dynamic_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         this->get_parameter("topics.output_dynamic").as_string(), 10
     );
@@ -279,29 +293,40 @@ void LocalizationNode::setupROSInterfaces()
 
 void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
-    if (!use_motion_) { processCloud(msg); return; }
-    auto scan = gn10::decodeScan(*msg);
-    if (!scan.valid || !scan.timed) {
+    enqueueScan(msg->header, gn10::decodeScan(*msg));
+}
+
+void LocalizationNode::customCloudCallback(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
+{
+    enqueueScan(msg->header, gn10::decodeScan(*msg));
+}
+
+void LocalizationNode::enqueueScan(const std_msgs::msg::Header& header, gn10::ScanPoints scan)
+{
+    if (!scan.valid || (use_motion_ && !scan.timed)) {
         ++timing_drops_;
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-            "Dropping scan: motion mode requires valid timestamp(ns FLOAT64) or offset_time(ns UINT32)");
+            "Dropping invalid scan (motion mode requires consistent per-point timestamps)");
         return;
     }
     if (pending_clouds_.size() >= 5) { pending_clouds_.pop_front(); ++timing_drops_; }
-    pending_clouds_.push_back({msg, std::chrono::steady_clock::now(), std::move(scan)});
+    pending_clouds_.push_back({header, std::chrono::steady_clock::now(), std::move(scan)});
 }
 
 void LocalizationNode::drainClouds()
 {
     while (!pending_clouds_.empty()) {
         const auto& scan = pending_clouds_.front().scan;
-        if (motion_.at(scan.start) && motion_.at(scan.end)) {
+        const auto& header = pending_clouds_.front().header;
+        const bool tf_ready = tf_buffer_->canTransform(base_frame_, header.frame_id, rclcpp::Time(header.stamp));
+        const bool motion_ready = !use_motion_ || (motion_.at(scan.start) && motion_.at(scan.end));
+        if (tf_ready && motion_ready) {
             auto pending = std::move(pending_clouds_.front());
             pending_clouds_.pop_front();
-            processCloud(pending.msg, std::move(pending.scan));
+            processScan(pending.header, std::move(pending.scan));
         } else if (std::chrono::steady_clock::now() - pending_clouds_.front().received > std::chrono::milliseconds(300)) {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-                "Dropping scan: odometry does not cover scan start/end (no extrapolation)");
+                "Dropping scan: TF or scan-start/end odometry unavailable (no extrapolation)");
             pending_clouds_.pop_front(); ++timing_drops_;
         } else break;
     }
@@ -331,14 +356,13 @@ void LocalizationNode::odometryCallback(const nav_msgs::msg::Odometry::SharedPtr
     motion_.add({stamp,p.position.x,p.position.y,tf2::getYaw(q)});
 }
 
-void LocalizationNode::processCloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg, gn10::ScanPoints scan)
+void LocalizationNode::processScan(const std_msgs::msg::Header& header, gn10::ScanPoints scan)
 {
     float h_transform[12];
-    if (!getTransformAsArray(msg->header.frame_id, msg->header.stamp, h_transform)) {
+    if (!getTransformAsArray(header.frame_id, header.stamp, h_transform)) {
         return;
     }
 
-    if (!scan.valid) scan = gn10::decodeScan(*msg);
     if (!scan.valid) return;
     const double stamp = use_motion_ ? scan.end : scan.start;
     if (stamp <= last_cloud_stamp_) return; // duplicates/out-of-order clouds cannot rewind state
@@ -484,7 +508,7 @@ void LocalizationNode::processCloud(const sensor_msgs::msg::PointCloud2::SharedP
         publishPoseAndTransform(match_stamp, best_pose);
     }
 
-    std_msgs::msg::Header out_header = msg->header;
+    std_msgs::msg::Header out_header = header;
     out_header.frame_id              = base_frame_;
     out_header.stamp = match_stamp;
     const bool need_ground = pub_ground_->get_subscription_count() > 0;
@@ -581,13 +605,6 @@ bool LocalizationNode::getTransformAsArray(
         RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
         return false;
     }
-}
-
-std::vector<float> LocalizationNode::extractPointsFromMsg(
-    const sensor_msgs::msg::PointCloud2::SharedPtr& msg
-)
-{
-    return gn10::decodeScan(*msg).xyz;
 }
 
 void LocalizationNode::updateLostState(bool matched, float best_cost, float threshold)

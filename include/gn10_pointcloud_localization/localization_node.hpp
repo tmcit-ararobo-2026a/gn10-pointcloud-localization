@@ -13,6 +13,7 @@
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include "gn10_pointcloud_localization/motion_history.hpp"
 #include "gn10_pointcloud_localization/scan_points.hpp"
+#include "gn10_pointcloud_localization/custom_scan.hpp"
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -39,7 +40,9 @@ private:
 
     // Callbacks
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
-    void processCloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg, gn10::ScanPoints scan = {});
+    void customCloudCallback(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg);
+    void enqueueScan(const std_msgs::msg::Header& header, gn10::ScanPoints scan);
+    void processScan(const std_msgs::msg::Header& header, gn10::ScanPoints scan);
     void drainClouds();
     void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
@@ -51,7 +54,6 @@ private:
     bool getTransformAsArray(
         const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
     );
-    std::vector<float> extractPointsFromMsg(const sensor_msgs::msg::PointCloud2::SharedPtr& msg);
     void updateLostState(bool matched, float best_cost, float threshold);
     void publishPoseAndTransform(const rclcpp::Time& stamp, const PoseCandidate& pose);
 
@@ -94,7 +96,7 @@ private:
     bool use_motion_{false};
     gn10::MotionHistory motion_;
     std::deque<gn10::TimedPose> prior_history_;
-    struct PendingCloud { sensor_msgs::msg::PointCloud2::SharedPtr msg; std::chrono::steady_clock::time_point received; gn10::ScanPoints scan; };
+    struct PendingCloud { std_msgs::msg::Header header; std::chrono::steady_clock::time_point received; gn10::ScanPoints scan; };
     std::deque<PendingCloud> pending_clouds_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_motion_;
     rclcpp::TimerBase::SharedPtr motion_timer_;
@@ -120,6 +122,7 @@ private:
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
+    rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr sub_custom_cloud_;
     message_filters::Subscriber<sensor_msgs::msg::PointCloud2> sub_cloud_filter_;
     std::shared_ptr<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>> tf_filter_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;

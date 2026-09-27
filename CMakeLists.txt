@@ -71,6 +71,7 @@ target_link_libraries(gn10_pointcloud_localization_node
 ament_target_dependencies(gn10_pointcloud_localization_node
   rclcpp
   sensor_msgs
+  livox_ros_driver2
   nav_msgs
   diagnostic_msgs
   geometry_msgs
@@ -98,7 +99,7 @@ if(BUILD_TESTING)
   enable_testing()
   add_executable(test_scan_motion test/test_scan_motion.cpp)
   target_include_directories(test_scan_motion PRIVATE include)
-  ament_target_dependencies(test_scan_motion sensor_msgs)
+  ament_target_dependencies(test_scan_motion sensor_msgs livox_ros_driver2)
   add_test(NAME scan_motion COMMAND test_scan_motion)
   add_executable(test_pose_fusion_filter test/test_pose_fusion_filter.cpp)
   target_link_libraries(test_pose_fusion_filter gn10_pose_fusion_filter)

@@ -1,5 +1,6 @@
 #include "gn10_pointcloud_localization/motion_history.hpp"
 #include "gn10_pointcloud_localization/scan_points.hpp"
+#include "gn10_pointcloud_localization/custom_scan.hpp"
 #include <stdexcept>
 #include <iostream>
 void require(bool v) {if(!v)throw std::runtime_error("scan motion check failed");}
@@ -19,6 +20,12 @@ int main(){
  sensor_msgs::msg::PointField t;t.name="timestamp";t.offset=16;t.datatype=8;t.count=1;msg.fields.push_back(t);
  for(int i=0;i<2;++i){float x=2,y=0,z=1;double ns=1e9+i*1e8;auto d=msg.data.data()+i*32;std::memcpy(d,&x,4);std::memcpy(d+4,&y,4);std::memcpy(d+8,&z,4);std::memcpy(d+16,&ns,8);}
  auto s=gn10::decodeScan(msg);require(s.valid&&s.timed&&s.xyz.size()==6&&std::abs(s.end-1.1)<1e-6);
+ livox_ros_driver2::msg::CustomMsg custom;custom.header=msg.header;custom.timebase=1000000000;custom.point_num=2;
+ for(int i=0;i<2;++i){livox_ros_driver2::msg::CustomPoint p;p.x=2;p.y=0;p.z=1;p.offset_time=i*100000000;custom.points.push_back(p);}
+ auto native=gn10::decodeScan(custom);require(native.valid&&native.timed&&native.xyz==s.xyz&&native.times==s.times&&native.end==s.end);
+ custom.point_num=1;require(!gn10::decodeScan(custom).valid);custom.point_num=2;
+ custom.timebase+=10000000;require(!gn10::decodeScan(custom).valid);custom.timebase=1000000000;
+ custom.points.back().offset_time=300000000;require(!gn10::decodeScan(custom).valid);
  double bad=1e9+1e9;std::memcpy(msg.data.data()+48,&bad,8);require(!gn10::decodeScan(msg).valid);
  msg.fields.pop_back();s=gn10::decodeScan(msg);require(s.valid&&!s.timed);
  msg.row_step=1;require(!gn10::decodeScan(msg).valid);
