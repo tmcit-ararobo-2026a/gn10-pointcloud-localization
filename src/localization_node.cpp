@@ -85,10 +85,10 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.field_min_y", -6.0);
     this->declare_parameter("matching_params.field_max_y", 6.0);
 
-    this->declare_parameter("global_search.range_min_x", -5.25);
-    this->declare_parameter("global_search.range_max_x", 5.25);
-    this->declare_parameter("global_search.range_min_y", -5.70);
-    this->declare_parameter("global_search.range_max_y", 5.70);
+    this->declare_parameter("global_search.range_min_x", -6.40);
+    this->declare_parameter("global_search.range_max_x", 6.40);
+    this->declare_parameter("global_search.range_min_y", -6.40);
+    this->declare_parameter("global_search.range_max_y", 6.40);
     this->declare_parameter("global_search.range_yaw_diff", 0.7854);
     this->declare_parameter("global_search.step_xy", 0.30);
     this->declare_parameter("global_search.step_yaw", 0.2618);

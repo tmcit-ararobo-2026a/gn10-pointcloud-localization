@@ -50,10 +50,10 @@
       yaw: 0.0
     
     global_search:
-      range_min_x: -5.25        # 探索範囲 X 最小値 [m]
-      range_max_x:  5.25        # 探索範囲 X 最大値 [m]
-      range_min_y: -5.70        # 探索範囲 Y 最小値 [m]
-      range_max_y:  5.70        # 探索範囲 Y 最大値 [m]
+      range_min_x: -6.40        # 開始位置がフィールド外側でも探索できる範囲 [m]
+      range_max_x:  6.40        # 探索範囲 X 最大値 [m]
+      range_min_y: -6.40        # 開始位置がフィールド外側でも探索できる範囲 [m]
+      range_max_y:  6.40        # 探索範囲 Y 最大値 [m]
       range_yaw_diff: 3.1415   # 探索範囲 Yaw 差分最大値 [rad]
       step_xy: 0.30            # グローバルサーチのXY検索ピッチ [m]
       step_yaw: 0.3            # グローバルサーチのYaw検索ピッチ [rad]
