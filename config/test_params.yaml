@@ -1,7 +1,7 @@
 /**:
   ros__parameters:
     map_source_type: "json" # "json" または "ros2_param"
-    map_file_path: "/home/ararobo/ros2_ws/src/gn10-pointcloud-localization/config/test.json"       # 空文字列の場合はパッケージ相対パス等を使用
+    map_file_path: "/home/gn10/ros2_ws/src/gn10-pointcloud-localization/config/test.json"       # 空文字列の場合はパッケージ相対パス等を使用
     
     # map_source_type が "ros2_param" の場合に使用
     # map_objects: ["BOX,0.0,5.7,0.0,0.15,5.25,0.05", "CYLINDER,0.55,0.87,0.0,0.255,0.1365,0.0"]
@@ -47,14 +47,14 @@
     initial_pose:
       use_for_local_search: false
       x: 0.0
-      y: 1.2
+      y: 0.0
       yaw: 0.0
     
     global_search:
-      range_min_x: -5.25        # 探索範囲 X 最小値 [m]
-      range_max_x:  5.25        # 探索範囲 X 最大値 [m]
-      range_min_y: -5.70        # 探索範囲 Y 最小値 [m]
-      range_max_y:  5.70        # 探索範囲 Y 最大値 [m]
+      range_min_x: -1.0        # 探索範囲 X 最小値 [m]
+      range_max_x:  1.0        # 探索範囲 X 最大値 [m]
+      range_min_y: -1.0        # 探索範囲 Y 最小値 [m]
+      range_max_y:  1.0        # 探索範囲 Y 最大値 [m]
       range_yaw_diff: 1.0   # 探索範囲 Yaw 差分最大値 [rad]
       step_xy: 0.30            # グローバルサーチのXY検索ピッチ [m]
       step_yaw: 0.3            # グローバルサーチのYaw検索ピッチ [rad]
