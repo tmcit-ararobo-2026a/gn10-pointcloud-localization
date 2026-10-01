@@ -44,12 +44,12 @@ def generate_launch_description():
         ],
     )
 
-    static_tf_node = Node(
+    livox_tf_node = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='livox_tf',
         arguments=[
-            '--x', '0.2',
+            '--x', '0.24',
             '--y', '-0.25',
             '--z', '1.09',
             '--yaw', '0.0',
@@ -65,23 +65,21 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='lakibeam_tf',
         arguments=[
-            '--x', '-0.30',
+            '--x', '-0.4',
             '--y', '0.0',
-            '--z', '0.20',
+            '--z', '0.08',
             '--yaw', '3.14159',
             '--pitch', '0.0',
             '--roll', '0.0',
             '--frame-id', 'base_link',
             '--child-frame-id', 'lakibeam_frame'
-        ],
-        condition=IfCondition(LaunchConfiguration('start_lakibeam_tf'))
+        ]
     )
 
     return LaunchDescription([
         declare_use_sim_time,
         declare_params_file,
-        declare_lakibeam_tf,
         localization_node,
-        static_tf_node,
+        livox_tf_node,
         lakibeam_tf_node
     ])
