@@ -46,9 +46,9 @@
 
     initial_pose:
       use_for_local_search: false
-      x: -4.57
-      y: 1.9
-      yaw: 1.57
+      x: 0.0
+      y: 1.2
+      yaw: 0.0
     
     global_search:
       range_min_x: -5.25        # 探索範囲 X 最小値 [m]
