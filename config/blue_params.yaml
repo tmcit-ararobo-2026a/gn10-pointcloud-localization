@@ -1,7 +1,10 @@
 /**:
   ros__parameters:
-    map_source_type: "json" # "json" または "ros2_param"
+    map_source_type: "json" # "json", "pcd", "esdf", または "ros2_param"
     map_file_path: ""       # 空文字列の場合はパッケージ相対パス等を使用
+    esdf:
+      resolution: 0.05      # ESDF グリッド解像度 [m]
+      max_dist: 0.50        # ESDF 最大距離しきい値 [m]
     
     # map_source_type が "ros2_param" の場合に使用
     # map_objects: ["BOX,0.0,5.7,0.0,0.15,5.25,0.05", "CYLINDER,0.55,0.87,0.0,0.255,0.1365,0.0"]
@@ -33,7 +36,7 @@
       search_range_yaw: 0.6
       search_step_yaw: 0.05
       fine_refine: true # 125 local candidates around the coarse best pose
-      max_dist_thresh: 0.2
+      max_dist_thresh: 0.25
       cost_threshold: 0.165  # all-point mean clipped unsigned surface distance [m]
       inlier_dist_thresh: 0.08 # [m] 距離がこの値以下の点をマップ合致(Inlier)とみなす
       min_inliers: 60          # 動的障害物があってもマッチング成立とする最小Inlier点数

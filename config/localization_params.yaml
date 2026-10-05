@@ -36,8 +36,8 @@
       search_range_yaw: 0.6
       search_step_yaw: 0.05
       fine_refine: true # 125 local candidates around the coarse best pose
-      max_dist_thresh: 0.2
-      cost_threshold: 0.2  # all-point mean clipped unsigned surface distance [m]
+      max_dist_thresh: 0.25
+      cost_threshold: 0.165  # all-point mean clipped unsigned surface distance [m]
       inlier_dist_thresh: 0.08 # [m] 距離がこの値以下の点をマップ合致(Inlier)とみなす
       min_inliers: 60          # 動的障害物があってもマッチング成立とする最小Inlier点数
       inlier_cost_thresh: 0.05 # [m] Inlier点の平均残差しきい値
