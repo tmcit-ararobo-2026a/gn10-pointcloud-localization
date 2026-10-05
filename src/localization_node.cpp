@@ -6,6 +6,7 @@
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cmath>
+#include <filesystem>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -181,6 +182,23 @@ void LocalizationNode::setupMapData()
     float esdf_res         = static_cast<float>(this->get_parameter("esdf.resolution").as_double());
     float esdf_max_dist    = static_cast<float>(this->get_parameter("esdf.max_dist").as_double());
 
+    // 相対パスの場合、パッケージの map/ ディレクトリを基準に探索
+    if (!file_path.empty()) {
+        std::filesystem::path p(file_path);
+        if (p.is_relative()) {
+            std::string package_share =
+                ament_index_cpp::get_package_share_directory("gn10_pointcloud_localization");
+            std::filesystem::path map_dir_path =
+                std::filesystem::path(package_share) / "map" / p;
+            if (std::filesystem::exists(map_dir_path)) {
+                file_path = map_dir_path.string();
+            } else {
+                // share側になければソース側の map ディレクトリもチェック（シンボリックリンクや開発時対応）
+                file_path = map_dir_path.string();
+            }
+        }
+    }
+
     if (map_source == "esdf") {
         if (file_path.empty()) {
             RCLCPP_ERROR(this->get_logger(), "map_source_type is 'esdf' but map_file_path is empty!");
@@ -235,7 +253,7 @@ void LocalizationNode::setupMapData()
         if (json_path.empty()) {
             json_path =
                 ament_index_cpp::get_package_share_directory("gn10_pointcloud_localization") +
-                "/config/nhk2026_map.json";
+                "/map/nhk2026_map.json";
         }
         map_objects_ = MapLoader::loadFromJSON(json_path);
     } else if (map_source == "ros2_param") {

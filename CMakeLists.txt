@@ -115,7 +115,7 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY launch config rviz
+install(DIRECTORY launch config rviz map
   DESTINATION share/${PROJECT_NAME}
 )
 
