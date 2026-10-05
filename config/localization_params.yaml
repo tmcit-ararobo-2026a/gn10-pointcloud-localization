@@ -1,65 +1,102 @@
 /**:
   ros__parameters:
-    map_source_type: "json" # "json", "pcd", "esdf", または "ros2_param"
-    map_file_path: ""       # 空文字列の場合はパッケージ相対パス等を使用
+    # ----------------------------------------------------------------------------------
+    # マップ読み込み設定
+    # ----------------------------------------------------------------------------------
+    # map_source_type:
+    #   - "json"       : config/nhk2026_map.json 等の直方体・円柱幾何定義 (起動時に自動で3D ESDFテクスチャ化)
+    #   - "pcd"        : Point Cloud Data (.pcd) ファイル。自動でキャッシュ (.esdf) を作成/読込
+    #   - "esdf"       : 事前生成されたバイナリ距離場 (.esdf) を直接 GPU 3D テクスチャにロード
+    #   - "ros2_param" : map_objects パラメータ配列から直接読み込み
+    map_source_type: "json"
+
+    # map_file_path:
+    #   マップファイルのパス。
+    #   - 絶対パス ("/home/...") の場合は指定先を直接参照
+    #   - 相対パス ("map.pcd", "test.esdf" など) の場合はパッケージ内の map/ ディレクトリから自動探索
+    #   - 空文字列かつ json の場合はデフォルトの nhk2026_map.json を参照
+    map_file_path: ""
+
+    # 3D ESDF (Euclidean Signed/Unsigned Distance Field) 設定
     esdf:
-      resolution: 0.05      # ESDF グリッド解像度 [m]
-      max_dist: 0.50        # ESDF 最大距離しきい値 [m]
+      resolution: 0.05      # [m] 3D グリッドのセル解像度。小さくするほど微細な壁形状を再現可能 (0.03〜0.05m 推奨)
+      max_dist: 0.50        # [m] 距離場の上限クリッピング距離。GPU テクスチャ内の最大距離 (メモリ削減としきい値外打ち切り)
     
     # map_source_type が "ros2_param" の場合に使用
     # map_objects: ["BOX,0.0,5.7,0.0,0.15,5.25,0.05", "CYLINDER,0.55,0.87,0.0,0.255,0.1365,0.0"]
 
+    # ----------------------------------------------------------------------------------
+    # TF フレーム設定
+    # ----------------------------------------------------------------------------------
     frames:
-      map_frame: "map"
-      base_frame: "base_link"
+      map_frame: "map"         # 固定マップ座標系
+      base_frame: "base_link"  # ロボット基準座標系
 
+    # ----------------------------------------------------------------------------------
+    # トピック設定
+    # ----------------------------------------------------------------------------------
     topics:
-      input_cloud: "/livox/lidar"
-      input_imu: "/livox/imu"
-      output_dynamic: "/dynamic_cloud"
-      output_ground: "/ground_cloud"
-      output_obstacle: "/obstacle_cloud"
-      output_pose: "/platform_constraint"
-      output_markers: "/field_map_markers"
+      input_cloud: "/livox/lidar"             # 3D LiDAR (PointCloud2) 入力トピック
+      input_imu: "/livox/imu"                 # IMU 入力トピック (角速度積分による予測更新)
+      output_dynamic: "/dynamic_cloud"        # 静的マップから外れた動的障害物点群
+      output_ground: "/ground_cloud"          # 地面フィルタで除去された床面点群
+      output_obstacle: "/obstacle_cloud"      # 障害物としてマッチングに使用された点群
+      output_pose: "/platform_constraint"     # 推定自己位置 (PoseWithCovarianceStamped)
+      output_markers: "/field_map_markers"    # RViz 可視化用フィールドマーカー
 
+    # ----------------------------------------------------------------------------------
+    # 点群前処理 (GroundFilter) パラメータ
+    # ----------------------------------------------------------------------------------
     filter_params:
-      max_range: 12.0
-      robot_radius: 0.8
-      robot_height_min: 0.0
-      robot_height_max: 1.2
-      ground_z_thresh: 0.04
-      max_points: 200000
+      max_range: 12.0          # [m] 処理対象とする LiDAR 点群の最大距離 (遠方のノイズ除去)
+      robot_radius: 0.8        # [m] ロボット自身（車体フレーム・アーム等）を除外する自己半径
+      robot_height_min: 0.0    # [m] base_link から見た障害物点群の有効下限高さ
+      robot_height_max: 1.2    # [m] base_link から見た障害物点群の有効上限高さ (天井や高架構造を除去)
+      ground_z_thresh: 0.04    # [m] 床面判定の許容しきい値。これ以下の高さの点をグラウンドとして除去
+      max_points: 200000       # GPU 上で確保する最大点群バッファ数
 
+    # ----------------------------------------------------------------------------------
+    # スキャンマッチング (3D ESDF テクスチャ参照) パラメータ
+    # ----------------------------------------------------------------------------------
     matching_params:
-      search_range_xy: 0.30
-      search_step_xy: 0.05
-      search_range_yaw: 0.6
-      search_step_yaw: 0.05
-      fine_refine: true # 125 local candidates around the coarse best pose
-      max_dist_thresh: 0.25
-      cost_threshold: 0.165  # all-point mean clipped unsigned surface distance [m]
-      inlier_dist_thresh: 0.08 # [m] 距離がこの値以下の点をマップ合致(Inlier)とみなす
-      min_inliers: 60          # 動的障害物があってもマッチング成立とする最小Inlier点数
-      inlier_cost_thresh: 0.05 # [m] Inlier点の平均残差しきい値
+      search_range_xy: 0.30    # [m] ローカル追従時の XY 探索範囲 (±0.30m)
+      search_step_xy: 0.05     # [m] ローカル追従時の XY 探索刻み幅 (グリッド解像度と同等推奨)
+      search_range_yaw: 0.6    # [rad] ローカル追従時の Yaw 探索範囲 (約 ±34度)
+      search_step_yaw: 0.05    # [rad] ローカル追従時の Yaw 探索刻み幅 (約 2.8度)
+      fine_refine: true        # true: 粗い探索の最良解の周りでさらに 5x5x5 (125候補) の局所精密探索を実施
+      max_dist_thresh: 0.25    # [m] コスト計算時に加算する距離残差の打ち切り上限。これ以上の離れはペナルティ定数
+      cost_threshold: 0.165    # [m] 平均残差コストがこの値を超えるとマッチング失敗判定 (Lost カウント加算)
+      inlier_dist_thresh: 0.08 # [m] マップ表面までの距離がこの値以下の点を合致 (Inlier) と判定
+      min_inliers: 60          # 動的障害物があっても位置推定成功とみなす最小 Inlier 点数
+      inlier_cost_thresh: 0.05 # [m] Inlier 点のみを対象とした平均残差しきい値 (形状の一致度判定)
 
+    # ----------------------------------------------------------------------------------
+    # 2D LiDAR (Lakibeam 1 等) 統合設定
+    # ----------------------------------------------------------------------------------
     lidar_2d:
-      enable: false             # 後方2D LiDAR (Lakibeam 1) の点群マージを有効化
-      topic: "/lakibeam/scan"   # 2D LiDAR の LaserScan トピック名
-      frame_id: "lakibeam_frame" # 2D LiDAR のフレームID
+      enable: false              # 後方 2D LiDAR の点群を 3D 障害物バッファにマージするかどうか
+      topic: "/lakibeam/scan"    # 2D LiDAR の LaserScan トピック名
+      frame_id: "lakibeam_frame" # 2D LiDAR の TF フレーム名
 
+    # ----------------------------------------------------------------------------------
+    # 初期位置設定
+    # ----------------------------------------------------------------------------------
     initial_pose:
-      use_for_local_search: false # set true only when x/y/yaw are known at replay start
-      x: 0.0
-      y: 0.0
-      yaw: 0.0
+      use_for_local_search: false # true: 起動直後から初期位置を中心にローカル追従 / false: 即座にグローバルサーチを実施
+      x: 0.0                      # 初期位置 X [m]
+      y: 0.0                      # 初期位置 Y [m]
+      yaw: 0.0                    # 初期位置 Yaw [rad]
     
+    # ----------------------------------------------------------------------------------
+    # グローバルサーチ (ロスト復帰・初期位置自動推定) パラメータ
+    # ----------------------------------------------------------------------------------
     global_search:
-      range_min_x: -5.25        # 探索範囲 X 最小値 [m]
-      range_max_x:  5.25        # 探索範囲 X 最大値 [m]
-      range_min_y: -5.70        # 探索範囲 Y 最小値 [m]
-      range_max_y:  5.70        # 探索範囲 Y 最大値 [m]
-      range_yaw_diff: 3.1415   # 探索範囲 Yaw 差分最大値 [rad]
-      step_xy: 0.30            # グローバルサーチのXY検索ピッチ [m]
-      step_yaw: 0.3            # グローバルサーチのYaw検索ピッチ [rad]
-      downsample_stride: 2     # グローバル探索時の点群抽出ピッチ (2: 50%間引き, 1: 完全RAW)
-      lost_count_thresh: 10     # ロスト確定までの連続判定フレーム数
+      range_min_x: -5.25        # [m] マップ全域探索の X 最小値
+      range_max_x:  5.25        # [m] マップ全域探索の X 最大値
+      range_min_y: -5.70        # [m] マップ全域探索の Y 最小値
+      range_max_y:  5.70        # [m] マップ全域探索の Y 最大値
+      range_yaw_diff: 3.1415    # [rad] Yaw 角探索幅 (IMU の Yaw 角を中心に ±range_yaw_diff を探索)
+      step_xy: 0.30             # [m] グローバルサーチの XY 検索ピッチ
+      step_yaw: 0.3             # [rad] グローバルサーチの Yaw 検索ピッチ (約 17度)
+      downsample_stride: 2      # グローバル探索時の点群間引き率 (2: 1/2 の点数で高速全域スキャン)
+      lost_count_thresh: 10     # 何フレーム連続でコスト超過/インライア不足が続いたらロストと判定してグローバルサーチへ移行するか
