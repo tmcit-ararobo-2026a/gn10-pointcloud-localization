@@ -6,6 +6,7 @@
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <cmath>
+#include <filesystem>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -37,6 +38,8 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("map_source_type", "json");
     this->declare_parameter("map_file_path", "");
     this->declare_parameter("map_objects", std::vector<std::string>{});
+    this->declare_parameter("esdf.resolution", 0.05);
+    this->declare_parameter("esdf.max_dist", 0.50);
 
     this->declare_parameter("frames.map_frame", "map");
     this->declare_parameter("frames.base_frame", "base_link");
@@ -175,12 +178,82 @@ void LocalizationNode::declareAndGetParameters()
 void LocalizationNode::setupMapData()
 {
     std::string map_source = this->get_parameter("map_source_type").as_string();
+    std::string file_path  = this->get_parameter("map_file_path").as_string();
+    float esdf_res         = static_cast<float>(this->get_parameter("esdf.resolution").as_double());
+    float esdf_max_dist    = static_cast<float>(this->get_parameter("esdf.max_dist").as_double());
+
+    // 相対パスの場合、パッケージの map/ ディレクトリを基準に探索
+    if (!file_path.empty()) {
+        std::filesystem::path p(file_path);
+        if (p.is_relative()) {
+            std::string package_share =
+                ament_index_cpp::get_package_share_directory("gn10_pointcloud_localization");
+            std::filesystem::path map_dir_path =
+                std::filesystem::path(package_share) / "map" / p;
+            if (std::filesystem::exists(map_dir_path)) {
+                file_path = map_dir_path.string();
+            } else {
+                // share側になければソース側の map ディレクトリもチェック（シンボリックリンクや開発時対応）
+                file_path = map_dir_path.string();
+            }
+        }
+    }
+
+    if (map_source == "esdf") {
+        if (file_path.empty()) {
+            RCLCPP_ERROR(this->get_logger(), "map_source_type is 'esdf' but map_file_path is empty!");
+        } else if (!esdf_map_.loadBinary(file_path)) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to load ESDF file: %s", file_path.c_str());
+        } else {
+            RCLCPP_INFO(
+                this->get_logger(),
+                "Loaded ESDF map: %dx%dx%d, res=%.3f",
+                esdf_map_.header().size_x,
+                esdf_map_.header().size_y,
+                esdf_map_.header().size_z,
+                esdf_map_.header().resolution
+            );
+            solver_->setESDFMap(esdf_map_);
+            return;
+        }
+    } else if (map_source == "pcd") {
+        if (file_path.empty()) {
+            RCLCPP_ERROR(this->get_logger(), "map_source_type is 'pcd' but map_file_path is empty!");
+        } else {
+            // 自動キャッシュチェック (.pcd -> .pcd.esdf または .esdf)
+            std::string cache_path = file_path + ".esdf";
+            bool loaded_cache = esdf_map_.loadBinary(cache_path);
+            if (loaded_cache) {
+                RCLCPP_INFO(this->get_logger(), "Found ESDF cache: %s. Loaded directly.", cache_path.c_str());
+            } else {
+                RCLCPP_INFO(
+                    this->get_logger(),
+                    "Building ESDF map from PCD: %s (res=%.3f, max_dist=%.3f)...",
+                    file_path.c_str(),
+                    esdf_res,
+                    esdf_max_dist
+                );
+                if (esdf_map_.buildFromPCD(file_path, esdf_res, esdf_max_dist)) {
+                    esdf_map_.saveBinary(cache_path);
+                    RCLCPP_INFO(this->get_logger(), "ESDF built and cached to: %s", cache_path.c_str());
+                } else {
+                    RCLCPP_ERROR(this->get_logger(), "Failed to build ESDF from PCD: %s", file_path.c_str());
+                }
+            }
+
+            if (!esdf_map_.empty()) {
+                solver_->setESDFMap(esdf_map_);
+                return;
+            }
+        }
+    }
+
     if (map_source == "json") {
-        std::string json_path = this->get_parameter("map_file_path").as_string();
+        std::string json_path = file_path;
         if (json_path.empty()) {
             json_path =
                 ament_index_cpp::get_package_share_directory("gn10_pointcloud_localization") +
-                "/config/nhk2026_map.json";
+                "/map/nhk2026_map.json";
         }
         map_objects_ = MapLoader::loadFromJSON(json_path);
     } else if (map_source == "ros2_param") {
@@ -195,7 +268,31 @@ void LocalizationNode::setupMapData()
         map_objects_ = MapLoader::createNHK2026FieldMap();
     }
 
-    solver_->setMap(map_objects_);
+    // JSON / パラメータ読み込み時も ESDF 3D テクスチャを自動生成して高速化
+    RCLCPP_INFO(this->get_logger(), "Building 3D ESDF texture from field objects...");
+    if (esdf_map_.buildFromFieldObjects(
+            map_objects_,
+            esdf_res,
+            match_params_.field_min_x,
+            match_params_.field_max_x,
+            match_params_.field_min_y,
+            match_params_.field_max_y,
+            -0.2f,
+            2.0f,
+            esdf_max_dist
+        )) {
+        RCLCPP_INFO(
+            this->get_logger(),
+            "ESDF texture ready: %dx%dx%d",
+            esdf_map_.header().size_x,
+            esdf_map_.header().size_y,
+            esdf_map_.header().size_z
+        );
+        solver_->setESDFMap(esdf_map_);
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Falling back to geometric object SDF solver.");
+        solver_->setMap(map_objects_);
+    }
 }
 
 void LocalizationNode::setupROSInterfaces()

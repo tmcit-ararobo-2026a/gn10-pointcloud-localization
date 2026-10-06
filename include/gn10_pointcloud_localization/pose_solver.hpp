@@ -5,6 +5,8 @@
 #include <vector>
 
 #include "gn10_pointcloud_localization/cuda/field_objects.cuh"
+#include "gn10_pointcloud_localization/cuda/esdf_matcher.cuh"
+#include "gn10_pointcloud_localization/esdf_map.hpp"
 
 struct GroundFilterParams {
     float range_max{12.0f};
@@ -39,6 +41,7 @@ public:
     ~PoseSolver();
 
     void setMap(const std::vector<FieldObject>& host_map);
+    void setESDFMap(const ESDFMap& esdf_map);
 
     // 通常追従用（GroundFilter + SDF Matcher + Dynamic Point 抽出）
     bool processPointCloud(
@@ -95,4 +98,5 @@ private:
     float* h_in_{nullptr};
     int ground_count_{0};
     int obstacle_count_{0};
+    bool use_esdf_{false};
 };

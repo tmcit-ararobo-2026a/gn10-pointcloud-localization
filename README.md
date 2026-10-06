@@ -1,94 +1,176 @@
 # gn10-pointcloud-localization
 
+3D LiDAR（Livox MID360 等）を用いた高速・高精度な自己位置推定 ROS 2 パッケージです。  
+オドメトリや初期位置の事前情報なしでも、点群と IMU のみからグローバル初期位置推定および安定したトラッキングを実現します。
+
+---
+
 ## 目次
 
-1. [概要](#1-概要)
-2. [ドキュメント](#2-ドキュメント)
-3. [コントリビューション](#3-コントリビューション)
-4. [ビルド・使い方](#4-ビルド使い方)
-5. [システム構成](#5-システム構成)
-6. [ライセンス](#6-ライセンス)
+1. [概要と特徴](#1-概要と特徴)
+2. [3D ESDF & GPU 3D Texture Memory の仕組み](#2-3d-esdf--gpu-3d-texture-memory-の仕組み)
+3. [システム構成と処理フロー](#3-システム構成と処理フロー)
+4. [ビルド環境・依存関係](#4-ビルド環境依存関係)
+5. [使い方](#5-使い方)
+   - [マップファイルの配置](#マップファイルの配置)
+   - [PCD から ESDF への事前変換 (CLI)](#pcd-から-esdf-への事前変換-cli)
+   - [起動 (Launch)](#起動-launch)
+6. [パラメータ解説](#6-パラメータ解説)
+7. [ライセンス](#7-ライセンス)
 
-## 1. 概要
-MID360S LiDARを用いた高専ロボコン向けの自己位置推定パッケージ。
-フィールドが静的で平坦で、MID360Sの取り付け高さが固定であることを前提としており、CUDAを用いた高速化が行われている。
-また、オドメトリ、初期位置の情報を用いずにMID360Sから得られるPointCloud2とIMUのみで自己位置推定を行うことができる。
+---
 
-動作環境：
-Ubuntu 22.04
-ROS2 Humble
-CUDA 12.0以上
+## 1. 概要と特徴
 
-## 2. ドキュメント
+本パッケージは、フィールド環境（競技用フィールド、屋内搬送路など）におけるロボットのリアルタイム自己位置推定を目的として設計されています。
 
-| ドキュメント | 説明 |
-| :-: | :-: |
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | 開発フロー・コミット規約・コーディング規約 |
-| [docs/coding-rules.md](./docs/coding-rules.md) | コーディング規約の詳細 |
-| [docs/uml/](./docs/uml/) | UML図 |
+- **$\mathcal{O}(1)$ 超高速スキャンマッチング**:  
+  点群マップ（PCD）や CAD オブジェクト定義を **3D ESDF（Euclidean Signed Distance Field）** に変換し、NVIDIA GPU の **3D Texture Memory** にロード。幾何計算や k-d Tree 分岐探索を完全撤廃し、ハードウェア・トライリニア補間により点あたり $\mathcal{O}(1)$ の定数時間で正確な距離場を参照します。
+- **グローバル自己位置同定 (Kidnapped Robot 解決)**:  
+  IMU の絶対 Yaw 姿勢を活用し、全域の XY/Yaw 探索（数千〜数万通りの候補姿勢）を GPU 並列リダクション（CUB DeviceReduce）で 1 フレーム内に一括評価。初期位置不明の状態からでも瞬時に自己位置を同定します。
+- **動的障害物・歩行者フィルタリング**:  
+  静的マップ表面からの距離に基づいて、ロボット周囲の動的障害物・人物・機体などをリアルタイムに分離し、`/dynamic_cloud` としてパブリッシュします。
+- **多様なマップソース対応**:  
+  `json`（CAD オブジェクト定義）、`pcd`（点群ファイル）、`esdf`（生成済みバイナリ距離場）をシームレスに切り替え可能。相対パス指定時はパッケージ内の `map/` ディレクトリを自動探索します。
 
-## 3. コントリビューション
+---
 
-[CONTRIBUTING.md](./CONTRIBUTING.md) を参照してください。
+## 2. 3D ESDF & GPU 3D Texture Memory の仕組み
 
-## 4. ビルド・使い方
+### 従来の最近傍探索 (NG: 計算量が爆発)
+PCD 点群マップをそのまま用いて最近傍探索を行う場合、各点について k-d Tree を探索するため計算量は $\mathcal{O}(\log N_{\text{pcd}})$ となります。  
+GPU 上ではスレッドごとの木探索パスの不一致（**Branch Divergence: 分岐拡散**）やランダムメモリアクセスが発生し、フレームレートが著しく低下します。
 
-MID360SのFAST-LIOオドメトリとフィールドマッチングを統合する構成は
-[docs/fast_lio_fusion.md：現在廃止](docs/fast_lio_fusion.md)を参照。
+### 3D ESDF + 3D Texture Memory (OK: 定数時間 $\mathcal{O}(1)$)
+事前または起動時にマップ空間をボクセルグリッド化し、各ボクセルセルに「直近の壁・障害物表面までのユークリッド距離」を格納した 3D 距離場（ESDF）を構築します。
 
-必要なパッケージをインストール
+$$\text{GPU カーネル内の参照計算: } d = \text{tex3D}(\text{texture\_esdf}, u, v, w)$$
+
+1. **ゼロ・オーバーヘッド補間**:  
+   GPU の専用テクスチャユニットが**トライリニア（3次線形）補間をほぼ 1 クロックでハードウェア計算**します。これにより、グリッド解像度が 5cm 刻みであっても、セル間を滑らかな連続値として正確にサンプリング可能です。
+2. **Divergence ゼロ**:  
+   すべての GPU スレッドが分岐なしにテクスチャフェッチ命令を 1 回実行するだけになり、GPU の並列演算性能を限界まで引き出せます。
+
+---
+
+## 3. システム構成と処理フロー
+
+```
+[3D LiDAR (Livox MID360)]  ──> [GroundFilter (CUDA)] ──> [Obstacle Cloud]
+                                    │                           │
+                               [Ground Cloud]                   ▼
+                                                  [ESDF Matcher (CUDA 3D Texture)]
+[IMU (Yaw 積分予測)] ───────────────────────────>          │
+                                                               ▼
+[3D ESDF Map (GPU Texture)] ──────────────────────> [ArgMin 姿勢判定]
+                                                               │
+                                  ┌────────────────────────────┴────────────────────────┐
+                                  ▼                                                     ▼
+                     [推定自己位置 (/platform_constraint)]                [動的障害物点群 (/dynamic_cloud)]
+                     [TF (map -> base_link)]
+```
+
+1. **点群前処理 (`ground_filter.cu`)**:  
+   自己機体半径の除外、有効高さのクリッピング、および平坦な床面（グラウンド）点群の分離。
+2. **姿勢予測**:  
+   IMU 角速度積分により、前回確定姿勢からの回転変化を先読みして探索原点を更新。
+3. **ローカル追従 / グローバル探索 (`esdf_matcher.cu`)**:  
+   探索範囲（XY / Yaw）の全候補を GPU グリッド上に展開し、ESDF テクスチャを参照して残差コストを一括計算。最良解で精密ローカルリファインを実施。
+4. **インライア & 動的障害物判定**:  
+   マップ表面までの距離が近傍なしきい値以内の点を Inlier として適合度を判定。しきい値を超える孤立点を動的障害物として抽出。
+
+---
+
+## 4. ビルド環境・依存関係
+
+- **OS**: Ubuntu 22.04 LTS
+- **ROS**: ROS 2 Humble
+- **GPU**: NVIDIA GPU (Compute Capability 8.7 / 8.9: Jetson Orin / RTX 40 シリーズ等)
+- **CUDA Toolkit**: 12.0 以上
+
+### 依存パッケージのインストール
 
 ```bash
 sudo apt update
-sudo apt install -y libceres-dev libeigen3-dev nlohmann-json3-dev
+sudo apt install -y \
+  libceres-dev \
+  libeigen3-dev \
+  nlohmann-json3-dev \
+  libpcl-dev \
+  libopenmpi-dev \
+  ros-humble-pcl-conversions
 ```
 
-CUDAのパスを通す(普通は通ってると思うが、私はパスを常時通すことを嫌うので毎回通すようにしている)
-CUDAが/usr/local/cudaにある場合:
+### ビルド
 
 ```bash
-export PATH=/usr/local/cuda/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-```
-
-rosdepで依存関係をインストール
-
-```bash
-rosdep update --rosdistro humble
-rosdep install --from-paths . --ignore-src -y --rosdistro humble
-```
-
-ビルド
-
-```bash
-colcon build --symlink-install --package-select gn10_pointcloud_localization
-```
-
-読み込み
-
-```bash
+cd ~/ros2_ws
+colcon build --symlink-install --packages-select gn10_pointcloud_localization
 source install/setup.bash
 ```
 
-実行
+---
+
+## 5. 使い方
+
+### マップファイルの配置
+マップファイル（`.pcd`, `.esdf`, `.json`）は、パッケージ内の `map/` フォルダに配置することで、パラメータ設定からファイル名だけで自動参照できます。
 
 ```bash
+# 例: 自前の点群マップを配置
+cp my_field.pcd ~/ros2_ws/src/gn10-pointcloud-localization/map/
+```
+
+### PCD から ESDF への事前変換 (CLI)
+PCD ファイルから事前に 3D ESDF バイナリ（`.esdf`）を作成しておくことで、ノード起動時間をゼロに短縮できます。
+
+```bash
+# 使用法: pcd_to_esdf_converter <input.pcd> <output.esdf> <resolution_m> [max_dist_m]
+ros2 run gn10_pointcloud_localization pcd_to_esdf_converter \
+  ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.pcd \
+  ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.esdf \
+  0.05 0.50
+```
+※ ノード起動時に `map_source_type: "pcd"` を指定した場合、初回起動時に自動で `<ファイル名>.esdf` キャッシュが生成され、次回以降は自動でキャッシュが読み込まれます。
+
+### 起動 (Launch)
+
+```bash
+# 通常起動 (標準パラメータ config/localization_params.yaml)
 ros2 launch gn10_pointcloud_localization localization.launch.py
+
+# Rosbag 再生などのシミュレーション時刻を使用する場合
+ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=true
+
+# チーム別プリセット (赤ゾーン / 青ゾーン)
+ros2 launch gn10_pointcloud_localization red.launch.py
+ros2 launch gn10_pointcloud_localization blue.launch.py
 ```
 
-static tfを配信：
+---
 
-```bash
-ros2 run tf2_ros static_transform_publisher --x 0.2 --y -0.25 --z 1.09 --yaw 0.0 --pitch -0.273 --roll 3.13 --frame-id base_link --child-frame-id livox_frame
-```
+## 6. パラメータ解説
 
-## 5. システム構成
+主要な設定は [`config/localization_params.yaml`](./config/localization_params.yaml) で行います。
 
-このパッケージは、以下の手順で自己位置推定を行う。
-1. 点群のフィルタリングで半径12mを抽出
-2. 平面抽出して床面を除く
-3. フィールドの囲いと中央の教壇、各オブジェクトを一致させて自己位置を割り出し
+| パラメータ名 | デフォルト | 役割・メカニズム |
+| :--- | :---: | :--- |
+| `map_source_type` | `"json"` | マップ種別 (`json`, `pcd`, `esdf`, `ros2_param`)。 |
+| `map_file_path` | `""` | ファイル名またはパス。相対パスの場合は `map/` 内を探索。 |
+| `esdf.resolution` | `0.05` | 3D ESDF グリッドのセル間隔 [m]。解像度を高めると微細な突起が再現可能。 |
+| `esdf.max_dist` | `0.50` | 距離場の打ち切り距離 [m]。テクスチャメモリの有効レンジ。 |
+| `matching_params.search_range_xy` | `0.30` | ローカル追従時の探索範囲 [m] (±0.30m)。 |
+| `matching_params.search_step_xy` | `0.05` | ローカル追従時のグリッド刻み幅 [m]。 |
+| `matching_params.search_range_yaw` | `0.60` | ローカル追従時の回転探索幅 [rad] (約 ±34°)。 |
+| `matching_params.search_step_yaw` | `0.05` | ローカル追従時の回転刻み幅 [rad] (約 2.8°)。 |
+| `matching_params.fine_refine` | `true` | 最良解の周りでさらに 125 候補の微小探索を行い sub-voxel 精度を向上。 |
+| `matching_params.cost_threshold` | `0.165` | 平均残差がこの値を超えるとマッチング失敗判定 (ロストカウント加算)。 |
+| `matching_params.inlier_dist_thresh`| `0.08` | マップ壁面から 8cm 以内の点を Inlier（適合点）と判定。 |
+| `matching_params.min_inliers` | `60` | マッチング成立に必要な最小 Inlier 点数。 |
+| `global_search.lost_count_thresh` | `10` | 連続で失敗判定となった際にグローバル全域探索へ移行するフレーム数。 |
 
-## 6. ライセンス
+---
 
-本リポジトリは [MITライセンス](./LICENSE) のもとで公開されています。
+## 7. ライセンス
+
+本リポジトリは [MIT ライセンス](./LICENSE) のもとで公開されています。

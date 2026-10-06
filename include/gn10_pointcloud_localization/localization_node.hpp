@@ -19,6 +19,7 @@
 #include "gn10_pointcloud_localization/global_searcher.hpp"
 #include "gn10_pointcloud_localization/map_loader.hpp"
 #include "gn10_pointcloud_localization/pose_solver.hpp"
+#include "gn10_pointcloud_localization/esdf_map.hpp"
 
 class LocalizationNode : public rclcpp::Node
 {
@@ -57,6 +58,7 @@ private:
     std::unique_ptr<PoseSolver> solver_;
     std::unique_ptr<GlobalSearcher> global_searcher_;
     std::vector<FieldObject> map_objects_;
+    ESDFMap esdf_map_;
 
     // Parameters
     std::string map_frame_;
