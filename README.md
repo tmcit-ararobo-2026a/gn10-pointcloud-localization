@@ -149,34 +149,21 @@ ros2 launch gn10_pointcloud_localization blue.launch.py
 | `map_file_path` | `""` | ファイル名またはパス。相対パスの場合は `map/` 内を探索。 |
 | `esdf.resolution` | `0.05` | 3D ESDF グリッドのセル間隔 [m]。解像度を高めると微細な突起が再現可能。 |
 | `esdf.max_dist` | `0.50` | 距離場の打ち切り距離 [m]。テクスチャメモリの有効レンジ。 |
+| `scan_accumulation.window_s` | `0.10` | 点群の蓄積時間 [s]。各点をスキャン末尾時刻へ運動補正して照合。0で単一スキャン、最大0.5。 |
+| `scan_accumulation.timestamp_field` | `timestamp` | PointCloud2の各点の取得時刻フィールド。 |
+| `scan_accumulation.timestamp_scale` | `1.0e-9` | 各点の取得時刻を秒へ換算する係数。Livoxの絶対ナノ秒時刻に対応。 |
+| `scan_accumulation.timestamp_relative` | `false` | trueの場合、各点の取得時刻を点群ヘッダーからの相対時刻として扱う。 |
 | `matching_params.search_range_xy` | `0.30` | ローカル追従時の探索範囲 [m] (±0.30m)。 |
 | `matching_params.search_step_xy` | `0.05` | ローカル追従時のグリッド刻み幅 [m]。 |
 | `matching_params.search_range_yaw` | `0.60` | ローカル追従時の回転探索幅 [rad] (約 ±34°)。 |
 | `matching_params.search_step_yaw` | `0.05` | ローカル追従時の回転刻み幅 [rad] (約 2.8°)。 |
-| `matching_params.use_map_bounds` | `true` | PCD/ESDF読込時に地図ヘッダーのXY範囲を評価範囲に使用。意図的に範囲を制限する場合だけfalse。 |
-| `matching_params.fine_refine` | `true` | 最良解の周りで5×5×5候補の微小探索を反復。 |
+| `matching_params.use_map_bounds` | `true` | PCD/ESDF読込時に地図ヘッダーのXY範囲を評価範囲に使用。意図的に範囲を制限する場合はfalse。 |
+| `matching_params.fine_refine` | `true` | 最良解の周りでさらに 125 候補の微小探索を行い sub-voxel 精度を向上。 |
 | `matching_params.fine_refine_levels` | `2` | 微小探索の反復回数。XY刻み0.05mなら2段で最終刻み0.002m。 |
 | `matching_params.cost_threshold` | `0.165` | 平均残差がこの値を超えるとマッチング失敗判定 (ロストカウント加算)。 |
 | `matching_params.inlier_dist_thresh`| `0.08` | マップ壁面から 8cm 以内の点を Inlier（適合点）と判定。 |
 | `matching_params.min_inliers` | `60` | マッチング成立に必要な最小 Inlier 点数。 |
 | `global_search.lost_count_thresh` | `10` | 連続で失敗判定となった際にグローバル全域探索へ移行するフレーム数。 |
-
-### MID360Sの20Hz入力
-
-入力ごとに直近100msの点群を照合します。20Hz入力でも約50ms周期で位置とTFを出力し、最初の100msは点群を蓄積します。点群の各点をセンサからbase_linkへ変換した後、IMU角速度の時間積分と推定並進速度でスキャン末尾時刻のbase_linkへ補正します。推定姿勢・TF・出力点群はすべてこの末尾時刻を持ちます。
-
-| パラメータ | 既定値 | 用途 |
-| :--- | :---: | :--- |
-| `scan_accumulation.window_s` | `0.10` | 蓄積時間[s]。0で単一スキャン、最大0.5。 |
-| `scan_accumulation.timestamp_field` | `timestamp` | PointCloud2の各点の取得時刻フィールド。 |
-| `scan_accumulation.timestamp_scale` | `1.0e-9` | 各点の時刻を秒へ換算する係数。Livoxの絶対ナノ秒時刻に対応。 |
-| `scan_accumulation.timestamp_relative` | `false` | trueの場合、各点の時刻を点群ヘッダーからの相対時刻として扱う。 |
-
-PCD/ESDFの読み込みでは評価範囲を地図から取得します。`global_search.range_min/max_x/y`は初期位置の探索範囲として独立しているため、起動し得る位置に合わせて指定してください。意図的な評価範囲の制限は`matching_params.use_map_bounds: false`と`field_min/max_x/y`で設定します。
-
-IMU履歴が蓄積時間をカバーしない場合は警告を出し、古いスキャンを混ぜず最新スキャンだけを使用します。各点の取得時刻がない場合は点群ヘッダー時刻を使用します。
-
-並進の運動補正はLiDAR位置の履歴から推定した速度を使用します。IMUとLiDARは共通の時刻系を使用してください。
 
 ---
 
