@@ -228,16 +228,33 @@ bool ESDFMap::buildFromFieldObjects(
 
 float ESDFMap::getDistance(float wx, float wy, float wz) const
 {
-    if (grid_.empty()) return header_.max_dist_thresh;
+    if (grid_.empty() || !std::isfinite(wx) || !std::isfinite(wy) || !std::isfinite(wz) ||
+        wx < header_.min_x || wy < header_.min_y || wz < header_.min_z ||
+        wx >= header_.min_x + header_.size_x * header_.resolution ||
+        wy >= header_.min_y + header_.size_y * header_.resolution ||
+        wz >= header_.min_z + header_.size_z * header_.resolution) {
+        return header_.max_dist_thresh;
+    }
 
-    float fx = (wx - header_.min_x) / header_.resolution;
-    float fy = (wy - header_.min_y) / header_.resolution;
-    float fz = (wz - header_.min_z) / header_.resolution;
-
-    int gx = std::clamp(static_cast<int>(fx), 0, header_.size_x - 1);
-    int gy = std::clamp(static_cast<int>(fy), 0, header_.size_y - 1);
-    int gz = std::clamp(static_cast<int>(fz), 0, header_.size_z - 1);
-
-    size_t idx = static_cast<size_t>(gx) + static_cast<size_t>(gy) * header_.size_x + static_cast<size_t>(gz) * header_.size_x * header_.size_y;
-    return grid_[idx];
+    // Match CUDA's linear interpolation and clamp at the outer texel centers.
+    const float fx = std::clamp((wx - header_.min_x) / header_.resolution - 0.5f,
+                                0.0f, float(header_.size_x - 1));
+    const float fy = std::clamp((wy - header_.min_y) / header_.resolution - 0.5f,
+                                0.0f, float(header_.size_y - 1));
+    const float fz = std::clamp((wz - header_.min_z) / header_.resolution - 0.5f,
+                                0.0f, float(header_.size_z - 1));
+    const int x0 = int(fx), y0 = int(fy), z0 = int(fz);
+    const int x1 = std::min(x0 + 1, header_.size_x - 1);
+    const int y1 = std::min(y0 + 1, header_.size_y - 1);
+    const int z1 = std::min(z0 + 1, header_.size_z - 1);
+    const float tx = fx - x0, ty = fy - y0, tz = fz - z0;
+    const auto sample = [&](int x, int y, int z) {
+        return grid_[size_t(x) + size_t(y) * header_.size_x +
+                     size_t(z) * header_.size_x * header_.size_y];
+    };
+    const auto lerp = [](float a, float b, float t) { return a + t * (b - a); };
+    return lerp(lerp(lerp(sample(x0,y0,z0), sample(x1,y0,z0), tx),
+                     lerp(sample(x0,y1,z0), sample(x1,y1,z0), tx), ty),
+                lerp(lerp(sample(x0,y0,z1), sample(x1,y0,z1), tx),
+                     lerp(sample(x0,y1,z1), sample(x1,y1,z1), tx), ty), tz);
 }

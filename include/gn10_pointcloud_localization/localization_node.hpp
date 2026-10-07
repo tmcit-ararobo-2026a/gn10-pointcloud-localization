@@ -31,6 +31,7 @@ private:
     // 初期化ヘルパー
     void declareAndGetParameters();
     void setupMapData();
+    void configureESDFBounds();
     void setupROSInterfaces();
 
     // Callbacks

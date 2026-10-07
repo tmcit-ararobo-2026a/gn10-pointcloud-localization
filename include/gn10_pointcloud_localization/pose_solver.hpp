@@ -32,6 +32,14 @@ struct MatchingParams {
     float inlier_dist_thresh{0.08f};
     int min_inliers{60};
     float inlier_cost_thresh{0.05f};
+
+    void useESDFBounds(const ESDFHeader& header)
+    {
+        field_min_x = header.min_x;
+        field_max_x = header.min_x + header.size_x * header.resolution;
+        field_min_y = header.min_y;
+        field_max_y = header.min_y + header.size_y * header.resolution;
+    }
 };
 
 class PoseSolver

@@ -75,6 +75,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.field_max_x", 5.5);
     this->declare_parameter("matching_params.field_min_y", -6.0);
     this->declare_parameter("matching_params.field_max_y", 6.0);
+    this->declare_parameter("matching_params.use_map_bounds", true);
     this->declare_parameter("matching_params.inlier_dist_thresh", 0.08);
     this->declare_parameter("matching_params.min_inliers", 60);
     this->declare_parameter("matching_params.inlier_cost_thresh", 0.05);
@@ -213,6 +214,7 @@ void LocalizationNode::setupMapData()
                 esdf_map_.header().size_z,
                 esdf_map_.header().resolution
             );
+            configureESDFBounds();
             solver_->setESDFMap(esdf_map_);
             return;
         }
@@ -242,6 +244,7 @@ void LocalizationNode::setupMapData()
             }
 
             if (!esdf_map_.empty()) {
+                configureESDFBounds();
                 solver_->setESDFMap(esdf_map_);
                 return;
             }
@@ -293,6 +296,23 @@ void LocalizationNode::setupMapData()
         RCLCPP_WARN(this->get_logger(), "Falling back to geometric object SDF solver.");
         solver_->setMap(map_objects_);
     }
+}
+
+void LocalizationNode::configureESDFBounds()
+{
+    // A PCD/ESDF map can cover a different room than the default NHK field.
+    // Keep an explicitly requested crop only when use_map_bounds is disabled.
+    if (!this->get_parameter("matching_params.use_map_bounds").as_bool()) return;
+    match_params_.useESDFBounds(esdf_map_.header());
+    this->set_parameters({
+        rclcpp::Parameter("matching_params.field_min_x", double(match_params_.field_min_x)),
+        rclcpp::Parameter("matching_params.field_max_x", double(match_params_.field_max_x)),
+        rclcpp::Parameter("matching_params.field_min_y", double(match_params_.field_min_y)),
+        rclcpp::Parameter("matching_params.field_max_y", double(match_params_.field_max_y))
+    });
+    RCLCPP_INFO(this->get_logger(), "ESDF matching bounds: x=[%.3f, %.3f], y=[%.3f, %.3f]",
+                match_params_.field_min_x, match_params_.field_max_x,
+                match_params_.field_min_y, match_params_.field_max_y);
 }
 
 void LocalizationNode::setupROSInterfaces()

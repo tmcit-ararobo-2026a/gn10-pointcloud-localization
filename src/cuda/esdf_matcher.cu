@@ -41,13 +41,15 @@ __device__ inline float queryESDF(
     if (wx < header.min_x || wy < header.min_y || wz < header.min_z) {
         return header.max_dist_thresh;
     }
-    float u = (wx - header.min_x) / header.resolution + 0.5f;
-    float v = (wy - header.min_y) / header.resolution + 0.5f;
-    float w = (wz - header.min_z) / header.resolution + 0.5f;
+    // Builders sample at min + (index + 0.5) * resolution. That world
+    // position already maps to the CUDA texel center index + 0.5.
+    float u = (wx - header.min_x) / header.resolution;
+    float v = (wy - header.min_y) / header.resolution;
+    float w = (wz - header.min_z) / header.resolution;
 
-    if (u >= static_cast<float>(header.size_x) + 0.5f ||
-        v >= static_cast<float>(header.size_y) + 0.5f ||
-        w >= static_cast<float>(header.size_z) + 0.5f) {
+    if (u >= static_cast<float>(header.size_x) ||
+        v >= static_cast<float>(header.size_y) ||
+        w >= static_cast<float>(header.size_z)) {
         return header.max_dist_thresh;
     }
 
