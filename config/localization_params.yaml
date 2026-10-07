@@ -55,15 +55,24 @@
       ground_z_thresh: 0.04    # [m] 床面判定の許容しきい値。これ以下の高さの点をグラウンドとして除去
       max_points: 200000       # GPU 上で確保する最大点群バッファ数
 
+    # 非反復スキャンの観測形状を安定させ、各点をスキャン末尾時刻へ運動補正
+    scan_accumulation:
+      window_s: 0.10
+      timestamp_field: "timestamp"
+      timestamp_scale: 1.0e-9  # Livox PointCloud2: 絶対ナノ秒 -> 秒
+      timestamp_relative: false
+
     # ----------------------------------------------------------------------------------
     # スキャンマッチング (3D ESDF テクスチャ参照) パラメータ
     # ----------------------------------------------------------------------------------
     matching_params:
+      use_map_bounds: true    # PCD/ESDFの評価範囲を地図ヘッダーから取得
       search_range_xy: 0.30    # [m] ローカル追従時の XY 探索範囲 (±0.30m)
       search_step_xy: 0.05     # [m] ローカル追従時の XY 探索刻み幅 (グリッド解像度と同等推奨)
       search_range_yaw: 0.6    # [rad] ローカル追従時の Yaw 探索範囲 (約 ±34度)
       search_step_yaw: 0.05    # [rad] ローカル追従時の Yaw 探索刻み幅 (約 2.8度)
-      fine_refine: true        # true: 粗い探索の最良解の周りでさらに 5x5x5 (125候補) の局所精密探索を実施
+      fine_refine: true        # 最良解の周りで5x5x5候補の局所探索を反復
+      fine_refine_levels: 2    # XY=0.05mなら最終刻み2mm、Yaw=0.05radなら0.002rad
       max_dist_thresh: 0.25    # [m] コスト計算時に加算する距離残差の打ち切り上限。これ以上の離れはペナルティ定数
       cost_threshold: 0.165    # [m] 平均残差コストがこの値を超えるとマッチング失敗判定 (Lost カウント加算)
       inlier_dist_thresh: 0.08 # [m] マップ表面までの距離がこの値以下の点を合致 (Inlier) と判定

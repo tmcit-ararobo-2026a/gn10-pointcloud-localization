@@ -154,7 +154,8 @@ ros2 launch gn10_pointcloud_localization blue.launch.py
 | `matching_params.search_range_yaw` | `0.60` | ローカル追従時の回転探索幅 [rad] (約 ±34°)。 |
 | `matching_params.search_step_yaw` | `0.05` | ローカル追従時の回転刻み幅 [rad] (約 2.8°)。 |
 | `matching_params.use_map_bounds` | `true` | PCD/ESDF読込時に地図ヘッダーのXY範囲を評価範囲に使用。意図的に範囲を制限する場合だけfalse。 |
-| `matching_params.fine_refine` | `true` | 最良解の周りでさらに 125 候補の微小探索を行い sub-voxel 精度を向上。 |
+| `matching_params.fine_refine` | `true` | 最良解の周りで5×5×5候補の微小探索を反復。 |
+| `matching_params.fine_refine_levels` | `2` | 微小探索の反復回数。XY刻み0.05mなら2段で最終刻み0.002m。 |
 | `matching_params.cost_threshold` | `0.165` | 平均残差がこの値を超えるとマッチング失敗判定 (ロストカウント加算)。 |
 | `matching_params.inlier_dist_thresh`| `0.08` | マップ壁面から 8cm 以内の点を Inlier（適合点）と判定。 |
 | `matching_params.min_inliers` | `60` | マッチング成立に必要な最小 Inlier 点数。 |
@@ -172,6 +173,8 @@ ros2 launch gn10_pointcloud_localization blue.launch.py
 | `scan_accumulation.timestamp_relative` | `false` | trueの場合、各点の時刻を点群ヘッダーからの相対時刻として扱う。 |
 
 PCD/ESDFの読み込みでは評価範囲を地図から取得します。`global_search.range_min/max_x/y`は初期位置の探索範囲として独立しているため、起動し得る位置に合わせて指定してください。意図的な評価範囲の制限は`matching_params.use_map_bounds: false`と`field_min/max_x/y`で設定します。
+
+IMU履歴が蓄積時間をカバーしない場合は警告を出し、古いスキャンを混ぜず最新スキャンだけを使用します。各点の取得時刻がない場合は点群ヘッダー時刻を使用します。
 
 並進の運動補正はLiDAR位置の履歴から推定した速度を使用します。IMUとLiDARは共通の時刻系を使用してください。
 

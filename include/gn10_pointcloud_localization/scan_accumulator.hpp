@@ -76,19 +76,20 @@ class ScanAccumulator {
 public:
     explicit ScanAccumulator(double window_s = 0.10) : window_ns_(int64_t(window_s*1e9)) {}
 
-    void clear() { points_.clear(); first_stamp_ = 0; last_reference_ = 0; newest_start_ = 0; }
+    void clear() { points_.clear(); initialized_ = false; }
     bool backwards(int64_t reference) const
     {
-        return last_reference_ && reference <= last_reference_;
+        return initialized_ && reference <= last_reference_;
     }
     bool append(const std::vector<TimedScanPoint>& points, int64_t reference)
     {
         if (backwards(reference)) clear();
-        if (last_reference_ && reference-last_reference_ > std::max(2*window_ns_,int64_t(200000000))) {
+        if (initialized_ && reference-last_reference_ > std::max(2*window_ns_,int64_t(200000000))) {
             clear();
         }
         if (points.empty()) return false;
-        if (!first_stamp_) first_stamp_ = points.front().stamp_ns;
+        if (!initialized_) first_stamp_ = points.front().stamp_ns;
+        initialized_ = true;
         newest_start_ = points.front().stamp_ns;
         if (window_ns_ == 0) {
             points_ = points;
@@ -138,5 +139,6 @@ public:
 
 private:
     int64_t window_ns_, first_stamp_{0}, last_reference_{0}, newest_start_{0};
+    bool initialized_{false};
     std::vector<TimedScanPoint> points_;
 };
