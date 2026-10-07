@@ -20,6 +20,7 @@
 #include "gn10_pointcloud_localization/map_loader.hpp"
 #include "gn10_pointcloud_localization/pose_solver.hpp"
 #include "gn10_pointcloud_localization/esdf_map.hpp"
+#include "gn10_pointcloud_localization/scan_accumulator.hpp"
 
 class LocalizationNode : public rclcpp::Node
 {
@@ -44,7 +45,8 @@ private:
     bool getTransformAsArray(
         const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
     );
-    std::vector<float> extractPointsFromMsg(const sensor_msgs::msg::PointCloud2::SharedPtr& msg);
+    std::vector<TimedScanPoint> extractTimedBasePoints(
+        const sensor_msgs::msg::PointCloud2& msg, const float transform[12], int64_t& end_ns);
     void updateLostState(bool matched, float best_cost);
     void publishPoseAndTransform(const rclcpp::Time& stamp, const PoseCandidate& pose);
 
@@ -98,6 +100,13 @@ private:
     float velocity_y_{0.0f};
     bool has_velocity_{false};
     rclcpp::Time last_match_stamp_;
+    YawHistory yaw_history_;
+    ScanAccumulator scan_accumulator_;
+    std::string timestamp_field_;
+    double timestamp_scale_{1e-9};
+    bool timestamp_relative_{false};
+    struct PoseSample { rclcpp::Time stamp; PoseCandidate pose; };
+    std::deque<PoseSample> velocity_history_;
 
     // 2D LiDAR (Lakibeam 1) Integration
     bool use_2d_lidar_{false};
