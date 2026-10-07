@@ -149,11 +149,17 @@ ros2 launch gn10_pointcloud_localization blue.launch.py
 | `map_file_path` | `""` | ファイル名またはパス。相対パスの場合は `map/` 内を探索。 |
 | `esdf.resolution` | `0.05` | 3D ESDF グリッドのセル間隔 [m]。解像度を高めると微細な突起が再現可能。 |
 | `esdf.max_dist` | `0.50` | 距離場の打ち切り距離 [m]。テクスチャメモリの有効レンジ。 |
+| `scan_accumulation.window_s` | `0.10` | 点群の蓄積時間 [s]。各点をスキャン末尾時刻へ運動補正して照合。0で単一スキャン、最大0.5。 |
+| `scan_accumulation.timestamp_field` | `timestamp` | PointCloud2の各点の取得時刻フィールド。 |
+| `scan_accumulation.timestamp_scale` | `1.0e-9` | 各点の取得時刻を秒へ換算する係数。Livoxの絶対ナノ秒時刻に対応。 |
+| `scan_accumulation.timestamp_relative` | `false` | trueの場合、各点の取得時刻を点群ヘッダーからの相対時刻として扱う。 |
 | `matching_params.search_range_xy` | `0.30` | ローカル追従時の探索範囲 [m] (±0.30m)。 |
 | `matching_params.search_step_xy` | `0.05` | ローカル追従時のグリッド刻み幅 [m]。 |
 | `matching_params.search_range_yaw` | `0.60` | ローカル追従時の回転探索幅 [rad] (約 ±34°)。 |
 | `matching_params.search_step_yaw` | `0.05` | ローカル追従時の回転刻み幅 [rad] (約 2.8°)。 |
+| `matching_params.use_map_bounds` | `true` | PCD/ESDF読込時に地図ヘッダーのXY範囲を評価範囲に使用。意図的に範囲を制限する場合はfalse。 |
 | `matching_params.fine_refine` | `true` | 最良解の周りでさらに 125 候補の微小探索を行い sub-voxel 精度を向上。 |
+| `matching_params.fine_refine_levels` | `2` | 微小探索の反復回数。XY刻み0.05mなら2段で最終刻み0.002m。 |
 | `matching_params.cost_threshold` | `0.165` | 平均残差がこの値を超えるとマッチング失敗判定 (ロストカウント加算)。 |
 | `matching_params.inlier_dist_thresh`| `0.08` | マップ壁面から 8cm 以内の点を Inlier（適合点）と判定。 |
 | `matching_params.min_inliers` | `60` | マッチング成立に必要な最小 Inlier 点数。 |

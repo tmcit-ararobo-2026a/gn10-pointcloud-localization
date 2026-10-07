@@ -22,6 +22,7 @@ struct MatchingParams {
     float range_yaw{0.15f};
     float step_yaw{0.02f};
     bool fine_refine{true};
+    int fine_refine_levels{2};
     float max_dist_thresh{0.20f};
     float cost_threshold{0.165f};
     float dynamic_dist_thresh{0.15f};
@@ -32,6 +33,14 @@ struct MatchingParams {
     float inlier_dist_thresh{0.08f};
     int min_inliers{60};
     float inlier_cost_thresh{0.05f};
+
+    void useESDFBounds(const ESDFHeader& header)
+    {
+        field_min_x = header.min_x;
+        field_max_x = header.min_x + header.size_x * header.resolution;
+        field_min_y = header.min_y;
+        field_max_y = header.min_y + header.size_y * header.resolution;
+    }
 };
 
 class PoseSolver

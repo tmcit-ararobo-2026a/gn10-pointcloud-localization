@@ -185,60 +185,66 @@ bool PoseSolver::processPointCloud(
         out_best_pose = coarse_pose;
         out_best_cost = coarse_cost;
         if (pose_matched && match_params.fine_refine) {
-            // Five samples per axis around the coarse winner. This adds 125
-            // candidates without expanding the full-field search.
-            const float fine_xy  = match_params.step_xy / 5.0f;
-            const float fine_yaw = match_params.step_yaw / 5.0f;
-            if (use_esdf_) {
-                pose_matched     = launchESDFMatcher(
-                    stream_,
-                    d_obstacle_,
-                    h_obstacle_count,
-                    coarse_pose,
-                    2.0f * fine_xy,
-                    2.0f * fine_xy,
-                    fine_xy,
-                    2.0f * fine_yaw,
-                    fine_yaw,
-                    match_params.max_dist_thresh,
-                    match_params.dynamic_dist_thresh,
-                    match_params.field_min_x,
-                    match_params.field_max_x,
-                    match_params.field_min_y,
-                    match_params.field_max_y,
-                    out_best_pose,
-                    out_best_cost,
-                    out_dynamic_pts,
-                    true,
-                    out_inlier_count,
-                    out_inlier_cost,
-                    match_params.inlier_dist_thresh
-                );
-            } else {
-                pose_matched     = launchFieldSDFMatcher(
-                    stream_,
-                    d_obstacle_,
-                    h_obstacle_count,
-                    coarse_pose,
-                    2.0f * fine_xy,
-                    2.0f * fine_xy,
-                    fine_xy,
-                    2.0f * fine_yaw,
-                    fine_yaw,
-                    match_params.max_dist_thresh,
-                    match_params.dynamic_dist_thresh,
-                    match_params.field_min_x,
-                    match_params.field_max_x,
-                    match_params.field_min_y,
-                    match_params.field_max_y,
-                    out_best_pose,
-                    out_best_cost,
-                    out_dynamic_pts,
-                    true,
-                    out_inlier_count,
-                    out_inlier_cost,
-                    match_params.inlier_dist_thresh
-                );
+            // Repeated 5x5x5 searches retain the previous winner and remove
+            // the 1 cm / 0.01 rad quantization left by a single refinement.
+            float fine_xy = match_params.step_xy;
+            float fine_yaw = match_params.step_yaw;
+            for (int level = 0; level < match_params.fine_refine_levels && pose_matched; ++level) {
+                fine_xy /= 5.0f;
+                fine_yaw /= 5.0f;
+                const PoseCandidate center = out_best_pose;
+                const bool final = level+1 == match_params.fine_refine_levels;
+                if (use_esdf_) {
+                    pose_matched     = launchESDFMatcher(
+                        stream_,
+                        d_obstacle_,
+                        h_obstacle_count,
+                        center,
+                        2.0f * fine_xy,
+                        2.0f * fine_xy,
+                        fine_xy,
+                        2.0f * fine_yaw,
+                        fine_yaw,
+                        match_params.max_dist_thresh,
+                        match_params.dynamic_dist_thresh,
+                        match_params.field_min_x,
+                        match_params.field_max_x,
+                        match_params.field_min_y,
+                        match_params.field_max_y,
+                        out_best_pose,
+                        out_best_cost,
+                        out_dynamic_pts,
+                        final,
+                        final ? out_inlier_count : nullptr,
+                        final ? out_inlier_cost : nullptr,
+                        match_params.inlier_dist_thresh
+                    );
+                } else {
+                    pose_matched     = launchFieldSDFMatcher(
+                        stream_,
+                        d_obstacle_,
+                        h_obstacle_count,
+                        center,
+                        2.0f * fine_xy,
+                        2.0f * fine_xy,
+                        fine_xy,
+                        2.0f * fine_yaw,
+                        fine_yaw,
+                        match_params.max_dist_thresh,
+                        match_params.dynamic_dist_thresh,
+                        match_params.field_min_x,
+                        match_params.field_max_x,
+                        match_params.field_min_y,
+                        match_params.field_max_y,
+                        out_best_pose,
+                        out_best_cost,
+                        out_dynamic_pts,
+                        final,
+                        final ? out_inlier_count : nullptr,
+                        final ? out_inlier_cost : nullptr,
+                        match_params.inlier_dist_thresh
+                    );
+                }
             }
         }
     } else {
