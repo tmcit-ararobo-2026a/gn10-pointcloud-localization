@@ -134,7 +134,7 @@ Pre-building a 3D ESDF binary (`.esdf`) from a PCD file reduces node startup tim
 Relative paths are supported and will automatically search inside `map/`.
 
 ```bash
-# Usage: pcd_to_esdf_converter <input.pcd> <output.esdf> <resolution_m> [max_dist_m]
+# Usage: pcd_to_esdf_converter <input.pcd> <output.esdf> <resolution_m> [max_dist_m] [min_x max_x min_y max_y min_z max_z]
 ros2 run gn10_pointcloud_localization pcd_to_esdf_converter \
   ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.pcd \
   ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.esdf \
@@ -142,7 +142,16 @@ ros2 run gn10_pointcloud_localization pcd_to_esdf_converter \
 
 ```
 
-If `map_source_type: "pcd"` is specified when launching the node, a `<filename>.esdf` cache will be generated automatically on the first run and loaded on subsequent launches.
+Optional Bounding Box crop:
+
+```bash
+ros2 run gn10_pointcloud_localization pcd_to_esdf_converter \
+  ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.pcd \
+  ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.esdf \
+  0.05 0.50 -5.5 5.5 -6.0 6.0 -0.2 4.0
+```
+
+If `map_source_type: "pcd"` is specified when launching the node, a `map/cache/<filename>.esdf` cache will be generated automatically on the first run and loaded on subsequent launches. Runtime cache files are ignored by Git.
 
 ### Launch
 
