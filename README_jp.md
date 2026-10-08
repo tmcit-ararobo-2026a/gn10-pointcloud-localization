@@ -164,6 +164,8 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 | `map_file_path` | `""` | ファイル名またはパス。相対パスの場合は `map/` 内を探索。 |
 | `esdf.resolution` | `0.05` | 3D ESDF グリッドのセル間隔 [m]。解像度を高めると微細な突起が再現可能。 |
 | `esdf.max_dist` | `0.50` | 距離場の打ち切り距離 [m]。テクスチャメモリの有効レンジ。 |
+| `esdf.min_z` | `-0.20` | フィールドオブジェクトから ESDF を生成する際の Z 下限 [m]。 |
+| `esdf.max_z` | `2.00` | フィールドオブジェクトから ESDF を生成する際の Z 上限 [m]。 |
 | `esdf.publish_map` | `true` | マップ読み込み完了後に ESDF を可視化用点群 (`/esdf_map`) として 1 回パブリッシュ。 |
 | `esdf.publish_max_distance` | `-1.0` | 可視化する最大距離 [m] (-1.0 の場合は `max_dist` 未満の全ボクセル)。 |
 | `esdf.publish_stride` | `1` | 可視化時のボクセル間引きステップ (1: 全ボクセル, 2: 1/8 に間引き)。 |
