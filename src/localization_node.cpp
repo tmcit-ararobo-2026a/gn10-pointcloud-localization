@@ -32,6 +32,11 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
 
     setupMapData();
     setupROSInterfaces();
+
+    // マップ読み込み完了後に一度だけ ESDF マップをパブリッシュ
+    if (publish_esdf_map_) {
+        publishESDFMap();
+    }
 }
 
 void LocalizationNode::declareAndGetParameters()
@@ -41,6 +46,9 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("map_objects", std::vector<std::string>{});
     this->declare_parameter("esdf.resolution", 0.05);
     this->declare_parameter("esdf.max_dist", 0.50);
+    this->declare_parameter("esdf.publish_map", true);
+    this->declare_parameter("esdf.publish_max_distance", -1.0);
+    this->declare_parameter("esdf.publish_stride", 1);
 
     this->declare_parameter("frames.map_frame", "map");
     this->declare_parameter("frames.base_frame", "base_link");
@@ -52,6 +60,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("topics.output_obstacle", "/obstacle_cloud");
     this->declare_parameter("topics.output_pose", "/platform_constraint");
     this->declare_parameter("topics.output_markers", "/field_map_markers");
+    this->declare_parameter("topics.output_esdf_map", "/esdf_map");
     this->declare_parameter("topics.fused_prior", "/platform_constraint");
     this->declare_parameter("publish_tf", true);
     this->declare_parameter("fusion.use_prior", false);
@@ -196,6 +205,15 @@ void LocalizationNode::declareAndGetParameters()
     // A known start pose resolves the field's near-symmetric global matches.
     // Do not publish it as a measurement; first require a successful cloud match.
     is_lost_ = !this->get_parameter("initial_pose.use_for_local_search").as_bool();
+
+    topic_esdf_map_   = this->get_parameter("topics.output_esdf_map").as_string();
+    publish_esdf_map_ = this->get_parameter("esdf.publish_map").as_bool();
+    esdf_publish_max_distance_m_ = static_cast<float>(
+        this->get_parameter("esdf.publish_max_distance").as_double()
+    );
+    esdf_publish_stride_ = std::max(
+        1, static_cast<int>(this->get_parameter("esdf.publish_stride").as_int())
+    );
 }
 
 void LocalizationNode::setupMapData()
@@ -390,6 +408,11 @@ void LocalizationNode::setupROSInterfaces()
     pub_map_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
         this->get_parameter("topics.output_markers").as_string(), rclcpp::QoS(1).transient_local()
     );
+    if (publish_esdf_map_) {
+        pub_esdf_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+            topic_esdf_map_, rclcpp::QoS(1).transient_local().reliable()
+        );
+    }
 
     if (use_2d_lidar_) {
         sub_2d_lidar_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
@@ -966,3 +989,62 @@ void LocalizationNode::publishFieldMapMarkers()
     }
     pub_map_markers_->publish(marker_array);
 }
+
+/**
+ * @brief 読み込み済みの ESDF マップを RViz2 表示用 PointCloud2 として 1 回だけパブリッシュする
+ */
+void LocalizationNode::publishESDFMap()
+{
+    if (!pub_esdf_map_ || esdf_map_.empty()) {
+        return;
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Extracting ESDF map voxel points for RViz2 visualization...");
+    const std::vector<ESDFMap::ESDFVoxelPoint> voxel_points = esdf_map_.extractVoxelPoints(
+        esdf_publish_max_distance_m_,
+        esdf_publish_stride_
+    );
+
+    if (voxel_points.empty()) {
+        RCLCPP_WARN(this->get_logger(), "No ESDF voxel points found within threshold.");
+        return;
+    }
+
+    const size_t total_points = voxel_points.size();
+    auto out_msg          = std::make_unique<sensor_msgs::msg::PointCloud2>();
+    out_msg->header.stamp = this->now();
+    out_msg->header.frame_id = map_frame_;
+    out_msg->height       = 1;
+    out_msg->width        = static_cast<uint32_t>(total_points);
+    out_msg->is_dense     = true;
+    out_msg->is_bigendian = false;
+
+    // フィールドの設定: xyz + intensity (距離を格納)
+    sensor_msgs::PointCloud2Modifier modifier(*out_msg);
+    modifier.setPointCloud2FieldsByString(2, "xyz", "intensity");
+    modifier.resize(total_points);
+
+    // 点群データの書き込み (intensity フィールドに距離[m]を代入)
+    sensor_msgs::PointCloud2Iterator<float> iter_x(*out_msg, "x");
+    sensor_msgs::PointCloud2Iterator<float> iter_y(*out_msg, "y");
+    sensor_msgs::PointCloud2Iterator<float> iter_z(*out_msg, "z");
+    sensor_msgs::PointCloud2Iterator<float> iter_intensity(*out_msg, "intensity");
+
+    for (size_t point_index = 0; point_index < total_points; ++point_index, ++iter_x, ++iter_y, ++iter_z, ++iter_intensity) {
+        const auto& point_data = voxel_points[point_index];
+        *iter_x = point_data.x;
+        *iter_y = point_data.y;
+        *iter_z = point_data.z;
+        *iter_intensity = point_data.distance_m;
+    }
+
+    // 1 回だけパブリッシュ (QoS transient_local により後から起動した RViz2 にも自動配信)
+    pub_esdf_map_->publish(std::move(out_msg));
+    RCLCPP_INFO(
+        this->get_logger(),
+        "Published ESDF map to '%s' (%zu points, transient_local QoS)",
+        topic_esdf_map_.c_str(),
+        total_points
+    );
+}
+

@@ -258,3 +258,68 @@ float ESDFMap::getDistance(float wx, float wy, float wz) const
                 lerp(lerp(sample(x0,y0,z1), sample(x1,y0,z1), tx),
                      lerp(sample(x0,y1,z1), sample(x1,y1,z1), tx), ty), tz);
 }
+
+/**
+ * @brief 可視化用のボクセル点群を抽出する
+ * 
+ * 指定された最大距離閾値未満のボクセルをワールド座標系における点群として抽出します。
+ * 
+ * @param max_distance_m 抽出する最大距離[m] (負値の場合は header_.max_dist_thresh 未満)
+ * @param stride ボクセルの間引きステップ (1以上の整数)
+ * @return std::vector<ESDFMap::ESDFVoxelPoint> 抽出されたボクセル点群
+ */
+std::vector<ESDFMap::ESDFVoxelPoint> ESDFMap::extractVoxelPoints(
+    float max_distance_m,
+    int stride
+) const
+{
+    std::vector<ESDFVoxelPoint> voxel_points;
+    if (grid_.empty()) {
+        return voxel_points;
+    }
+
+    // 間引きステップの正規化
+    int effective_stride = stride;
+    if (effective_stride < 1) {
+        effective_stride = 1;
+    }
+
+    // 抽出距離しきい値の決定 (三項演算子は規約違反のため if-else 文を使用)
+    float distance_threshold_m = header_.max_dist_thresh;
+    if (max_distance_m >= 0.0f && max_distance_m < header_.max_dist_thresh) {
+        distance_threshold_m = max_distance_m;
+    }
+
+    const float resolution_m = header_.resolution;
+    const int size_x = header_.size_x;
+    const int size_y = header_.size_y;
+    const int size_z = header_.size_z;
+    const float min_x_m = header_.min_x;
+    const float min_y_m = header_.min_y;
+    const float min_z_m = header_.min_z;
+
+    // ボクセル配列を走査してしきい値内の点群を抽出
+    for (int z_index = 0; z_index < size_z; z_index += effective_stride) {
+        const float world_z_m = min_z_m + (static_cast<float>(z_index) + 0.5f) * resolution_m;
+        const size_t z_offset = static_cast<size_t>(z_index) * size_x * size_y;
+
+        for (int y_index = 0; y_index < size_y; y_index += effective_stride) {
+            const float world_y_m = min_y_m + (static_cast<float>(y_index) + 0.5f) * resolution_m;
+            const size_t y_offset = static_cast<size_t>(y_index) * size_x;
+
+            for (int x_index = 0; x_index < size_x; x_index += effective_stride) {
+                const size_t voxel_index = static_cast<size_t>(x_index) + y_offset + z_offset;
+                const float distance_m = grid_[voxel_index];
+
+                // 未観測・クリップ上限（何もない空間）を除外し、障害物表面近傍のみ抽出
+                if (distance_m < distance_threshold_m && distance_m >= 0.0f) {
+                    const float world_x_m = min_x_m + (static_cast<float>(x_index) + 0.5f) * resolution_m;
+                    voxel_points.push_back({world_x_m, world_y_m, world_z_m, distance_m});
+                }
+            }
+        }
+    }
+
+    return voxel_points;
+}
+

@@ -65,12 +65,11 @@ All GPU threads execute a single texture fetch instruction without branching, ma
 [IMU (Yaw Integral Pred)] ───────────────────────────>          │
                                                                ▼
 [3D ESDF Map (GPU Texture)] ──────────────────────> [ArgMin Pose Estimation]
-                                                               │
-                                  ┌────────────────────────────┴────────────────────────┐
-                                  ▼                                                     ▼
-                     [Estimated Pose (/platform_constraint)]            [Dynamic Point Cloud (/dynamic_cloud)]
-                     [TF (map -> base_link)]
-
+      │                                                        │
+      ▼ (Published once at startup: Transient Local) ┌─────────┴─────────┐
+[ESDF Cloud (/esdf_map)]                             ▼                   ▼
+                               [Estimated Pose (/platform_constraint)]   [Dynamic Point Cloud (/dynamic_cloud)]
+                               [TF (map -> base_link)]
 ```
 
 1. **Point Cloud Preprocessing (`ground_filter.cu`)**:
@@ -157,8 +156,22 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 # Team presets (Red Zone / Blue Zone)
 ros2 launch gn10_pointcloud_localization red.launch.py
 ros2 launch gn10_pointcloud_localization blue.launch.py
-
 ```
+
+### RViz2 ESDF Map Visualization
+
+When the node loads an ESDF map at startup, it publishes the map voxel point cloud **once** to `/esdf_map` (`sensor_msgs/msg/PointCloud2`).  
+Because it uses `transient_local` QoS (latched topic), RViz2 can receive and display the map even if opened after the node has already started.
+
+- **Use Cases**:
+  - Verify that the loaded map file (PCD/ESDF/JSON) matches the intended environment geometry.
+  - Verify alignment between live 3D LiDAR obstacle points (`/obstacle_cloud`) and ESDF surfaces.
+  - Visual inspection when tuning resolution or distance bounds.
+- **RViz2 Settings**:
+  - `Topic`: `/esdf_map`
+  - `Durability Policy`: `Transient Local` (Latched)
+  - `Color Transformer`: `Intensity` (stores the distance [m] to obstacle surfaces, displaying a gradient from 0 m)
+  - `Style`: `Flat Squares` (recommended size $\approx 0.04\text{ m}$)
 
 ---
 
@@ -172,6 +185,10 @@ Primary settings are configured in [`config/localization_params.yaml`](https://w
 | `map_file_path` | `""` | File name or path. Relative paths search inside `map/`. |
 | `esdf.resolution` | `0.05` | 3D ESDF grid cell spacing [m]. Higher resolution captures finer protrusions. |
 | `esdf.max_dist` | `0.50` | Truncation distance for the distance field [m]. Effective range for texture memory. |
+| `esdf.publish_map` | `true` | Publishes the ESDF map point cloud (`/esdf_map`) once upon loading. |
+| `esdf.publish_max_distance` | `-1.0` | Max distance [m] to include in visualization point cloud (-1.0 includes all voxels below `max_dist`). |
+| `esdf.publish_stride` | `1` | Downsampling stride for visualization voxels (1: all voxels, 2: 1/8 downsampled). |
+| `topics.output_esdf_map` | `"/esdf_map"` | Topic name for visualization ESDF point cloud (QoS: Transient Local). |
 | `scan_accumulation.window_s` | `0.10` | Point cloud accumulation window [s]. Motion-corrects points to the end-of-scan time before matching. 0 for single scan, max 0.5. |
 | `scan_accumulation.timestamp_field` | `timestamp` | Acquisition timestamp field name for each point in PointCloud2. |
 | `scan_accumulation.timestamp_scale` | `1.0e-9` | Scale factor to convert point timestamps to seconds. Matches Livox absolute nanosecond timestamps. |
