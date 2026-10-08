@@ -296,9 +296,22 @@ void LocalizationNode::setupMapData()
                 this->get_logger(), "map_source_type is 'pcd' but map_file_path is empty!"
             );
         } else {
-            // 自動キャッシュチェック (.pcd -> .pcd.esdf または .esdf)
-            std::string cache_path = file_path + ".esdf";
-            bool loaded_cache      = esdf_map_.loadBinary(cache_path);
+            // 自動キャッシュチェック (map/cache/<PCD名>.esdf)
+            const std::filesystem::path pcd_path(file_path);
+            const std::filesystem::path cache_dir = pcd_path.parent_path() / "cache";
+            std::error_code cache_error;
+            std::filesystem::create_directories(cache_dir, cache_error);
+            if (cache_error) {
+                RCLCPP_WARN(
+                    this->get_logger(),
+                    "Failed to create ESDF cache directory '%s': %s",
+                    cache_dir.string().c_str(),
+                    cache_error.message().c_str()
+                );
+            }
+            const std::string cache_path =
+                (cache_dir / (pcd_path.stem().string() + ".esdf")).string();
+            bool loaded_cache = esdf_map_.loadBinary(cache_path);
             if (loaded_cache && esdf_crop_bounds_.enabled) {
                 const auto& cached       = esdf_map_.header();
                 const auto expected_size = [](float min_value, float max_value, float resolution) {

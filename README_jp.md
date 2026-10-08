@@ -114,14 +114,23 @@ PCD ファイルから事前に 3D ESDF バイナリ（`.esdf`）を作成して
 パスは相対パスでも指定可能です。相対パスの場合は `map/` 内を探索します。
 
 ```bash
-# 使用法: pcd_to_esdf_converter <input.pcd> <output.esdf> <resolution_m> [max_dist_m]
+# 使用法: pcd_to_esdf_converter <input.pcd> <output.esdf> <resolution_m> [max_dist_m] [min_x max_x min_y max_y min_z max_z]
 ros2 run gn10_pointcloud_localization pcd_to_esdf_converter \
   ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.pcd \
   ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.esdf \
   0.05 0.50
 ```
 
-ノード起動時に `map_source_type: "pcd"` を指定した場合、初回起動時に自動で `<ファイル名>.esdf` キャッシュが生成され、次回以降は自動でキャッシュが読み込まれます。
+Bounding Box を指定して必要な範囲だけ変換する場合:
+
+```bash
+ros2 run gn10_pointcloud_localization pcd_to_esdf_converter \
+  ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.pcd \
+  ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.esdf \
+  0.05 0.50 -5.5 5.5 -6.0 6.0 -0.2 4.0
+```
+
+ノード起動時に `map_source_type: "pcd"` を指定した場合、初回起動時に `map/cache/<ファイル名>.esdf` キャッシュが生成され、次回以降は自動でキャッシュが読み込まれます。実行時キャッシュは Git の追跡対象外です。
 
 ### 起動 (Launch)
 
