@@ -156,7 +156,7 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 
 ## 6. パラメータ解説
 
-主要な設定は [`config/localization_params.yaml`](./config/localization_params.yaml) で行います。
+共通設定は [`config/common_params.yaml`](./config/common_params.yaml) にまとめています。各 launch は共通設定を読み込んだ後、`config/localization_params.yaml`、`config/red_params.yaml`、`config/blue_params.yaml` のプロファイル差分を適用します。
 
 | パラメータ名 | デフォルト | 役割・メカニズム |
 | :--- | :---: | :--- |
@@ -164,8 +164,10 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 | `map_file_path` | `""` | ファイル名またはパス。相対パスの場合は `map/` 内を探索。 |
 | `esdf.resolution` | `0.05` | 3D ESDF グリッドのセル間隔 [m]。解像度を高めると微細な突起が再現可能。 |
 | `esdf.max_dist` | `0.50` | 距離場の打ち切り距離 [m]。テクスチャメモリの有効レンジ。 |
-| `esdf.min_z` | `-0.20` | フィールドオブジェクトから ESDF を生成する際の Z 下限 [m]。 |
-| `esdf.max_z` | `2.00` | フィールドオブジェクトから ESDF を生成する際の Z 上限 [m]。 |
+| `esdf.crop_enabled` | `true` | 点群/PCD から ESDF を生成する際に指定した Bounding Box でクロップするか。false の場合は点群 AABB に `max_dist` のマージンを加えます。 |
+| `esdf.crop_min_x` / `esdf.crop_max_x` | `-5.5` / `5.5` | ESDF クロップ範囲の X 下限/上限 [m]。 |
+| `esdf.crop_min_y` / `esdf.crop_max_y` | `-6.0` / `6.0` | ESDF クロップ範囲の Y 下限/上限 [m]。 |
+| `esdf.min_z` / `esdf.max_z` | `-0.20` / `4.00` | ESDF クロップ範囲の Z 下限/上限 [m]。 |
 | `esdf.publish_map` | `true` | マップ読み込み完了後に ESDF を可視化用点群 (`/esdf_map`) として 1 回パブリッシュ。 |
 | `esdf.publish_max_distance` | `-1.0` | 可視化する最大距離 [m] (-1.0 の場合は `max_dist` 未満の全ボクセル)。 |
 | `esdf.publish_stride` | `1` | 可視化時のボクセル間引きステップ (1: 全ボクセル, 2: 1/8 に間引き)。 |

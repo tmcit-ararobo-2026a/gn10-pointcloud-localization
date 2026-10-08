@@ -46,6 +46,11 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("map_objects", std::vector<std::string>{});
     this->declare_parameter("esdf.resolution", 0.05);
     this->declare_parameter("esdf.max_dist", 0.50);
+    this->declare_parameter("esdf.crop_enabled", false);
+    this->declare_parameter("esdf.crop_min_x", -5.5);
+    this->declare_parameter("esdf.crop_max_x", 5.5);
+    this->declare_parameter("esdf.crop_min_y", -6.0);
+    this->declare_parameter("esdf.crop_max_y", 6.0);
     this->declare_parameter("esdf.min_z", -0.2);
     this->declare_parameter("esdf.max_z", 2.0);
     this->declare_parameter("esdf.publish_map", true);
@@ -208,9 +213,29 @@ void LocalizationNode::declareAndGetParameters()
     // Do not publish it as a measurement; first require a successful cloud match.
     is_lost_ = !this->get_parameter("initial_pose.use_for_local_search").as_bool();
 
-    topic_esdf_map_ = this->get_parameter("topics.output_esdf_map").as_string();
-    esdf_min_z_     = static_cast<float>(this->get_parameter("esdf.min_z").as_double());
-    esdf_max_z_     = static_cast<float>(this->get_parameter("esdf.max_z").as_double());
+    topic_esdf_map_           = this->get_parameter("topics.output_esdf_map").as_string();
+    esdf_crop_bounds_.enabled = this->get_parameter("esdf.crop_enabled").as_bool();
+    esdf_crop_bounds_.min_x =
+        static_cast<float>(this->get_parameter("esdf.crop_min_x").as_double());
+    esdf_crop_bounds_.max_x =
+        static_cast<float>(this->get_parameter("esdf.crop_max_x").as_double());
+    esdf_crop_bounds_.min_y =
+        static_cast<float>(this->get_parameter("esdf.crop_min_y").as_double());
+    esdf_crop_bounds_.max_y =
+        static_cast<float>(this->get_parameter("esdf.crop_max_y").as_double());
+    esdf_min_z_             = static_cast<float>(this->get_parameter("esdf.min_z").as_double());
+    esdf_max_z_             = static_cast<float>(this->get_parameter("esdf.max_z").as_double());
+    esdf_crop_bounds_.min_z = esdf_min_z_;
+    esdf_crop_bounds_.max_z = esdf_max_z_;
+    if (esdf_crop_bounds_.enabled &&
+        (!std::isfinite(esdf_crop_bounds_.min_x) || !std::isfinite(esdf_crop_bounds_.max_x) ||
+         !std::isfinite(esdf_crop_bounds_.min_y) || !std::isfinite(esdf_crop_bounds_.max_y) ||
+         esdf_crop_bounds_.min_x >= esdf_crop_bounds_.max_x ||
+         esdf_crop_bounds_.min_y >= esdf_crop_bounds_.max_y)) {
+        throw std::invalid_argument(
+            "esdf crop bounds must be finite and min must be less than max"
+        );
+    }
     if (!std::isfinite(esdf_min_z_) || !std::isfinite(esdf_max_z_) || esdf_min_z_ >= esdf_max_z_) {
         throw std::invalid_argument("esdf.min_z must be finite and less than esdf.max_z");
     }
@@ -274,6 +299,26 @@ void LocalizationNode::setupMapData()
             // 自動キャッシュチェック (.pcd -> .pcd.esdf または .esdf)
             std::string cache_path = file_path + ".esdf";
             bool loaded_cache      = esdf_map_.loadBinary(cache_path);
+            if (loaded_cache && esdf_crop_bounds_.enabled) {
+                const auto& cached       = esdf_map_.header();
+                const auto expected_size = [](float min_value, float max_value, float resolution) {
+                    return std::max(
+                        1, static_cast<int>(std::ceil((max_value - min_value) / resolution))
+                    );
+                };
+                loaded_cache =
+                    std::abs(cached.resolution - esdf_res) < 1e-6f &&
+                    std::abs(cached.max_dist_thresh - esdf_max_dist) < 1e-6f &&
+                    std::abs(cached.min_x - esdf_crop_bounds_.min_x) < 1e-5f &&
+                    std::abs(cached.min_y - esdf_crop_bounds_.min_y) < 1e-5f &&
+                    std::abs(cached.min_z - esdf_crop_bounds_.min_z) < 1e-5f &&
+                    cached.size_x ==
+                        expected_size(esdf_crop_bounds_.min_x, esdf_crop_bounds_.max_x, esdf_res) &&
+                    cached.size_y ==
+                        expected_size(esdf_crop_bounds_.min_y, esdf_crop_bounds_.max_y, esdf_res) &&
+                    cached.size_z ==
+                        expected_size(esdf_crop_bounds_.min_z, esdf_crop_bounds_.max_z, esdf_res);
+            }
             if (loaded_cache) {
                 RCLCPP_INFO(
                     this->get_logger(), "Found ESDF cache: %s. Loaded directly.", cache_path.c_str()
@@ -286,7 +331,7 @@ void LocalizationNode::setupMapData()
                     esdf_res,
                     esdf_max_dist
                 );
-                if (esdf_map_.buildFromPCD(file_path, esdf_res, esdf_max_dist)) {
+                if (esdf_map_.buildFromPCD(file_path, esdf_res, esdf_max_dist, esdf_crop_bounds_)) {
                     esdf_map_.saveBinary(cache_path);
                     RCLCPP_INFO(
                         this->get_logger(), "ESDF built and cached to: %s", cache_path.c_str()
@@ -331,10 +376,10 @@ void LocalizationNode::setupMapData()
     if (esdf_map_.buildFromFieldObjects(
             map_objects_,
             esdf_res,
-            match_params_.field_min_x,
-            match_params_.field_max_x,
-            match_params_.field_min_y,
-            match_params_.field_max_y,
+            esdf_crop_bounds_.enabled ? esdf_crop_bounds_.min_x : match_params_.field_min_x,
+            esdf_crop_bounds_.enabled ? esdf_crop_bounds_.max_x : match_params_.field_max_x,
+            esdf_crop_bounds_.enabled ? esdf_crop_bounds_.min_y : match_params_.field_min_y,
+            esdf_crop_bounds_.enabled ? esdf_crop_bounds_.max_y : match_params_.field_max_y,
             esdf_min_z_,
             esdf_max_z_,
             esdf_max_dist

@@ -145,6 +145,7 @@ private:
     rclcpp::TimerBase::SharedPtr map_timer_;
 
     // ESDF Map Visualization Parameters
+    ESDFCropBounds esdf_crop_bounds_{};
     float esdf_min_z_{-0.2f};
     float esdf_max_z_{2.0f};
     bool publish_esdf_map_{true};

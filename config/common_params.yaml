@@ -1,0 +1,93 @@
+/**:
+  ros__parameters:
+    # Shared map and ESDF settings
+    map_source_type: "json"
+    map_file_path: ""
+    esdf:
+      resolution: 0.05
+      max_dist: 0.50
+      crop_enabled: true
+      crop_min_x: -5.5
+      crop_max_x: 5.5
+      crop_min_y: -6.0
+      crop_max_y: 6.0
+      min_z: -0.20
+      max_z: 4.00
+      publish_map: true
+      publish_max_distance: -1.0
+      publish_stride: 1
+
+    frames:
+      map_frame: "map"
+      base_frame: "base_link"
+
+    topics:
+      input_cloud: "/livox/lidar"
+      input_imu: "/livox/imu"
+      output_dynamic: "/dynamic_cloud"
+      output_ground: "/ground_cloud"
+      output_obstacle: "/obstacle_cloud"
+      output_pose: "/platform_constraint"
+      output_markers: "/field_map_markers"
+      output_esdf_map: "/esdf_map"
+      fused_prior: "/platform_constraint"
+
+    publish_tf: true
+    fusion:
+      use_prior: false
+      prior_max_age_s: 0.25
+
+    filter_params:
+      max_range: 12.0
+      robot_radius: 0.8
+      robot_height_min: 0.0
+      robot_height_max: 1.2
+      ground_z_thresh: 0.04
+      max_points: 200000
+
+    scan_accumulation:
+      window_s: 0.10
+      timestamp_field: "timestamp"
+      timestamp_scale: 1.0e-9
+      timestamp_relative: false
+
+    matching_params:
+      search_range_xy: 0.30
+      search_step_xy: 0.05
+      search_range_yaw: 0.6
+      search_step_yaw: 0.05
+      fine_refine: true
+      fine_refine_levels: 2
+      max_dist_thresh: 0.25
+      cost_threshold: 0.165
+      dynamic_dist_thresh: 0.15
+      field_min_x: -5.5
+      field_max_x: 5.5
+      field_min_y: -6.0
+      field_max_y: 6.0
+      use_map_bounds: true
+      inlier_dist_thresh: 0.08
+      min_inliers: 60
+      inlier_cost_thresh: 0.05
+
+    lidar_2d:
+      enable: false
+      topic: "/lakibeam/scan"
+      frame_id: "lakibeam_frame"
+
+    global_search:
+      range_min_x: -5.25
+      range_max_x: 5.25
+      range_min_y: -5.70
+      range_max_y: 5.70
+      range_yaw_diff: 3.1415
+      step_xy: 0.30
+      step_yaw: 0.3
+      downsample_stride: 2
+      lost_count_thresh: 10
+
+    initial_pose:
+      use_for_local_search: false
+      x: 0.0
+      y: 0.0
+      yaw: 0.0

@@ -41,11 +41,23 @@ bool ESDFMap::loadBinary(const std::string& file_path)
 }
 
 bool ESDFMap::buildFromPoints(
-    const std::vector<float>& points_xyz, float resolution, float max_dist
+    const std::vector<float>& points_xyz,
+    float resolution,
+    float max_dist,
+    const ESDFCropBounds& crop_bounds
 )
 {
     size_t num_pts = points_xyz.size() / 3;
-    if (num_pts == 0 || resolution <= 0.0f) return false;
+    if (num_pts == 0 || resolution <= 0.0f || max_dist < 0.0f) return false;
+
+    if (crop_bounds.enabled &&
+        (!std::isfinite(crop_bounds.min_x) || !std::isfinite(crop_bounds.max_x) ||
+         !std::isfinite(crop_bounds.min_y) || !std::isfinite(crop_bounds.max_y) ||
+         !std::isfinite(crop_bounds.min_z) || !std::isfinite(crop_bounds.max_z) ||
+         crop_bounds.min_x >= crop_bounds.max_x || crop_bounds.min_y >= crop_bounds.max_y ||
+         crop_bounds.min_z >= crop_bounds.max_z)) {
+        return false;
+    }
 
     float min_x = std::numeric_limits<float>::max(), max_x = std::numeric_limits<float>::lowest();
     float min_y = std::numeric_limits<float>::max(), max_y = std::numeric_limits<float>::lowest();
@@ -59,6 +71,11 @@ bool ESDFMap::buildFromPoints(
         float y = points_xyz[i * 3 + 1];
         float z = points_xyz[i * 3 + 2];
         if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
+        if (crop_bounds.enabled &&
+            (x < crop_bounds.min_x || x > crop_bounds.max_x || y < crop_bounds.min_y ||
+             y > crop_bounds.max_y || z < crop_bounds.min_z || z > crop_bounds.max_z)) {
+            continue;
+        }
 
         min_x = std::min(min_x, x);
         max_x = std::max(max_x, x);
@@ -72,13 +89,22 @@ bool ESDFMap::buildFromPoints(
 
     if (cloud->empty()) return false;
 
-    // マージン付与 (max_dist 分外側まで拡張)
-    min_x -= max_dist;
-    max_x += max_dist;
-    min_y -= max_dist;
-    max_y += max_dist;
-    min_z -= max_dist;
-    max_z += max_dist;
+    if (crop_bounds.enabled) {
+        min_x = crop_bounds.min_x;
+        max_x = crop_bounds.max_x;
+        min_y = crop_bounds.min_y;
+        max_y = crop_bounds.max_y;
+        min_z = crop_bounds.min_z;
+        max_z = crop_bounds.max_z;
+    } else {
+        // マージン付与 (max_dist 分外側まで拡張)
+        min_x -= max_dist;
+        max_x += max_dist;
+        min_y -= max_dist;
+        max_y += max_dist;
+        min_z -= max_dist;
+        max_z += max_dist;
+    }
 
     int nx = std::max(1, static_cast<int>(std::ceil((max_x - min_x) / resolution)));
     int ny = std::max(1, static_cast<int>(std::ceil((max_y - min_y) / resolution)));
@@ -129,7 +155,12 @@ bool ESDFMap::buildFromPoints(
     return true;
 }
 
-bool ESDFMap::buildFromPCD(const std::string& pcd_file_path, float resolution, float max_dist)
+bool ESDFMap::buildFromPCD(
+    const std::string& pcd_file_path,
+    float resolution,
+    float max_dist,
+    const ESDFCropBounds& crop_bounds
+)
 {
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     if (pcl::io::loadPCDFile<pcl::PointXYZ>(pcd_file_path, *cloud) == -1) {
@@ -145,7 +176,7 @@ bool ESDFMap::buildFromPCD(const std::string& pcd_file_path, float resolution, f
         pts.push_back(pt.z);
     }
 
-    return buildFromPoints(pts, resolution, max_dist);
+    return buildFromPoints(pts, resolution, max_dist, crop_bounds);
 }
 
 // 3D BOX (直方体) 表面までの最短距離計算

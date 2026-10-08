@@ -177,7 +177,7 @@ Because it uses `transient_local` QoS (latched topic), RViz2 can receive and dis
 
 ## 6. Parameter Explanation
 
-Primary settings are configured in [`config/localization_params.yaml`](https://www.google.com/search?q=./config/localization_params.yaml).
+Shared settings are configured in [`config/common_params.yaml`](config/common_params.yaml). The launch files load that file first, then apply the profile-specific override from `config/localization_params.yaml`, `config/red_params.yaml`, or `config/blue_params.yaml`.
 
 | Parameter Name | Default | Role / Mechanism |
 | --- | --- | --- |
@@ -185,8 +185,10 @@ Primary settings are configured in [`config/localization_params.yaml`](https://w
 | `map_file_path` | `""` | File name or path. Relative paths search inside `map/`. |
 | `esdf.resolution` | `0.05` | 3D ESDF grid cell spacing [m]. Higher resolution captures finer protrusions. |
 | `esdf.max_dist` | `0.50` | Truncation distance for the distance field [m]. Effective range for texture memory. |
-| `esdf.min_z` | `-0.20` | Lower Z bound [m] when generating an ESDF from field objects. |
-| `esdf.max_z` | `2.00` | Upper Z bound [m] when generating an ESDF from field objects. |
+| `esdf.crop_enabled` | `true` | Crops point-cloud/PCD ESDF generation to the configured bounding box. When false, the finite point-cloud AABB plus `max_dist` margin is used. |
+| `esdf.crop_min_x` / `esdf.crop_max_x` | `-5.5` / `5.5` | X crop bounds [m]. |
+| `esdf.crop_min_y` / `esdf.crop_max_y` | `-6.0` / `6.0` | Y crop bounds [m]. |
+| `esdf.min_z` / `esdf.max_z` | `-0.20` / `4.00` | Z crop bounds [m]. |
 | `esdf.publish_map` | `true` | Publishes the ESDF map point cloud (`/esdf_map`) once upon loading. |
 | `esdf.publish_max_distance` | `-1.0` | Max distance [m] to include in visualization point cloud (-1.0 includes all voxels below `max_dist`). |
 | `esdf.publish_stride` | `1` | Downsampling stride for visualization voxels (1: all voxels, 2: 1/8 downsampled). |
