@@ -46,6 +46,8 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("map_objects", std::vector<std::string>{});
     this->declare_parameter("esdf.resolution", 0.05);
     this->declare_parameter("esdf.max_dist", 0.50);
+    this->declare_parameter("esdf.min_z", -0.2);
+    this->declare_parameter("esdf.max_z", 2.0);
     this->declare_parameter("esdf.publish_map", true);
     this->declare_parameter("esdf.publish_max_distance", -1.0);
     this->declare_parameter("esdf.publish_stride", 1);
@@ -206,7 +208,12 @@ void LocalizationNode::declareAndGetParameters()
     // Do not publish it as a measurement; first require a successful cloud match.
     is_lost_ = !this->get_parameter("initial_pose.use_for_local_search").as_bool();
 
-    topic_esdf_map_   = this->get_parameter("topics.output_esdf_map").as_string();
+    topic_esdf_map_ = this->get_parameter("topics.output_esdf_map").as_string();
+    esdf_min_z_     = static_cast<float>(this->get_parameter("esdf.min_z").as_double());
+    esdf_max_z_     = static_cast<float>(this->get_parameter("esdf.max_z").as_double());
+    if (!std::isfinite(esdf_min_z_) || !std::isfinite(esdf_max_z_) || esdf_min_z_ >= esdf_max_z_) {
+        throw std::invalid_argument("esdf.min_z must be finite and less than esdf.max_z");
+    }
     publish_esdf_map_ = this->get_parameter("esdf.publish_map").as_bool();
     esdf_publish_max_distance_m_ =
         static_cast<float>(this->get_parameter("esdf.publish_max_distance").as_double());
@@ -328,8 +335,8 @@ void LocalizationNode::setupMapData()
             match_params_.field_max_x,
             match_params_.field_min_y,
             match_params_.field_max_y,
-            -0.2f,
-            2.0f,
+            esdf_min_z_,
+            esdf_max_z_,
             esdf_max_dist
         )) {
         RCLCPP_INFO(

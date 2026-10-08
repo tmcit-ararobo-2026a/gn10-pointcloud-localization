@@ -185,6 +185,8 @@ Primary settings are configured in [`config/localization_params.yaml`](https://w
 | `map_file_path` | `""` | File name or path. Relative paths search inside `map/`. |
 | `esdf.resolution` | `0.05` | 3D ESDF grid cell spacing [m]. Higher resolution captures finer protrusions. |
 | `esdf.max_dist` | `0.50` | Truncation distance for the distance field [m]. Effective range for texture memory. |
+| `esdf.min_z` | `-0.20` | Lower Z bound [m] when generating an ESDF from field objects. |
+| `esdf.max_z` | `2.00` | Upper Z bound [m] when generating an ESDF from field objects. |
 | `esdf.publish_map` | `true` | Publishes the ESDF map point cloud (`/esdf_map`) once upon loading. |
 | `esdf.publish_max_distance` | `-1.0` | Max distance [m] to include in visualization point cloud (-1.0 includes all voxels below `max_dist`). |
 | `esdf.publish_stride` | `1` | Downsampling stride for visualization voxels (1: all voxels, 2: 1/8 downsampled). |

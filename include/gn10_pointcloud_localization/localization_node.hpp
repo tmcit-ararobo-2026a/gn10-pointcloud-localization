@@ -16,10 +16,10 @@
 #include <vector>
 #include <visualization_msgs/msg/marker_array.hpp>
 
+#include "gn10_pointcloud_localization/esdf_map.hpp"
 #include "gn10_pointcloud_localization/global_searcher.hpp"
 #include "gn10_pointcloud_localization/map_loader.hpp"
 #include "gn10_pointcloud_localization/pose_solver.hpp"
-#include "gn10_pointcloud_localization/esdf_map.hpp"
 #include "gn10_pointcloud_localization/scan_accumulator.hpp"
 
 class LocalizationNode : public rclcpp::Node
@@ -46,7 +46,8 @@ private:
         const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
     );
     std::vector<TimedScanPoint> extractTimedBasePoints(
-        const sensor_msgs::msg::PointCloud2& msg, const float transform[12], int64_t& end_ns);
+        const sensor_msgs::msg::PointCloud2& msg, const float transform[12], int64_t& end_ns
+    );
     void updateLostState(bool matched, float best_cost);
     void publishPoseAndTransform(const rclcpp::Time& stamp, const PoseCandidate& pose);
 
@@ -110,7 +111,10 @@ private:
     std::string timestamp_field_;
     double timestamp_scale_{1e-9};
     bool timestamp_relative_{false};
-    struct PoseSample { rclcpp::Time stamp; PoseCandidate pose; };
+    struct PoseSample {
+        rclcpp::Time stamp;
+        PoseCandidate pose;
+    };
     std::deque<PoseSample> velocity_history_;
 
     // 2D LiDAR (Lakibeam 1) Integration
@@ -141,6 +145,8 @@ private:
     rclcpp::TimerBase::SharedPtr map_timer_;
 
     // ESDF Map Visualization Parameters
+    float esdf_min_z_{-0.2f};
+    float esdf_max_z_{2.0f};
     bool publish_esdf_map_{true};
     float esdf_publish_max_distance_m_{-1.0f};
     int esdf_publish_stride_{1};
