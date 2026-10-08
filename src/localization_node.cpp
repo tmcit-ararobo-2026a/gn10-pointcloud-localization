@@ -32,6 +32,11 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
 
     setupMapData();
     setupROSInterfaces();
+
+    // マップ読み込み完了後に一度だけ ESDF マップをパブリッシュ
+    if (publish_esdf_map_) {
+        publishESDFMap();
+    }
 }
 
 void LocalizationNode::declareAndGetParameters()
@@ -41,6 +46,9 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("map_objects", std::vector<std::string>{});
     this->declare_parameter("esdf.resolution", 0.05);
     this->declare_parameter("esdf.max_dist", 0.50);
+    this->declare_parameter("esdf.publish_map", true);
+    this->declare_parameter("esdf.publish_max_distance", -1.0);
+    this->declare_parameter("esdf.publish_stride", 1);
 
     this->declare_parameter("frames.map_frame", "map");
     this->declare_parameter("frames.base_frame", "base_link");
@@ -52,6 +60,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("topics.output_obstacle", "/obstacle_cloud");
     this->declare_parameter("topics.output_pose", "/platform_constraint");
     this->declare_parameter("topics.output_markers", "/field_map_markers");
+    this->declare_parameter("topics.output_esdf_map", "/esdf_map");
     this->declare_parameter("topics.fused_prior", "/platform_constraint");
     this->declare_parameter("publish_tf", true);
     this->declare_parameter("fusion.use_prior", false);
@@ -71,9 +80,9 @@ void LocalizationNode::declareAndGetParameters()
     if (!std::isfinite(window_s) || window_s < 0.0 || window_s > 0.5) {
         throw std::invalid_argument("scan_accumulation.window_s must be in [0, 0.5]");
     }
-    scan_accumulator_ = ScanAccumulator(window_s);
-    timestamp_field_ = this->get_parameter("scan_accumulation.timestamp_field").as_string();
-    timestamp_scale_ = this->get_parameter("scan_accumulation.timestamp_scale").as_double();
+    scan_accumulator_   = ScanAccumulator(window_s);
+    timestamp_field_    = this->get_parameter("scan_accumulation.timestamp_field").as_string();
+    timestamp_scale_    = this->get_parameter("scan_accumulation.timestamp_scale").as_double();
     timestamp_relative_ = this->get_parameter("scan_accumulation.timestamp_relative").as_bool();
     if (!std::isfinite(timestamp_scale_) || timestamp_scale_ <= 0) {
         throw std::invalid_argument("scan_accumulation.timestamp_scale must be positive");
@@ -196,6 +205,13 @@ void LocalizationNode::declareAndGetParameters()
     // A known start pose resolves the field's near-symmetric global matches.
     // Do not publish it as a measurement; first require a successful cloud match.
     is_lost_ = !this->get_parameter("initial_pose.use_for_local_search").as_bool();
+
+    topic_esdf_map_   = this->get_parameter("topics.output_esdf_map").as_string();
+    publish_esdf_map_ = this->get_parameter("esdf.publish_map").as_bool();
+    esdf_publish_max_distance_m_ =
+        static_cast<float>(this->get_parameter("esdf.publish_max_distance").as_double());
+    esdf_publish_stride_ =
+        std::max(1, static_cast<int>(this->get_parameter("esdf.publish_stride").as_int()));
 }
 
 void LocalizationNode::setupMapData()
@@ -211,12 +227,12 @@ void LocalizationNode::setupMapData()
         if (p.is_relative()) {
             std::string package_share =
                 ament_index_cpp::get_package_share_directory("gn10_pointcloud_localization");
-            std::filesystem::path map_dir_path =
-                std::filesystem::path(package_share) / "map" / p;
+            std::filesystem::path map_dir_path = std::filesystem::path(package_share) / "map" / p;
             if (std::filesystem::exists(map_dir_path)) {
                 file_path = map_dir_path.string();
             } else {
-                // share側になければソース側の map ディレクトリもチェック（シンボリックリンクや開発時対応）
+                // share側になければソース側の map
+                // ディレクトリもチェック（シンボリックリンクや開発時対応）
                 file_path = map_dir_path.string();
             }
         }
@@ -224,7 +240,9 @@ void LocalizationNode::setupMapData()
 
     if (map_source == "esdf") {
         if (file_path.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "map_source_type is 'esdf' but map_file_path is empty!");
+            RCLCPP_ERROR(
+                this->get_logger(), "map_source_type is 'esdf' but map_file_path is empty!"
+            );
         } else if (!esdf_map_.loadBinary(file_path)) {
             RCLCPP_ERROR(this->get_logger(), "Failed to load ESDF file: %s", file_path.c_str());
         } else {
@@ -242,13 +260,17 @@ void LocalizationNode::setupMapData()
         }
     } else if (map_source == "pcd") {
         if (file_path.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "map_source_type is 'pcd' but map_file_path is empty!");
+            RCLCPP_ERROR(
+                this->get_logger(), "map_source_type is 'pcd' but map_file_path is empty!"
+            );
         } else {
             // 自動キャッシュチェック (.pcd -> .pcd.esdf または .esdf)
             std::string cache_path = file_path + ".esdf";
-            bool loaded_cache = esdf_map_.loadBinary(cache_path);
+            bool loaded_cache      = esdf_map_.loadBinary(cache_path);
             if (loaded_cache) {
-                RCLCPP_INFO(this->get_logger(), "Found ESDF cache: %s. Loaded directly.", cache_path.c_str());
+                RCLCPP_INFO(
+                    this->get_logger(), "Found ESDF cache: %s. Loaded directly.", cache_path.c_str()
+                );
             } else {
                 RCLCPP_INFO(
                     this->get_logger(),
@@ -259,9 +281,13 @@ void LocalizationNode::setupMapData()
                 );
                 if (esdf_map_.buildFromPCD(file_path, esdf_res, esdf_max_dist)) {
                     esdf_map_.saveBinary(cache_path);
-                    RCLCPP_INFO(this->get_logger(), "ESDF built and cached to: %s", cache_path.c_str());
+                    RCLCPP_INFO(
+                        this->get_logger(), "ESDF built and cached to: %s", cache_path.c_str()
+                    );
                 } else {
-                    RCLCPP_ERROR(this->get_logger(), "Failed to build ESDF from PCD: %s", file_path.c_str());
+                    RCLCPP_ERROR(
+                        this->get_logger(), "Failed to build ESDF from PCD: %s", file_path.c_str()
+                    );
                 }
             }
 
@@ -326,15 +352,20 @@ void LocalizationNode::configureESDFBounds()
     // Keep an explicitly requested crop only when use_map_bounds is disabled.
     if (!this->get_parameter("matching_params.use_map_bounds").as_bool()) return;
     match_params_.useESDFBounds(esdf_map_.header());
-    this->set_parameters({
-        rclcpp::Parameter("matching_params.field_min_x", double(match_params_.field_min_x)),
-        rclcpp::Parameter("matching_params.field_max_x", double(match_params_.field_max_x)),
-        rclcpp::Parameter("matching_params.field_min_y", double(match_params_.field_min_y)),
-        rclcpp::Parameter("matching_params.field_max_y", double(match_params_.field_max_y))
-    });
-    RCLCPP_INFO(this->get_logger(), "ESDF matching bounds: x=[%.3f, %.3f], y=[%.3f, %.3f]",
-                match_params_.field_min_x, match_params_.field_max_x,
-                match_params_.field_min_y, match_params_.field_max_y);
+    this->set_parameters(
+        {rclcpp::Parameter("matching_params.field_min_x", double(match_params_.field_min_x)),
+         rclcpp::Parameter("matching_params.field_max_x", double(match_params_.field_max_x)),
+         rclcpp::Parameter("matching_params.field_min_y", double(match_params_.field_min_y)),
+         rclcpp::Parameter("matching_params.field_max_y", double(match_params_.field_max_y))}
+    );
+    RCLCPP_INFO(
+        this->get_logger(),
+        "ESDF matching bounds: x=[%.3f, %.3f], y=[%.3f, %.3f]",
+        match_params_.field_min_x,
+        match_params_.field_max_x,
+        match_params_.field_min_y,
+        match_params_.field_max_y
+    );
 }
 
 void LocalizationNode::setupROSInterfaces()
@@ -390,6 +421,11 @@ void LocalizationNode::setupROSInterfaces()
     pub_map_markers_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
         this->get_parameter("topics.output_markers").as_string(), rclcpp::QoS(1).transient_local()
     );
+    if (publish_esdf_map_) {
+        pub_esdf_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+            topic_esdf_map_, rclcpp::QoS(1).transient_local().reliable()
+        );
+    }
 
     if (use_2d_lidar_) {
         sub_2d_lidar_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
@@ -492,13 +528,13 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         yaw_history_.clear();
         velocity_history_.clear();
         imu_initialized_ = false;
-        has_velocity_ = false;
-        is_lost_ = true;
+        has_velocity_    = false;
+        is_lost_         = true;
     }
     if (!scan_accumulator_.append(timed_points, reference_ns)) return;
     // Points are already in base_link, at their individual acquisition times.
     std::vector<float> h_raw_cloud;
-    const float identity[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
+    const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
     std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
     PoseCandidate best_pose;
     float best_cost = 0.0f;
@@ -522,8 +558,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     {
         std::lock_guard<std::mutex> lock(pose_mutex_);
         search_base_pose = last_known_pose_;
-        double rotation = 0;
-        if (imu_initialized_ && yaw_history_.delta(last_match_stamp_.nanoseconds(), reference_ns, rotation)) {
+        double rotation  = 0;
+        if (imu_initialized_ &&
+            yaw_history_.delta(last_match_stamp_.nanoseconds(), reference_ns, rotation)) {
             search_base_pose.yaw += float(rotation);
         }
         if (has_velocity_ && !is_lost_) {
@@ -543,14 +580,22 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     }
 
     bool fully_deskewed = false;
-    h_raw_cloud = scan_accumulator_.cloud(reference_ns, yaw_history_, search_base_pose.yaw,
-                                          has_velocity_ ? velocity_x_ : 0.0,
-                                          has_velocity_ ? velocity_y_ : 0.0,
-                                          size_t(this->get_parameter("filter_params.max_points").as_int()),
-                                          &fully_deskewed);
+    h_raw_cloud         = scan_accumulator_.cloud(
+        reference_ns,
+        yaw_history_,
+        search_base_pose.yaw,
+        has_velocity_ ? velocity_x_ : 0.0,
+        has_velocity_ ? velocity_y_ : 0.0,
+        size_t(this->get_parameter("filter_params.max_points").as_int()),
+        &fully_deskewed
+    );
     if (!fully_deskewed) {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
-                            "IMU does not cover the accumulation window; using only the newest scan");
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            10000,
+            "IMU does not cover the accumulation window; using only the newest scan"
+        );
     }
     if (h_raw_cloud.size() < 150) return;
 
@@ -611,7 +656,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             matched           = true;
             has_velocity_     = false;
             velocity_history_.clear();
-            velocity_history_.push_back({reference_stamp,best_pose});
+            velocity_history_.push_back({reference_stamp, best_pose});
             last_match_stamp_ = reference_stamp;
             RCLCPP_INFO(
                 this->get_logger(), "[GlobalSearch] Successfully recovered from lost state."
@@ -649,17 +694,17 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             // differentiating alternating 50 ms scan noise into fake velocity.
             velocity_history_.push_back({reference_stamp, best_pose});
             while (velocity_history_.size() > 2 &&
-                   (reference_stamp-velocity_history_[1].stamp).seconds() > 0.20) {
+                   (reference_stamp - velocity_history_[1].stamp).seconds() > 0.20) {
                 velocity_history_.pop_front();
             }
             const auto& oldest = velocity_history_.front();
-            const double dt = (reference_stamp-oldest.stamp).seconds();
+            const double dt    = (reference_stamp - oldest.stamp).seconds();
             if (dt >= 0.15 && dt < 0.5) {
-                const float vx = (best_pose.x-oldest.pose.x)/float(dt);
-                const float vy = (best_pose.y-oldest.pose.y)/float(dt);
-                if (std::hypot(vx,vy) < 4.0f) {
-                    velocity_x_ = vx;
-                    velocity_y_ = vy;
+                const float vx = (best_pose.x - oldest.pose.x) / float(dt);
+                const float vy = (best_pose.y - oldest.pose.y) / float(dt);
+                if (std::hypot(vx, vy) < 4.0f) {
+                    velocity_x_   = vx;
+                    velocity_y_   = vy;
                     has_velocity_ = true;
                 } else {
                     has_velocity_ = false;
@@ -723,7 +768,8 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
     }
 
     const Eigen::Vector3d omega_imu(
-        msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
+        msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z
+    );
     const Eigen::Vector3d omega_base = R_base_imu * omega_imu;
     const rclcpp::Time stamp(msg->header.stamp);
     if (imu_initialized_ && stamp < last_imu_stamp_) {
@@ -731,12 +777,11 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
         scan_accumulator_.clear();
         velocity_history_.clear();
         has_velocity_ = false;
-        is_lost_ = true;
+        is_lost_      = true;
     }
     yaw_history_.add(stamp.nanoseconds(), omega_base.z());
-    last_imu_stamp_ = stamp;
+    last_imu_stamp_  = stamp;
     imu_initialized_ = true;
-
 }
 
 void LocalizationNode::fusedPriorCallback(
@@ -778,10 +823,11 @@ bool LocalizationNode::getTransformAsArray(
 }
 
 std::vector<TimedScanPoint> LocalizationNode::extractTimedBasePoints(
-    const sensor_msgs::msg::PointCloud2& msg, const float transform[12], int64_t& end_ns)
+    const sensor_msgs::msg::PointCloud2& msg, const float transform[12], int64_t& end_ns
+)
 {
-    const int64_t header_ns = rclcpp::Time(msg.header.stamp).nanoseconds();
-    end_ns = header_ns;
+    const int64_t header_ns                = rclcpp::Time(msg.header.stamp).nanoseconds();
+    end_ns                                 = header_ns;
     const sensor_msgs::msg::PointField *xf = nullptr, *yf = nullptr, *zf = nullptr, *tf = nullptr;
     for (const auto& field : msg.fields) {
         if (field.name == "x") xf = &field;
@@ -790,54 +836,73 @@ std::vector<TimedScanPoint> LocalizationNode::extractTimedBasePoints(
         if (field.name == timestamp_field_) tf = &field;
     }
     using Field = sensor_msgs::msg::PointField;
-    if (!xf || !yf || !zf || xf->datatype != Field::FLOAT32 ||
-        yf->datatype != Field::FLOAT32 || zf->datatype != Field::FLOAT32 ||
-        xf->offset+4 > msg.point_step || yf->offset+4 > msg.point_step ||
-        zf->offset+4 > msg.point_step) return {};
-    const size_t time_size = !tf ? 0 : tf->datatype == Field::FLOAT64 ? 8 :
-        (tf->datatype == Field::FLOAT32 || tf->datatype == Field::UINT32 ? 4 : 0);
-    const bool has_time = tf && time_size && tf->offset+time_size <= msg.point_step;
+    if (!xf || !yf || !zf || xf->datatype != Field::FLOAT32 || yf->datatype != Field::FLOAT32 ||
+        zf->datatype != Field::FLOAT32 || xf->offset + 4 > msg.point_step ||
+        yf->offset + 4 > msg.point_step || zf->offset + 4 > msg.point_step)
+        return {};
+    const size_t time_size =
+        !tf ? 0
+        : tf->datatype == Field::FLOAT64
+            ? 8
+            : (tf->datatype == Field::FLOAT32 || tf->datatype == Field::UINT32 ? 4 : 0);
+    const bool has_time = tf && time_size && tf->offset + time_size <= msg.point_step;
     if (!has_time) {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
-                            "No usable per-point '%s' timestamp; using cloud stamps for accumulation",
-                            timestamp_field_.c_str());
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            10000,
+            "No usable per-point '%s' timestamp; using cloud stamps for accumulation",
+            timestamp_field_.c_str()
+        );
     }
     const auto read = [&](const uint8_t* source, auto& value) {
         std::memcpy(&value, source, sizeof(value));
         if (msg.is_bigendian) {
             auto* bytes = reinterpret_cast<uint8_t*>(&value);
-            std::reverse(bytes,bytes+sizeof(value));
+            std::reverse(bytes, bytes + sizeof(value));
         }
     };
     std::vector<TimedScanPoint> result;
-    result.reserve(size_t(msg.width)*msg.height);
+    result.reserve(size_t(msg.width) * msg.height);
     for (size_t row = 0; row < msg.height; ++row) {
         for (size_t col = 0; col < msg.width; ++col) {
-            const size_t offset = row*msg.row_step + col*msg.point_step;
-            if (offset+msg.point_step > msg.data.size()) return {};
-            const auto* p = msg.data.data()+offset;
+            const size_t offset = row * msg.row_step + col * msg.point_step;
+            if (offset + msg.point_step > msg.data.size()) return {};
+            const auto* p = msg.data.data() + offset;
             float x, y, z;
-            read(p+xf->offset,x); read(p+yf->offset,y); read(p+zf->offset,z);
+            read(p + xf->offset, x);
+            read(p + yf->offset, y);
+            read(p + zf->offset, z);
             if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
             int64_t ns = header_ns;
             if (has_time) {
                 double timestamp = 0;
-                if (tf->datatype == Field::FLOAT64) read(p+tf->offset,timestamp);
+                if (tf->datatype == Field::FLOAT64)
+                    read(p + tf->offset, timestamp);
                 else if (tf->datatype == Field::FLOAT32) {
-                    float value; read(p+tf->offset,value); timestamp = value;
+                    float value;
+                    read(p + tf->offset, value);
+                    timestamp = value;
                 } else {
-                    uint32_t value; read(p+tf->offset,value); timestamp = value;
+                    uint32_t value;
+                    read(p + tf->offset, value);
+                    timestamp = value;
                 }
-                const long double value_ns = static_cast<long double>(timestamp)*timestamp_scale_*1e9L +
-                                             (timestamp_relative_ ? header_ns : 0);
+                const long double value_ns =
+                    static_cast<long double>(timestamp) * timestamp_scale_ * 1e9L +
+                    (timestamp_relative_ ? header_ns : 0);
                 // Reject mismatched time units/clocks before conversion to int64.
-                if (std::isfinite(timestamp) && value_ns >= header_ns-5000000 &&
-                    value_ns <= header_ns+500000000) ns = int64_t(std::llround(value_ns));
+                if (std::isfinite(timestamp) && value_ns >= header_ns - 5000000 &&
+                    value_ns <= header_ns + 500000000)
+                    ns = int64_t(std::llround(value_ns));
             }
-            end_ns = std::max(end_ns,ns);
-            result.push_back({transform[0]*x+transform[1]*y+transform[2]*z+transform[3],
-                              transform[4]*x+transform[5]*y+transform[6]*z+transform[7],
-                              transform[8]*x+transform[9]*y+transform[10]*z+transform[11],ns});
+            end_ns = std::max(end_ns, ns);
+            result.push_back(
+                {transform[0] * x + transform[1] * y + transform[2] * z + transform[3],
+                 transform[4] * x + transform[5] * y + transform[6] * z + transform[7],
+                 transform[8] * x + transform[9] * y + transform[10] * z + transform[11],
+                 ns}
+            );
         }
     }
     return result;
@@ -965,4 +1030,75 @@ void LocalizationNode::publishFieldMapMarkers()
         marker_array.markers.push_back(marker);
     }
     pub_map_markers_->publish(marker_array);
+}
+
+/**
+ * @brief 読み込み済みの ESDF マップを RViz2 表示用 PointCloud2 として 1 回だけパブリッシュする
+ */
+void LocalizationNode::publishESDFMap()
+{
+    if (!pub_esdf_map_ || esdf_map_.empty()) {
+        return;
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Extracting ESDF map voxel points for RViz2 visualization...");
+    const std::vector<ESDFMap::ESDFVoxelPoint> voxel_points =
+        esdf_map_.extractVoxelPoints(esdf_publish_max_distance_m_, esdf_publish_stride_);
+
+    if (voxel_points.empty()) {
+        RCLCPP_WARN(this->get_logger(), "No ESDF voxel points found within threshold.");
+        return;
+    }
+
+    const size_t total_points = voxel_points.size();
+    auto out_msg              = std::make_unique<sensor_msgs::msg::PointCloud2>();
+    out_msg->header.stamp     = this->now();
+    out_msg->header.frame_id  = map_frame_;
+    out_msg->height           = 1;
+    out_msg->width            = static_cast<uint32_t>(total_points);
+    out_msg->is_dense         = true;
+    out_msg->is_bigendian     = false;
+
+    // フィールドの設定: x, y, z, intensity (距離を格納)
+    sensor_msgs::PointCloud2Modifier modifier(*out_msg);
+    modifier.setPointCloud2Fields(
+        4,
+        "x",
+        1,
+        sensor_msgs::msg::PointField::FLOAT32,
+        "y",
+        1,
+        sensor_msgs::msg::PointField::FLOAT32,
+        "z",
+        1,
+        sensor_msgs::msg::PointField::FLOAT32,
+        "intensity",
+        1,
+        sensor_msgs::msg::PointField::FLOAT32
+    );
+    modifier.resize(total_points);
+
+    // 点群データの書き込み (intensity フィールドに距離[m]を代入)
+    sensor_msgs::PointCloud2Iterator<float> iter_x(*out_msg, "x");
+    sensor_msgs::PointCloud2Iterator<float> iter_y(*out_msg, "y");
+    sensor_msgs::PointCloud2Iterator<float> iter_z(*out_msg, "z");
+    sensor_msgs::PointCloud2Iterator<float> iter_intensity(*out_msg, "intensity");
+
+    for (size_t point_index = 0; point_index < total_points;
+         ++point_index, ++iter_x, ++iter_y, ++iter_z, ++iter_intensity) {
+        const auto& point_data = voxel_points[point_index];
+        *iter_x                = point_data.x;
+        *iter_y                = point_data.y;
+        *iter_z                = point_data.z;
+        *iter_intensity        = point_data.distance_m;
+    }
+
+    // 1 回だけパブリッシュ (QoS transient_local により後から起動した RViz2 にも自動配信)
+    pub_esdf_map_->publish(std::move(out_msg));
+    RCLCPP_INFO(
+        this->get_logger(),
+        "Published ESDF map to '%s' (%zu points, transient_local QoS)",
+        topic_esdf_map_.c_str(),
+        total_points
+    );
 }

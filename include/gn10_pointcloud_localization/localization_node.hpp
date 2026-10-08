@@ -57,6 +57,11 @@ private:
     );
     void publishFieldMapMarkers();
 
+    /**
+     * @brief 読み込み済みの ESDF マップを RViz2 表示用 PointCloud2 としてパブリッシュする
+     */
+    void publishESDFMap();
+
     // Member Objects
     std::unique_ptr<PoseSolver> solver_;
     std::unique_ptr<GlobalSearcher> global_searcher_;
@@ -132,5 +137,12 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_dynamic_;
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_platform_pose_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_map_markers_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_esdf_map_;
     rclcpp::TimerBase::SharedPtr map_timer_;
+
+    // ESDF Map Visualization Parameters
+    bool publish_esdf_map_{true};
+    float esdf_publish_max_distance_m_{-1.0f};
+    int esdf_publish_stride_{1};
+    std::string topic_esdf_map_{"/esdf_map"};
 };

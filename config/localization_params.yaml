@@ -21,6 +21,9 @@
     esdf:
       resolution: 0.05      # [m] 3D グリッドのセル解像度。小さくするほど微細な壁形状を再現可能 (0.03〜0.05m 推奨)
       max_dist: 0.50        # [m] 距離場の上限クリッピング距離。GPU テクスチャ内の最大距離 (メモリ削減としきい値外打ち切り)
+      publish_map: false    # マップ読み込み完了後に ESDF を可視化用点群としてパブリッシュするか
+      publish_max_distance: -1.0 # [m] 可視化する最大距離 (-1.0 の場合は max_dist 未満の全ボクセル)
+      publish_stride: 1     # 可視化時のボクセル間引きステップ (1: 全ボクセル, 2: 1/8 に間引き)
     
     # map_source_type が "ros2_param" の場合に使用
     # map_objects: ["BOX,0.0,5.7,0.0,0.15,5.25,0.05", "CYLINDER,0.55,0.87,0.0,0.255,0.1365,0.0"]
@@ -43,6 +46,7 @@
       output_obstacle: "/obstacle_cloud"      # 障害物としてマッチングに使用された点群
       output_pose: "/platform_constraint"     # 推定自己位置 (PoseWithCovarianceStamped)
       output_markers: "/field_map_markers"    # RViz 可視化用フィールドマーカー
+      output_esdf_map: "/esdf_map"            # 3D ESDF マップ可視化用点群 (PointCloud2)
 
     # ----------------------------------------------------------------------------------
     # 点群前処理 (GroundFilter) パラメータ

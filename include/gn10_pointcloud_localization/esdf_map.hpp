@@ -62,6 +62,28 @@ public:
     // 座標 (wx, wy, wz) に対するホスト側での距離取得（デバッグ・検証用）
     float getDistance(float wx, float wy, float wz) const;
 
+    /**
+     * @brief 可視化用 ESDF ボクセル点データ構造体
+     */
+    struct ESDFVoxelPoint {
+        float x;
+        float y;
+        float z;
+        float distance_m;
+    };
+
+    /**
+     * @brief 可視化用のボクセル点群を抽出する
+     * 
+     * @param max_distance_m 抽出する最大距離[m] (負値の場合は header_.max_dist_thresh 未満)
+     * @param stride ボクセルの間引きステップ (1以上の整数)
+     * @return std::vector<ESDFVoxelPoint> 抽出されたボクセル点群
+     */
+    std::vector<ESDFVoxelPoint> extractVoxelPoints(
+        float max_distance_m = -1.0f,
+        int stride = 1
+    ) const;
+
 private:
     ESDFHeader header_{};
     std::vector<float> grid_;

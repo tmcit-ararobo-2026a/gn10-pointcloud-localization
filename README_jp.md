@@ -51,11 +51,11 @@ GPU上ではスレッドごとの木探索パスの不一致分岐拡散やラ�
 [IMU (Yaw 積分予測)] ───────────────────────────>          │
                                                                ▼
 [3D ESDF Map (GPU Texture)] ──────────────────────> [ArgMin 姿勢判定]
-                                                               │
-                                  ┌────────────────────────────┴────────────────────────┐
-                                  ▼                                                     ▼
-                     [推定自己位置 (/platform_constraint)]                [動的障害物点群 (/dynamic_cloud)]
-                     [TF (map -> base_link)]
+      │                                                        │
+      ▼ (起動時 1回配信: Transient Local)   ┌──────────────────┴──────────────────┐
+[ESDF点群 (/esdf_map)]                      ▼                                     ▼
+                               [推定自己位置 (/platform_constraint)]   [動的障害物点群 (/dynamic_cloud)]
+                               [TF (map -> base_link)]
 ```
 
 1. **点群前処理 (`ground_filter.cu`)**:  
@@ -137,6 +137,21 @@ ros2 launch gn10_pointcloud_localization red.launch.py
 ros2 launch gn10_pointcloud_localization blue.launch.py
 ```
 
+### RViz2 での ESDF マップ可視化
+
+ノード起動後に ESDF マップが読み込まれると、`/esdf_map` (`sensor_msgs/msg/PointCloud2`) トピックへ**1回だけ**可視化用点群が配信されます。  
+QoS に `transient_local` を採用しているため、ノード起動後に RViz2 を立ち上げても即座にマップ点群を受信できます。
+
+- **用途**:
+  - 読み込んだマップファイル（PCD/ESDF/JSON）の形状があっているかの確認
+  - 3D LiDAR 障害物点群 (`/obstacle_cloud`) とマップ壁面が正しく一致できているかの視覚的検証
+  - 探索範囲や解像度のチューニング時の材料
+- **RViz2 表示設定**:
+  - `Topic`: `/esdf_map`
+  - `Durability Policy`: `Transient Local` (Latched)
+  - `Color Transformer`: `Intensity` (ボクセルごとの壁面距離 [m] が格納されており、壁面 0m からグラデーション表示されます)
+  - `Style`: `Flat Squares` (Size 0.04m 前後を推奨)
+
 ---
 
 ## 6. パラメータ解説
@@ -149,6 +164,10 @@ ros2 launch gn10_pointcloud_localization blue.launch.py
 | `map_file_path` | `""` | ファイル名またはパス。相対パスの場合は `map/` 内を探索。 |
 | `esdf.resolution` | `0.05` | 3D ESDF グリッドのセル間隔 [m]。解像度を高めると微細な突起が再現可能。 |
 | `esdf.max_dist` | `0.50` | 距離場の打ち切り距離 [m]。テクスチャメモリの有効レンジ。 |
+| `esdf.publish_map` | `true` | マップ読み込み完了後に ESDF を可視化用点群 (`/esdf_map`) として 1 回パブリッシュ。 |
+| `esdf.publish_max_distance` | `-1.0` | 可視化する最大距離 [m] (-1.0 の場合は `max_dist` 未満の全ボクセル)。 |
+| `esdf.publish_stride` | `1` | 可視化時のボクセル間引きステップ (1: 全ボクセル, 2: 1/8 に間引き)。 |
+| `topics.output_esdf_map` | `"/esdf_map"` | 3D ESDF マップ可視化用点群トピック (QoS: Transient Local)。 |
 | `scan_accumulation.window_s` | `0.10` | 点群の蓄積時間 [s]。各点をスキャン末尾時刻へ運動補正して照合。0で単一スキャン、最大0.5。 |
 | `scan_accumulation.timestamp_field` | `timestamp` | PointCloud2の各点の取得時刻フィールド。 |
 | `scan_accumulation.timestamp_scale` | `1.0e-9` | 各点の取得時刻を秒へ換算する係数。Livoxの絶対ナノ秒時刻に対応。 |
