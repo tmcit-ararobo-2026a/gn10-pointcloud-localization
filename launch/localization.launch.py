@@ -11,6 +11,7 @@ def generate_launch_description():
     pkg_dir = get_package_share_directory('gn10_pointcloud_localization')
     
     # デフォルトのパラメータファイルパス
+    common_param_file = os.path.join(pkg_dir, 'config', 'common_params.yaml')
     default_param_file = os.path.join(pkg_dir, 'config', 'localization_params.yaml')
 
     # Launch 引数の定義
@@ -39,6 +40,7 @@ def generate_launch_description():
         name='gn10_pointcloud_localization_node',
         output='screen',
         parameters=[
+            common_param_file,
             LaunchConfiguration('params_file'),
             {'use_sim_time': LaunchConfiguration('use_sim_time')}
         ],
