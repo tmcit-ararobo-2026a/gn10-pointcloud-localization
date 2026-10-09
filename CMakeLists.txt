@@ -1,3 +1,6 @@
+# Copyright 2026 Gento Aiba and contributors
+# SPDX-License-Identifier: Apache-2.0
+
 cmake_minimum_required(VERSION 3.18)
 project(gn10_pointcloud_localization LANGUAGES C CXX CUDA)
 

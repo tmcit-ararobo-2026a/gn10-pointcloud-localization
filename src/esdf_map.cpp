@@ -1,3 +1,6 @@
+// Copyright 2026 Gento Aiba and contributors
+// SPDX-License-Identifier: Apache-2.0
+
 #include "gn10_pointcloud_localization/esdf_map.hpp"
 
 #include <pcl/io/pcd_io.h>

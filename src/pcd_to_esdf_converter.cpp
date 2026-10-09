@@ -1,3 +1,6 @@
+// Copyright 2026 Gento Aiba and contributors
+// SPDX-License-Identifier: Apache-2.0
+
 #include <iostream>
 #include <string>
 
