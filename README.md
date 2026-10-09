@@ -8,18 +8,18 @@ It achieves global initial pose estimation and stable tracking using only point 
 
 ## Table of Contents
 
-1. [Overview and Features](https://www.google.com/search?q=%231-overview-and-features)
-2. [How 3D ESDF & GPU 3D Texture Memory Work](https://www.google.com/search?q=%232-how-3d-esdf--gpu-3d-texture-memory-work)
-3. [System Architecture and Processing Flow](https://www.google.com/search?q=%233-system-architecture-and-processing-flow)
-4. [Build Environment and Dependencies](https://www.google.com/search?q=%234-build-environment-and-dependencies)
-5. [Usage](https://www.google.com/search?q=%235-usage)
-* [Placing Map Files](https://www.google.com/search?q=%23placing-map-files)
-* [Pre-converting PCD to ESDF (CLI)](https://www.google.com/search?q=%23pre-converting-pcd-to-esdf-cli)
-* [Launch](https://www.google.com/search?q=%23launch)
+1. [Overview and Features](#1-overview-and-features)
+2. [How 3D ESDF & GPU 3D Texture Memory Work](#2-how-3d-esdf--gpu-3d-texture-memory-work)
+3. [System Architecture and Processing Flow](#3-system-architecture-and-processing-flow)
+4. [Build Environment and Dependencies](#4-build-environment-and-dependencies)
+5. [Usage](#5-usage)
+* [Placing Map Files](#placing-map-files)
+* [Pre-converting PCD to ESDF (CLI)](#pre-converting-pcd-to-esdf-cli)
+* [Launch](#launch)
 
 
-6. [Parameter Explanation](https://www.google.com/search?q=%236-parameter-explanation)
-7. [License](https://www.google.com/search?q=%237-license)
+6. [Parameter Explanation](#6-parameter-explanation)
+7. [License](#7-license)
 
 ---
 
@@ -222,4 +222,4 @@ Shared settings are configured in [`config/common_params.yaml`](config/common_pa
 
 ## 7. License
 
-This repository is released under the [MIT License](https://www.google.com/search?q=./LICENSE).
+This repository is released under the [Apache 2.0 License](LICENSE).
