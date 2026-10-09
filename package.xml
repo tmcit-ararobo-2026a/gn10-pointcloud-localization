@@ -2,8 +2,8 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>gn10_pointcloud_localization</name>
-  <version>0.0.0</version>
-  <description>Point Cloud Localization for Jetson Orin Nano(CUDA)</description>
+  <version>0.7.0</version>
+  <description>GPU-accelerated 3D ESDF and LiDAR localization for ROS 2</description>
   <maintainer email="contact@gn10.org">Gento Aiba</maintainer>
   <license>Apache 2.0</license>
 
