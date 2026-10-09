@@ -1,6 +1,8 @@
 #pragma once
 #include <cuda_runtime.h>
+
 #include <vector>
+
 #include "gn10_pointcloud_localization/cuda/field_objects.cuh"
 #include "gn10_pointcloud_localization/esdf_map.hpp"
 

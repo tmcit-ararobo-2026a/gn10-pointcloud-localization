@@ -1,15 +1,16 @@
 #include <cuda_runtime.h>
+
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cub/cub.cuh>
-#include <vector>
 #include <iostream>
+#include <vector>
 
 #include "gn10_pointcloud_localization/cuda/esdf_matcher.cuh"
 
 // 3D Texture Memory リソース
-static cudaArray_t g_esdf_array = nullptr;
+static cudaArray_t g_esdf_array       = nullptr;
 static cudaTextureObject_t g_esdf_tex = 0;
 __constant__ ESDFHeader c_esdf_header;
 static bool g_esdf_loaded = false;
@@ -32,9 +33,7 @@ static float* d_inlier_dist_sum = nullptr;
 // 3D Texture からハードウェア Trilinear 補間を用いて距離を取得するデバイス関数
 // tex3D は非正規化座標モードの場合、中心が 0.5f オフセットとなります
 __device__ inline float queryESDF(
-    cudaTextureObject_t tex,
-    const ESDFHeader& header,
-    float wx, float wy, float wz
+    cudaTextureObject_t tex, const ESDFHeader& header, float wx, float wy, float wz
 )
 {
     // グリッド範囲内か判定
@@ -47,8 +46,7 @@ __device__ inline float queryESDF(
     float v = (wy - header.min_y) / header.resolution;
     float w = (wz - header.min_z) / header.resolution;
 
-    if (u >= static_cast<float>(header.size_x) ||
-        v >= static_cast<float>(header.size_y) ||
+    if (u >= static_cast<float>(header.size_x) || v >= static_cast<float>(header.size_y) ||
         w >= static_cast<float>(header.size_z)) {
         return header.max_dist_thresh;
     }
@@ -152,7 +150,7 @@ __global__ void filterDynamicPointsESDFKernel(
         return;
     }
 
-    float d = queryESDF(tex, c_esdf_header, wx, wy, wz);
+    float d           = queryESDF(tex, c_esdf_header, wx, wy, wz);
     out_is_dynamic[i] = (d >= dynamic_dist_thresh) ? 1 : 0;
 }
 
@@ -245,20 +243,18 @@ void uploadESDFMapToGPU(const ESDFHeader& header, const float* h_grid_data)
 
     cudaError_t err = cudaMalloc3DArray(&g_esdf_array, &channelDesc, extent);
     if (err != cudaSuccess) {
-        std::cerr << "[CUDA ESDF] cudaMalloc3DArray failed: " << cudaGetErrorString(err) << std::endl;
+        std::cerr << "[CUDA ESDF] cudaMalloc3DArray failed: " << cudaGetErrorString(err)
+                  << std::endl;
         return;
     }
 
     cudaMemcpy3DParms copyParams = {0};
-    copyParams.srcPtr = make_cudaPitchedPtr(
-        const_cast<float*>(h_grid_data),
-        header.size_x * sizeof(float),
-        header.size_x,
-        header.size_y
+    copyParams.srcPtr            = make_cudaPitchedPtr(
+        const_cast<float*>(h_grid_data), header.size_x * sizeof(float), header.size_x, header.size_y
     );
     copyParams.dstArray = g_esdf_array;
-    copyParams.extent = extent;
-    copyParams.kind = cudaMemcpyHostToDevice;
+    copyParams.extent   = extent;
+    copyParams.kind     = cudaMemcpyHostToDevice;
 
     err = cudaMemcpy3D(&copyParams);
     if (err != cudaSuccess) {
@@ -269,21 +265,22 @@ void uploadESDFMapToGPU(const ESDFHeader& header, const float* h_grid_data)
     // テクスチャオブジェクトの設定 (Trilinear 補間 + Clamp)
     cudaResourceDesc resDesc;
     memset(&resDesc, 0, sizeof(resDesc));
-    resDesc.resType = cudaResourceTypeArray;
+    resDesc.resType         = cudaResourceTypeArray;
     resDesc.res.array.array = g_esdf_array;
 
     cudaTextureDesc texDesc;
     memset(&texDesc, 0, sizeof(texDesc));
-    texDesc.addressMode[0] = cudaAddressModeClamp;
-    texDesc.addressMode[1] = cudaAddressModeClamp;
-    texDesc.addressMode[2] = cudaAddressModeClamp;
-    texDesc.filterMode     = cudaFilterModeLinear; // ハードウェアトライリニア補間
-    texDesc.readMode       = cudaReadModeElementType;
-    texDesc.normalizedCoords = 0; // 非正規化座標 (ボクセルインデックス基準)
+    texDesc.addressMode[0]   = cudaAddressModeClamp;
+    texDesc.addressMode[1]   = cudaAddressModeClamp;
+    texDesc.addressMode[2]   = cudaAddressModeClamp;
+    texDesc.filterMode       = cudaFilterModeLinear;  // ハードウェアトライリニア補間
+    texDesc.readMode         = cudaReadModeElementType;
+    texDesc.normalizedCoords = 0;  // 非正規化座標 (ボクセルインデックス基準)
 
     err = cudaCreateTextureObject(&g_esdf_tex, &resDesc, &texDesc, nullptr);
     if (err != cudaSuccess) {
-        std::cerr << "[CUDA ESDF] cudaCreateTextureObject failed: " << cudaGetErrorString(err) << std::endl;
+        std::cerr << "[CUDA ESDF] cudaCreateTextureObject failed: " << cudaGetErrorString(err)
+                  << std::endl;
         return;
     }
 
@@ -491,4 +488,4 @@ bool launchESDFMatcher(
     return true;
 }
 
-} // extern "C"
+}  // extern "C"
