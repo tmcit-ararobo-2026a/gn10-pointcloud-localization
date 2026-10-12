@@ -1,8 +1,8 @@
 /**:
   ros__parameters:
     # Shared map and ESDF settings
-    map_source_type: "json"
-    map_file_path: ""
+    map_source_type: "esdf"
+    map_file_path: "/home/ararobo/ros2_ws/src/gn10-pointcloud-localization/map/miraikoubou.esdf"
     esdf:
       resolution: 0.05
       max_dist: 0.50
@@ -57,7 +57,7 @@
       search_range_yaw: 0.6
       search_step_yaw: 0.05
       fine_refine: true
-      fine_refine_levels: 2
+      fine_refine_levels: 1
       max_dist_thresh: 0.25
       cost_threshold: 0.165
       dynamic_dist_thresh: 0.15
