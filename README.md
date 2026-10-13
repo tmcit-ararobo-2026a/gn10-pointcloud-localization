@@ -41,6 +41,8 @@ Separates dynamic obstacles, pedestrians, and nearby structures around the robot
 
 ## 2. How 3D ESDF & GPU 3D Texture Memory Work
 
+<img width="1007" height="711" alt="image" src="https://github.com/user-attachments/assets/cd8ddd3f-9a64-45c4-b60e-91cef41f2de9" />
+
 ### Traditional Nearest-Neighbor Search
 
 When performing nearest-neighbor searches directly on a PCD point cloud map, querying a k-d Tree for each point results in a computational complexity of $\mathcal{O}(\log N_{\text{pcd}})$.
