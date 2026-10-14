@@ -134,6 +134,8 @@ private:
       have_cloud_ = have_imu_ = have_result_ = false;
       cloud_stamp_ns_ = imu_stamp_ns_ = 0;
       quality_->reset();
+      result_.measurement_stamp = builtin_interfaces::msg::Time{};
+      tf_buffer_->clear();
     }
     last_ros_now_ns_ = current_ns;
     const auto steady_now = Clock::now();
