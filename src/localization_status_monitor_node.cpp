@@ -100,10 +100,23 @@ private:
   /** @brief Admit real processor progress only, retaining its original measurement/pose stamps. */
   void accept_result(const Status & status) {
     Clock::time_point proposed;
-    if (status.header.frame_id != frame_ || status.processor_session == 0 || status.result_sequence == 0 ||
-      !timing(status.measurement_stamp, std::min({quality_->limit("max_result_age", processing_timeout_s_), quality_->limit("max_pose_age", processing_timeout_s_), quality_->limit("max_tf_age", processing_timeout_s_)}), proposed) ||
-      retired_sessions_.count(status.processor_session) != 0)
+    if (status.processor_session == 0 || status.result_sequence == 0 ||
+      retired_sessions_.count(status.processor_session) != 0) { return; }
+    if (status.processor_session == result_.processor_session &&
+      status.result_sequence <= result_.result_sequence) { return; }
+    if (status.header.frame_id != frame_ || !timing(status.measurement_stamp,
+      std::min({quality_->limit("max_result_age", processing_timeout_s_),
+                quality_->limit("max_pose_age", processing_timeout_s_),
+                quality_->limit("max_tf_age", processing_timeout_s_)}), proposed))
     {
+      // A new failed outcome must revoke quality, rather than retain the last good one.
+      if (result_.processor_session != 0 && status.processor_session != result_.processor_session) {
+        retired_sessions_.insert(result_.processor_session);
+      }
+      result_ = status;
+      result_.measurement_stamp = builtin_interfaces::msg::Time{};
+      have_result_ = false;
+      quality_->reset();
       return;
     }
     if (status.processor_session == result_.processor_session) {

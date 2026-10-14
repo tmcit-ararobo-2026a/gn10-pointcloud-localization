@@ -9,6 +9,7 @@ from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from sensor_msgs.msg import Imu, PointCloud2
 from geometry_msgs.msg import TransformStamped
+from builtin_interfaces.msg import Time
 from tf2_ros import TransformBroadcaster
 from gn10_pointcloud_localization.msg import LocalizationStatus
 
@@ -103,6 +104,7 @@ def test_ready_quality(tmp_path):
                        lambda s: setattr(s, 'map_id', 'wrong-map'),
                        lambda s: setattr(s, 'inlier_count', 59),
                        lambda s: setattr(s, 'best_cost', float('nan')),
+                       lambda s: setattr(s, 'measurement_stamp', Time(sec=s.measurement_stamp.sec + 1, nanosec=s.measurement_stamp.nanosec)),
                        lambda s: setattr(s.pose.pose.position, 'x', 1.)):
             wait(lambda s: not s.ready_quality_valid, supplier=lambda: feed(change))
             wait(lambda s: s.ready_quality_valid)
