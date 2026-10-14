@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import time
+import pytest
 
 import rclpy
 from rclpy.node import Node
@@ -14,7 +15,8 @@ from tf2_ros import TransformBroadcaster
 from gn10_pointcloud_localization.msg import LocalizationStatus
 
 
-def test_ready_quality(tmp_path):
+@pytest.mark.parametrize("zero_cost_limits", [False, True])
+def test_ready_quality(tmp_path, zero_cost_limits):
     os.environ['ROS_LOCALHOST_ONLY'] = '1'
     os.environ['ROS_DOMAIN_ID'] = str(100 + os.getpid() % 100)
     profile = dict(schema=1, approved=True, mode='simulation', quality_id='q',
@@ -23,6 +25,8 @@ def test_ready_quality(tmp_path):
                    min_inliers=60, max_inlier_cost=.05, max_cloud_age=.15, max_imu_age=.15,
                    max_result_age=.4, max_pose_age=.4, max_tf_age=.4,
                    max_position_error=.05, max_yaw_error=.05, max_pose_jump=.2, max_yaw_jump=.2)
+    if zero_cost_limits:
+        profile['max_best_cost'] = profile['max_inlier_cost'] = 0.0
     filename = tmp_path / 'quality.json'
     filename.write_text(json.dumps(profile))
     context = rclpy.context.Context()
@@ -68,7 +72,7 @@ def test_ready_quality(tmp_path):
         raw.last_match_success, raw.map_loaded = True, True
         raw.cloud_tf_available, raw.imu_tf_available = True, True
         raw.match_metrics_valid, raw.inlier_metrics_valid = True, True
-        raw.best_cost, raw.inlier_count, raw.inlier_cost = .1, 100, .01
+        raw.best_cost, raw.inlier_count, raw.inlier_cost = profile["max_best_cost"] * .6, 100, profile["max_inlier_cost"] * .2
         raw.pose.header.stamp, raw.pose.header.frame_id = stamp, 'map'
         raw.pose.pose.orientation.w, raw.pose_valid = 1., True
         for key in ('map_id', 'team', 'extrinsic_id', 'implementation_id', 'configuration_id'):

@@ -42,7 +42,10 @@ public:
         "max_pose_jump", "max_yaw_jump"})
     {
       const double value = profile_.at(key).get<double>();
-      if (!std::isfinite(value) || value <= 0) { throw std::invalid_argument("Invalid quality threshold"); }
+      const bool positive_required = std::string(key) != "max_best_cost" && std::string(key) != "max_inlier_cost";
+      if (!std::isfinite(value) || value < 0 || (positive_required && value == 0)) {
+        throw std::invalid_argument("Invalid quality threshold");
+      }
     }
     if (!profile_.at("min_inliers").is_number_integer() || profile_.at("min_inliers").get<int>() <= 0) {
       throw std::invalid_argument("Invalid inlier threshold");

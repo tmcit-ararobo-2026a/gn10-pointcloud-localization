@@ -18,3 +18,7 @@ managerのuse_sim_time試験で、時計停止・逆行の失効、1秒の品質
 2026-10-15追加: 新規処理結果の不正frame／未来時刻は、以前の有効品質を保持せず直ちに失効する。古いsession・結果番号は引き続き無視する。
 不正時刻の結果番号を消費し、時刻比較基準をクリアして、次の新規有効結果から1秒／10件を作り直す。
 CPU build（invalid-result-build.log）、品質2試験（invalid-result-tests.log）は成功／終了コード0。未来計測の回帰ケースを追加。
+
+cost上限は契約C3の有限非負に合わせて0を許可。時刻・誤差・jumpの正値条件は維持する。
+通常上限と0上限の2パターンで品質受入を検証、CPUビルドと2 CTest（品質2ケース＋既存鮮度）が成功／終了コード0。
+2026-10-15、zero-cost-build.log／zero-cost-tests.logを/tmp/manager-v1に保持。
