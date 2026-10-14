@@ -67,6 +67,14 @@ GPU上ではスレッドごとの木探索パスの不一致分岐拡散やラ�
 4. **インライア & 動的障害物判定**:  
    マップ表面までの距離が近傍なしきい値以内の点を Inlier として適合度を判定。しきい値を超える孤立点を動的障害物として抽出。
 
+### 自己位置状態と鮮度監視
+
+GPUノードは実際に処理した結果を`/localization/status_raw`へ公開します。別プロセスのCPUノード`localization_status_monitor_node`が、`/localization/status`（`gn10_pointcloud_localization/msg/LocalizationStatus`）を20ms周期で配信します。`localization.launch.py`は両ノードを起動し、座標系・トピックの設定を共有します。
+
+監視ノードは点群・IMU入力、処理進行、測定時刻のTF、成功／ロスト、マッチング指標を検査します。古い結果や重複を拒否し、処理ノードの再起動を検出します。再配信でも測定・Poseのstampを更新しません。固定共分散は`covariance_valid=false`として公開します。
+
+Ready品質は既定では無効です。品質プロファイルと、`status_identity.*`で指定する地図・チーム・センサ外部パラメータ・実装・設定の識別情報を一致させる必要があります。鮮度とマッチング指標がしきい値を満たし、1秒以上かつ異なる計算結果10件以上で品質が成立します。不正な新規結果は即時に品質を失効させ、古い結果では復帰しません。現在の承認プロファイルはlocalhost・専用ROS domainのsimulationだけに対応します。実機の精度と運用しきい値は実測による検証が必要です。
+
 ---
 
 ## 4. ビルド環境・依存関係
@@ -96,6 +104,10 @@ cd ~/ros2_ws
 colcon build --symlink-install --packages-select gn10_pointcloud_localization
 source install/setup.bash
 ```
+
+CUDA architecturesは87/89が既定です。対象GPUに合わせて`-DCMAKE_CUDA_ARCHITECTURES=<対象GPUの値>`を指定してください。
+
+CPUの`localization_status_monitor_node`だけをビルドする場合は、`--cmake-args -DBUILD_GPU_NODES=OFF`を追加します。ROS型だけを生成する場合は`-DBUILD_RUNTIME_NODES=OFF`を指定し、CUDA・PCL・Ceres・MPIの実行依存を必要としません。
 
 ---
 
@@ -197,36 +209,21 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 | `matching_params.min_inliers` | `60` | マッチング成立に必要な最小 Inlier 点数。 |
 | `global_search.lost_count_thresh` | `10` | 連続で失敗判定となった際にグローバル全域探索へ移行するフレーム数。 |
 
+### 状態監視の設定
+
+| パラメータ | 既定値 | 用途 |
+| :--- | :--- | :--- |
+| `status_monitor.input_timeout_s` | `0.5` | 点群・IMUの鮮度期限 [s] |
+| `status_monitor.processing_timeout_s` | `0.5` | 処理結果の鮮度期限 [s] |
+| `status_monitor.quality_profile` | `""` | 承認済み品質プロファイルのパス。空ならReady品質は無効 |
+| `status_identity.map_id` / `team` / `extrinsic_id` / `implementation_id` / `configuration_id` | `""` | GPU結果に付ける品質照合用の識別情報 |
+
+識別情報の各項目には`status_identity.`接頭辞を付けます。[品質プロファイルのテンプレート](config/quality_profile.json)は未承認です。`params_file`で指定するYAMLの`localization_status_monitor`へ監視設定、`gn10_pointcloud_localization_node`へGPUの識別情報を設定してください。
+
+`start_lakibeam_tf`は既定でfalseです。後方LiDARの静的TFが必要な場合にtrueを指定します。試験の詳細は[自己位置状態の検証記録](docs/localization_status_verification.md)を参照してください。CPU監視の試験はGPU認識精度や実機の自己位置精度を保証するものではありません。
+
 ---
 
 ## 7. ライセンス
 
 本リポジトリは [Apache 2.0 ライセンス](./LICENSE) のもとで公開されています。
-
-## 型生成とCUDA実行ノードの分離（T01）
-
-`-DBUILD_RUNTIME_NODES=OFF` ではCUDA compiler/runtimeやPCL/Ceres/MPI実行依存を要求しない。
-LocalizationStatusの生成はT05で追加する。実行ノードは既存のCUDA architectures 87/89を既定とし、
-`-DCMAKE_CUDA_ARCHITECTURES=<対象GPUの値>` で明示的に変更できる。
-型生成・コンパイルの成功とGPU実行・精度・Ready品質の受入を区別する。
-
-2026-10-14の検証: Humbleで型のみ（BUILD_RUNTIME_NODES=OFF）とCUDA実行ノード（SM87指定）のビルドに成功。
-LPSの既存CPU support_tracker_testも成功。初回runtimeビルドではMPI wrapperのsocket初期化が
-sandboxで拒否されheader検出に失敗したため、クリーンなbuild-gpuでsandbox外から再実行して成功。
-GPU driverはnvidia-smiで通信失敗。GPUノードの実行・bag・精度・実機は未実施。
-
-## 自己位置状態・独立した鮮度監視（T05）
-
-GPUノードは実際に処理した点群の結果を `/localization/status_raw` に公開し、
-CPUの `localization_status_monitor_node` が `/localization/status` を20ms周期で配信する。
-点群・IMU受信、処理結果、TF可用性、成功／ロスト、実cost・inlier指標、代替地図を区別する。
-点群・IMU・処理の期限、重複stamp・結果番号、processor再起動を検査し、GPU停止でも古い結果を有効扱いしない。
-品質stampとPose stampは再配信でも更新しない。固定共分散はcovariance_valid=false。
-Ready品質契約が未確定なのでready_quality_valid=falseを維持する。
-
-`-DBUILD_GPU_NODES=OFF` でCPU monitorと模擬試験をCUDAなしでビルドできる。
-status_monitor.input_timeout_s / processing_timeout_sの0.5秒は既存navigationのPose期限に合わせた初期設計値。
-Ready品質、負荷、bag、再探索・復帰の実機受入は未完了。
-
-localization.launch.pyはCPU monitorも起動し、frames/topics設定を両ノードに共有する。
-既存start_lakibeam_tf引数を実際の起動条件へ接続し、既定では不要なLakibeam静的TFを起動しない。

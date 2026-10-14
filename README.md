@@ -16,11 +16,9 @@ It achieves global initial pose estimation and stable tracking using only point 
 3. [System Architecture and Processing Flow](#3-system-architecture-and-processing-flow)
 4. [Build Environment and Dependencies](#4-build-environment-and-dependencies)
 5. [Usage](#5-usage)
-* [Placing Map Files](#placing-map-files)
-* [Pre-converting PCD to ESDF (CLI)](#pre-converting-pcd-to-esdf-cli)
-* [Launch](#launch)
-
-
+   - [Placing Map Files](#placing-map-files)
+   - [Pre-converting PCD to ESDF (CLI)](#pre-converting-pcd-to-esdf-cli)
+   - [Launch](#launch)
 6. [Parameter Explanation](#6-parameter-explanation)
 7. [License](#7-license)
 
@@ -86,6 +84,14 @@ Expands all candidate poses across the search range (XY / Yaw) onto a GPU grid, 
 4. **Inlier & Dynamic Obstacle Classification**:
 Points within a proximity threshold to the map surface are classified as inliers to evaluate fitness. Isolated points exceeding the threshold are extracted as dynamic obstacles.
 
+### Localization Status and Freshness Monitoring
+
+The GPU node publishes actual processing results to `/localization/status_raw`. A separate CPU node, `localization_status_monitor_node`, publishes `/localization/status` (`gn10_pointcloud_localization/msg/LocalizationStatus`) every 20 ms. `localization.launch.py` starts both nodes and shares their frame/topic settings.
+
+The monitor checks point-cloud and IMU input, processing progress, measurement-time TF, success/lost state and matching metrics. It rejects stale or duplicate results and detects processor restarts. Publication does not refresh the measurement or pose timestamp. Fixed covariance is reported with `covariance_valid=false`.
+
+Ready quality is disabled by default. A quality profile must match the map, team, sensor extrinsics, implementation and configuration identities supplied through `status_identity.*`. Quality requires fresh results and matching metrics within the profile thresholds for at least one second and ten distinct results. An invalid new result immediately clears quality; stale results cannot restore it. Approved profiles currently support simulation on localhost in a dedicated ROS domain only. Physical accuracy and operating thresholds require measured validation.
+
 ---
 
 ## 4. Build Environment and Dependencies
@@ -117,6 +123,10 @@ colcon build --symlink-install --packages-select gn10_pointcloud_localization
 source install/setup.bash
 
 ```
+
+GPU code uses architectures 87/89 by default. Set `-DCMAKE_CUDA_ARCHITECTURES=<GPU architecture>` for your target GPU.
+
+For a CPU-only build of `localization_status_monitor_node`, add `--cmake-args -DBUILD_GPU_NODES=OFF`. To generate only ROS interfaces, use `-DBUILD_RUNTIME_NODES=OFF`; this does not require CUDA, PCL, Ceres or MPI runtime dependencies.
 
 ---
 
@@ -222,6 +232,19 @@ Shared settings are configured in [`config/common_params.yaml`](config/common_pa
 | `matching_params.inlier_dist_thresh` | `0.08` | Classifies points within 8 cm of the map surface as inliers. |
 | `matching_params.min_inliers` | `60` | Minimum required inlier count for a successful match. |
 | `global_search.lost_count_thresh` | `10` | Number of consecutive failed frames before triggering a global full-area search. |
+
+### Status Monitor Settings
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `status_monitor.input_timeout_s` | `0.5` | Point-cloud and IMU freshness limit [s]. |
+| `status_monitor.processing_timeout_s` | `0.5` | Processing-result freshness limit [s]. |
+| `status_monitor.quality_profile` | `""` | Path to an approved quality profile; empty disables Ready quality. |
+| `status_identity.map_id` / `team` / `extrinsic_id` / `implementation_id` / `configuration_id` | `""` | Identities attached to GPU results for comparison with the quality profile. |
+
+The identity entries each use the `status_identity.` prefix. The unapproved [quality profile template](config/quality_profile.json) documents the starting configuration. Supply monitor settings under `localization_status_monitor` and GPU identities under `gn10_pointcloud_localization_node` in the YAML selected by `params_file`.
+
+`start_lakibeam_tf` defaults to false; set it to true only when the rear LiDAR static transform is required. See the [status verification record](docs/localization_status_verification.md) for tests; CPU monitoring does not validate GPU accuracy or physical localization performance.
 
 ---
 
