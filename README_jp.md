@@ -220,7 +220,7 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 
 識別情報の各項目には`status_identity.`接頭辞を付けます。[品質プロファイルのテンプレート](config/quality_profile.json)は未承認です。`params_file`で指定するYAMLの`localization_status_monitor`へ監視設定、`gn10_pointcloud_localization_node`へGPUの識別情報を設定してください。
 
-`start_lakibeam_tf`は既定でfalseです。後方LiDARの静的TFが必要な場合にtrueを指定します。試験の詳細は[自己位置状態の検証記録](docs/localization_status_verification.md)を参照してください。CPU監視の試験はGPU認識精度や実機の自己位置精度を保証するものではありません。
+`start_lakibeam_tf`は既定でfalseです。後方LiDARの静的TFが必要な場合にtrueを指定します。CPU監視の試験はGPU認識精度や実機の自己位置精度を保証するものではありません。ローカルのテストファイルがある場合だけ試験を登録します。
 
 ---
 

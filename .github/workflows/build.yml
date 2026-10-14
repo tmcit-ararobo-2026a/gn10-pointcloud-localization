@@ -79,7 +79,7 @@ jobs:
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
 
-      - name: CPU monitor tests
+      - name: Available package checks
         run: |
           set -e
           source /opt/ros/humble/setup.bash

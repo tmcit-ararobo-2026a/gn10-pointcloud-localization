@@ -8,7 +8,6 @@ It achieves global initial pose estimation and stable tracking using only point 
 
 <img width="814" height="562" alt="image" src="https://github.com/user-attachments/assets/4254e8ba-a133-42b7-86b6-07034116f0f9" />
 
-
 ## Table of Contents
 
 1. [Overview and Features](#1-overview-and-features)
@@ -244,7 +243,7 @@ Shared settings are configured in [`config/common_params.yaml`](config/common_pa
 
 The identity entries each use the `status_identity.` prefix. The unapproved [quality profile template](config/quality_profile.json) documents the starting configuration. Supply monitor settings under `localization_status_monitor` and GPU identities under `gn10_pointcloud_localization_node` in the YAML selected by `params_file`.
 
-`start_lakibeam_tf` defaults to false; set it to true only when the rear LiDAR static transform is required. See the [status verification record](docs/localization_status_verification.md) for tests; CPU monitoring does not validate GPU accuracy or physical localization performance.
+`start_lakibeam_tf` defaults to false; set it to true only when the rear LiDAR static transform is required. CPU monitoring does not validate GPU accuracy or physical localization performance. Local tests are registered only when their source files are present.
 
 ---
 

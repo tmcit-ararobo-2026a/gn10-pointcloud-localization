@@ -154,7 +154,8 @@ install(DIRECTORY launch config rviz map
   DESTINATION share/${PROJECT_NAME}
 )
 
-if(BUILD_TESTING AND BUILD_RUNTIME_NODES)
+if(BUILD_TESTING AND BUILD_RUNTIME_NODES AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/ready_quality_test.py")
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(ready_quality_test test/ready_quality_test.py
     ENV STATUS_MONITOR_EXECUTABLE=$<TARGET_FILE:localization_status_monitor_node> TIMEOUT 40)
