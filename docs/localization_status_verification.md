@@ -30,3 +30,14 @@ T01初回GPUビルドはMPI wrapperのsocket初期化がsandboxで拒否され�
 クリーンなbuild-gpuからsandbox外で再実行し、ビルド成功。既存CUBの非推奨API警告、PCLのpcap/png無効警告は残る。
 GPU driverはnvidia-smiで通信失敗。正常bag・精度・再探索・静止捕捉・TF除外接続・実機・HILは未実施。
 Ready品質・対象設定・校正・許容停止時間の契約は未確定。模擬監視の成功を実機受入と扱わない。
+
+## CI依存解決の修正
+
+2026-10-14（Asia/Tokyo）、eaf5c54からmanifest／CI差分。
+初回PR #11 CI: 失敗（run38553673135、終了コード1）。rosdepにlibopenmpi-devキーがなく、ビルド前の依存解決で停止。
+未定義キーをmanifestから除き、PCL/VTKのCMake構成で必要なOpenMPI開発パッケージはCIのapt導入へ明示した。
+公式rosdistroのbase.yamlとrosdep resolveで未定義を確認。実行時コード・生成型に変更なし。
+再CIの結果は共通current-stateの最新表に記録する。
+
+このセッションの中断後、以前の/tmp/stm32-ros2と参照checkoutが消失していることを確認した。
+上記ローカル検証の実行結果は保持するが、以前の一時ログとビルド成果物は現在参照できない。再検証はクリーンビルドで行う。

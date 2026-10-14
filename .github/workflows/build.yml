@@ -48,7 +48,8 @@ jobs:
             gnupg \
             nlohmann-json3-dev \
             libceres-dev \
-            libeigen3-dev
+            libeigen3-dev \
+            libopenmpi-dev
 
           # 2. NVIDIA 公式 CUDA リポジトリの登録
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
