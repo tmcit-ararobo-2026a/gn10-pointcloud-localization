@@ -1,9 +1,9 @@
 name: CI
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "feat/**", "fix/**" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "feat/**", "fix/**" ]
 
 permissions:
   contents: read
@@ -78,3 +78,11 @@ jobs:
               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
+
+      - name: CPU monitor tests
+        run: |
+          set -e
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          colcon test --packages-select gn10_pointcloud_localization --event-handlers console_direct+
+          colcon test-result --verbose
