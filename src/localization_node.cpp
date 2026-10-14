@@ -48,6 +48,9 @@ void LocalizationNode::declareAndGetParameters()
 {
     this->declare_parameter("map_source_type", "json");
     this->declare_parameter("map_file_path", "");
+    for (const auto key : {"map_id", "team", "extrinsic_id", "implementation_id", "configuration_id"}) {
+        this->declare_parameter<std::string>(std::string("status_identity.") + key, "");
+    }
     this->declare_parameter("map_objects", std::vector<std::string>{});
     this->declare_parameter("esdf.resolution", 0.05);
     this->declare_parameter("esdf.max_dist", 0.50);
@@ -1036,6 +1039,21 @@ void LocalizationNode::publish_processing_status(const rclcpp::Time & stamp, boo
     status.header.stamp = now();
     status.measurement_stamp = stamp;
     status.pose_stamp = last_match_stamp_;
+    status.pose.header.frame_id = map_frame_;
+    status.pose.header.stamp = last_match_stamp_;
+    {
+        std::lock_guard<std::mutex> lock(pose_mutex_);
+        status.pose.pose.position.x = last_known_pose_.x;
+        status.pose.pose.position.y = last_known_pose_.y;
+        status.pose.pose.orientation.z = std::sin(last_known_pose_.yaw * 0.5);
+        status.pose.pose.orientation.w = std::cos(last_known_pose_.yaw * 0.5);
+    }
+    status.pose_valid = matched;
+    status.map_id = get_parameter("status_identity.map_id").as_string();
+    status.team = get_parameter("status_identity.team").as_string();
+    status.extrinsic_id = get_parameter("status_identity.extrinsic_id").as_string();
+    status.implementation_id = get_parameter("status_identity.implementation_id").as_string();
+    status.configuration_id = get_parameter("status_identity.configuration_id").as_string();
     status.processor_session = processor_session_;
     status.result_sequence = ++result_sequence_;
     status.last_match_success = matched;

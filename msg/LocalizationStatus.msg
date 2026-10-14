@@ -24,3 +24,20 @@ bool covariance_valid
 # Remains false until a Ready-quality contract has been approved and implemented.
 bool ready_quality_valid
 string reason
+
+# Independent monitor identity and the selected quality contract.
+uint64 monitor_session
+string quality_id
+string evidence_id
+bool simulation_profile
+string map_id
+string team
+string extrinsic_id
+string implementation_id
+string configuration_id
+geometry_msgs/PoseStamped pose
+bool pose_valid
+bool pose_tf_valid
+builtin_interfaces/Time cloud_stamp
+builtin_interfaces/Time imu_stamp
+builtin_interfaces/Time quality_valid_until
