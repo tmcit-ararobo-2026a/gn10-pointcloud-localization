@@ -214,3 +214,19 @@ LocalizationStatusの生成はT05で追加する。実行ノードは既存のCU
 LPSの既存CPU support_tracker_testも成功。初回runtimeビルドではMPI wrapperのsocket初期化が
 sandboxで拒否されheader検出に失敗したため、クリーンなbuild-gpuでsandbox外から再実行して成功。
 GPU driverはnvidia-smiで通信失敗。GPUノードの実行・bag・精度・実機は未実施。
+
+## 自己位置状態・独立した鮮度監視（T05）
+
+GPUノードは実際に処理した点群の結果を `/localization/status_raw` に公開し、
+CPUの `localization_status_monitor_node` が `/localization/status` を20ms周期で配信する。
+点群・IMU受信、処理結果、TF可用性、成功／ロスト、実cost・inlier指標、代替地図を区別する。
+点群・IMU・処理の期限、重複stamp・結果番号、processor再起動を検査し、GPU停止でも古い結果を有効扱いしない。
+品質stampとPose stampは再配信でも更新しない。固定共分散はcovariance_valid=false。
+Ready品質契約が未確定なのでready_quality_valid=falseを維持する。
+
+`-DBUILD_GPU_NODES=OFF` でCPU monitorと模擬試験をCUDAなしでビルドできる。
+status_monitor.input_timeout_s / processing_timeout_sの0.5秒は既存navigationのPose期限に合わせた初期設計値。
+Ready品質、負荷、bag、再探索・復帰の実機受入は未完了。
+
+localization.launch.pyはCPU monitorも起動し、frames/topics設定を両ノードに共有する。
+既存start_lakibeam_tf引数を実際の起動条件へ接続し、既定では不要なLakibeam静的TFを起動しない。

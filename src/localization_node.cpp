@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <random>
+#include <limits>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -384,6 +386,7 @@ void LocalizationNode::setupMapData()
         RCLCPP_WARN(
             this->get_logger(), "Map is empty or failed to load. Falling back to default map."
         );
+        using_fallback_map_ = true;
         map_objects_ = MapLoader::createNHK2026FieldMap();
     }
 
@@ -438,6 +441,11 @@ void LocalizationNode::configureESDFBounds()
 
 void LocalizationNode::setupROSInterfaces()
 {
+    std::random_device random;
+    processor_session_ = (static_cast<uint64_t>(random()) << 32) | random();
+    if (processor_session_ == 0) { processor_session_ = 1; }
+    processing_status_publisher_ = create_publisher<gn10_pointcloud_localization::msg::LocalizationStatus>(
+        "/localization/status_raw", rclcpp::QoS(1).durability_volatile());
     auto clock           = this->get_clock();
     tf_buffer_           = std::make_unique<tf2_ros::Buffer>(clock);
     auto timer_interface = std::make_shared<tf2_ros::CreateTimerROS>(
@@ -583,13 +591,20 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
 void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
     float h_transform[12];
-    if (!getTransformAsArray(msg->header.frame_id, msg->header.stamp, h_transform)) {
+    cloud_tf_available_ = getTransformAsArray(msg->header.frame_id, msg->header.stamp, h_transform);
+    if (!cloud_tf_available_) {
+        publish_processing_status(rclcpp::Time(msg->header.stamp), false, 0, 0, 0,
+                                  false, false, "Cloud TF unavailable");
         return;
     }
 
     int64_t reference_ns;
     auto timed_points = extractTimedBasePoints(*msg, h_transform, reference_ns);
-    if (timed_points.empty()) return;
+    if (timed_points.empty()) {
+        publish_processing_status(rclcpp::Time(msg->header.stamp), false, 0, 0, 0,
+                                  false, false, "No valid timed points");
+        return;
+    }
     const rclcpp::Time reference_stamp(reference_ns, this->get_clock()->get_clock_type());
     if (scan_accumulator_.backwards(reference_ns)) {
         scan_accumulator_.clear();
@@ -599,13 +614,17 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         has_velocity_    = false;
         is_lost_         = true;
     }
-    if (!scan_accumulator_.append(timed_points, reference_ns)) return;
+    if (!scan_accumulator_.append(timed_points, reference_ns)) {
+        publish_processing_status(reference_stamp, false, 0, 0, 0,
+                                  false, false, "Accumulation rejected");
+        return;
+    }
     // Points are already in base_link, at their individual acquisition times.
     std::vector<float> h_raw_cloud;
     const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
     std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
     PoseCandidate best_pose;
-    float best_cost = 0.0f;
+    float best_cost = std::numeric_limits<float>::infinity();
     bool matched    = false;
 
     // 2D LiDAR (Lakibeam 1) の点群を取得
@@ -665,13 +684,19 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             "IMU does not cover the accumulation window; using only the newest scan"
         );
     }
-    if (h_raw_cloud.size() < 150) return;
+    if (h_raw_cloud.size() < 150) {
+        publish_processing_status(reference_stamp, false, 0, 0, 0,
+                                  false, false, "Insufficient accumulated points");
+        return;
+    }
 
-    int inlier_count  = 0;
-    float inlier_cost = 1.0f;
+    bool inlier_metrics_available = false;
+    int inlier_count  = -1;
+    float inlier_cost = std::numeric_limits<float>::infinity();
 
     // A recent fused pose can reacquire locally even after the map matcher was lost.
     if (is_lost_ && has_fresh_prior) {
+        inlier_metrics_available = true;
         matched = solver_->processPointCloud(
             h_raw_cloud,
             identity,
@@ -701,6 +726,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     }
 
     if (is_lost_ && !matched) {
+        inlier_metrics_available = false;
         float current_prior_yaw = 0.0f;
         {
             std::lock_guard<std::mutex> lock(pose_mutex_);
@@ -731,6 +757,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             );
         }
     } else if (!matched) {
+        inlier_metrics_available = true;
         matched = solver_->processPointCloud(
             h_raw_cloud,
             identity,
@@ -800,6 +827,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     if (matched) {
         publishPoseAndTransform(reference_stamp, best_pose);
     }
+    publish_processing_status(reference_stamp, matched, best_cost, inlier_count, inlier_cost,
+                              inlier_metrics_available, true, "Pointcloud matching completed");
 
     std_msgs::msg::Header out_header = msg->header;
     out_header.frame_id              = base_frame_;
@@ -831,9 +860,11 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
             R_base_imu                     = eigen_tf.rotation();
             tf_initialized                 = true;
         } catch (const tf2::TransformException&) {
+            imu_tf_available_ = false;
             return;
         }
     }
+    imu_tf_available_ = true;
 
     const Eigen::Vector3d omega_imu(
         msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z
@@ -994,6 +1025,34 @@ void LocalizationNode::updateLostState(bool matched, float best_cost)
     } else {
         lost_frame_count_ = 0;
     }
+}
+
+void LocalizationNode::publish_processing_status(const rclcpp::Time & stamp, bool matched,
+    float cost, int inliers, float inlier_cost, bool inlier_metrics, bool metrics,
+    const std::string & reason)
+{
+    gn10_pointcloud_localization::msg::LocalizationStatus status;
+    status.header.frame_id = map_frame_;
+    status.header.stamp = now();
+    status.measurement_stamp = stamp;
+    status.pose_stamp = last_match_stamp_;
+    status.processor_session = processor_session_;
+    status.result_sequence = ++result_sequence_;
+    status.last_match_success = matched;
+    status.lost = is_lost_;
+    status.cloud_tf_available = cloud_tf_available_;
+    status.imu_tf_available = imu_tf_available_;
+    status.map_loaded = !esdf_map_.empty() || !map_objects_.empty();
+    status.using_fallback_map = using_fallback_map_;
+    status.match_metrics_valid = metrics && std::isfinite(cost);
+    status.best_cost = cost;
+    status.inlier_metrics_valid = inlier_metrics && std::isfinite(inlier_cost) && inliers >= 0;
+    status.inlier_count = inliers;
+    status.inlier_cost = inlier_cost;
+    status.covariance_valid = false;
+    status.ready_quality_valid = false;
+    status.reason = reason;
+    processing_status_publisher_->publish(status);
 }
 
 void LocalizationNode::publishPoseAndTransform(const rclcpp::Time& stamp, const PoseCandidate& pose)

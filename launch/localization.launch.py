@@ -49,6 +49,15 @@ def generate_launch_description():
         ],
     )
 
+    status_monitor = Node(
+        package='gn10_pointcloud_localization',
+        executable='localization_status_monitor_node',
+        name='localization_status_monitor',
+        output='screen',
+        parameters=[common_param_file, LaunchConfiguration('params_file'),
+                    {'use_sim_time': LaunchConfiguration('use_sim_time')}],
+    )
+
     livox_tf_node = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -69,6 +78,7 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='lakibeam_tf',
+        condition=IfCondition(LaunchConfiguration('start_lakibeam_tf')),
         arguments=[
             '--x', '-0.4',
             '--y', '0.0',
@@ -84,7 +94,9 @@ def generate_launch_description():
     return LaunchDescription([
         declare_use_sim_time,
         declare_params_file,
+        declare_lakibeam_tf,
         localization_node,
+        status_monitor,
         livox_tf_node,
         lakibeam_tf_node
     ])
