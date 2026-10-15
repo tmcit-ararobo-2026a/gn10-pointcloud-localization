@@ -11,6 +11,7 @@
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <memory>
+#include "gn10_pointcloud_localization/msg/localization_status.hpp"
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -37,6 +38,16 @@ private:
     void setupMapData();
     void configureESDFBounds();
     void setupROSInterfaces();
+    /** @brief Publish only a completed processing outcome, with actual finite metrics. */
+    void publish_processing_status(const rclcpp::Time & stamp, bool matched, float cost,
+                                   int inliers, float inlier_cost, bool inlier_metrics,
+                                   bool metrics, const std::string & reason);
+    rclcpp::Publisher<gn10_pointcloud_localization::msg::LocalizationStatus>::SharedPtr processing_status_publisher_;
+    uint64_t processor_session_{};
+    uint64_t result_sequence_{};
+    bool cloud_tf_available_{};
+    bool imu_tf_available_{};
+    bool using_fallback_map_{};
 
     // Callbacks
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);

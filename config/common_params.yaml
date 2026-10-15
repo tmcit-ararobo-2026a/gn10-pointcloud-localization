@@ -1,5 +1,10 @@
 /**:
   ros__parameters:
+    # Initial monitoring limits; approved Ready quality is still unresolved.
+    status_monitor:
+      input_timeout_s: 0.5
+      processing_timeout_s: 0.5
+
     # Shared map and ESDF settings
     map_source_type: "esdf"
     map_file_path: "/home/ararobo/ros2_ws/src/gn10-pointcloud-localization/map/miraikoubou.esdf"

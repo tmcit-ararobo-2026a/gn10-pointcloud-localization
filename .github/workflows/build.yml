@@ -1,9 +1,9 @@
 name: CI
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "feat/**", "fix/**" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "feat/**", "fix/**" ]
 
 permissions:
   contents: read
@@ -48,7 +48,8 @@ jobs:
             gnupg \
             nlohmann-json3-dev \
             libceres-dev \
-            libeigen3-dev
+            libeigen3-dev \
+            libopenmpi-dev
 
           # 2. NVIDIA 公式 CUDA リポジトリの登録
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
@@ -77,3 +78,11 @@ jobs:
               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
+
+      - name: Available package checks
+        run: |
+          set -e
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          colcon test --packages-select gn10_pointcloud_localization --event-handlers console_direct+
+          colcon test-result --verbose
