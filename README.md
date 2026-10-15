@@ -6,6 +6,9 @@ A ROS 2 package for real-time 3D LiDAR self-localization using 3D LiDARs such as
 
 It achieves global initial pose estimation and stable tracking using only point clouds and IMU data, without requiring prior odometry or initial pose estimates.
 
+<img width="814" height="562" alt="image" src="https://github.com/user-attachments/assets/4254e8ba-a133-42b7-86b6-07034116f0f9" />
+
+
 ## Table of Contents
 
 1. [Overview and Features](#1-overview-and-features)
@@ -37,6 +40,8 @@ Separates dynamic obstacles, pedestrians, and nearby structures around the robot
 ---
 
 ## 2. How 3D ESDF & GPU 3D Texture Memory Work
+
+<img width="1007" height="711" alt="image" src="https://github.com/user-attachments/assets/cd8ddd3f-9a64-45c4-b60e-91cef41f2de9" />
 
 ### Traditional Nearest-Neighbor Search
 

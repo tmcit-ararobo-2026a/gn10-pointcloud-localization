@@ -202,3 +202,15 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 ## 7. ライセンス
 
 本リポジトリは [Apache 2.0 ライセンス](./LICENSE) のもとで公開されています。
+
+## 型生成とCUDA実行ノードの分離（T01）
+
+`-DBUILD_RUNTIME_NODES=OFF` ではCUDA compiler/runtimeやPCL/Ceres/MPI実行依存を要求しない。
+LocalizationStatusの生成はT05で追加する。実行ノードは既存のCUDA architectures 87/89を既定とし、
+`-DCMAKE_CUDA_ARCHITECTURES=<対象GPUの値>` で明示的に変更できる。
+型生成・コンパイルの成功とGPU実行・精度・Ready品質の受入を区別する。
+
+2026-10-14の検証: Humbleで型のみ（BUILD_RUNTIME_NODES=OFF）とCUDA実行ノード（SM87指定）のビルドに成功。
+LPSの既存CPU support_tracker_testも成功。初回runtimeビルドではMPI wrapperのsocket初期化が
+sandboxで拒否されheader検出に失敗したため、クリーンなbuild-gpuでsandbox外から再実行して成功。
+GPU driverはnvidia-smiで通信失敗。GPUノードの実行・bag・精度・実機は未実施。
