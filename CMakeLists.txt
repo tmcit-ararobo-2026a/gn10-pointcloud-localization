@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.18)
-project(gn10_pointcloud_localization LANGUAGES C CXX CUDA)
+project(gn10_pointcloud_localization LANGUAGES C CXX)
+option(BUILD_RUNTIME_NODES "Build localization runtime nodes" ON)
+option(BUILD_GPU_NODES "Build CUDA matcher (CPU monitor can be built separately)" ON)
 
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 87 89)
@@ -13,7 +15,31 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(builtin_interfaces REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/LocalizationStatus.msg"
+  DEPENDENCIES std_msgs builtin_interfaces geometry_msgs)
+rosidl_get_typesupport_target(cpp_typesupport ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
+if(BUILD_RUNTIME_NODES)
 find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(nlohmann_json REQUIRED)
+add_executable(localization_status_monitor_node src/localization_status_monitor_node.cpp)
+ament_target_dependencies(localization_status_monitor_node rclcpp sensor_msgs geometry_msgs tf2_ros nlohmann_json)
+target_link_libraries(localization_status_monitor_node "${cpp_typesupport}")
+install(TARGETS localization_status_monitor_node DESTINATION lib/${PROJECT_NAME})
+
+if(BUILD_GPU_NODES)
+enable_language(CUDA)
+find_package(rclcpp REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+find_package(message_filters REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -76,6 +102,7 @@ add_executable(gn10_pointcloud_localization_node
   src/main.cpp
 )
 
+target_link_libraries(gn10_pointcloud_localization_node "${cpp_typesupport}")
 # C++ (g++) 側のみにコンパイルオプションを適用
 target_compile_options(gn10_pointcloud_localization_node PRIVATE
   $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>
@@ -100,6 +127,8 @@ target_link_libraries(pcd_to_esdf_converter
 )
 
 ament_target_dependencies(gn10_pointcloud_localization_node
+  ament_index_cpp
+  message_filters
   rclcpp
   sensor_msgs
   geometry_msgs
@@ -118,8 +147,21 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+endif()
+endif()
+
 install(DIRECTORY launch config rviz map
   DESTINATION share/${PROJECT_NAME}
 )
 
+if(BUILD_TESTING AND BUILD_RUNTIME_NODES AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/ready_quality_test.py")
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(ready_quality_test test/ready_quality_test.py
+    ENV STATUS_MONITOR_EXECUTABLE=$<TARGET_FILE:localization_status_monitor_node> TIMEOUT 40)
+  ament_add_pytest_test(localization_status_monitor_test test/localization_status_monitor_test.py
+    ENV STATUS_MONITOR_EXECUTABLE=$<TARGET_FILE:localization_status_monitor_node>
+    TIMEOUT 30)
+endif()
+ament_export_dependencies(rosidl_default_runtime)
 ament_package()
