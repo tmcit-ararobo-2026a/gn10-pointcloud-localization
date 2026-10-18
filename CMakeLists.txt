@@ -140,12 +140,19 @@ ament_target_dependencies(gn10_pointcloud_localization_node
   nlohmann_json
 )
 
-# インストール設定 (Launch, Config, Node)
+# インストール設定 (Launch, Config, Node, Libraries)
 install(TARGETS 
+  gn10_cuda_lib
+  gn10_esdf_lib
   gn10_pointcloud_localization_node
   pcd_to_esdf_converter
-  DESTINATION lib/${PROJECT_NAME}
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
+
+# 他のノードや環境変数のためにライブラリをエクスポート
+ament_export_libraries(gn10_cuda_lib gn10_esdf_lib)
 
 endif()
 endif()
