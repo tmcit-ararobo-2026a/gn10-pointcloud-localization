@@ -24,10 +24,11 @@ PoseCandidate GlobalSearcher::search(
 {
     RCLCPP_INFO(logger_, "[GlobalSearch] Starting GPU-Batched Yaw-Constrained Search...");
 
-    // 点群のダウンサンプリング
-    std::vector<float> search_cloud;
     const size_t total_points = h_raw_cloud.size() / 3;
     const int stride          = std::max(1, config_.downsample_stride);
+
+    // 点群のダウンサンプリング
+    std::vector<float> search_cloud;
     search_cloud.reserve((total_points / stride) * 3);
 
     for (size_t i = 0; i < total_points; i += stride) {
@@ -38,8 +39,25 @@ PoseCandidate GlobalSearcher::search(
 
     // GPU 上に障害物点群を展開
     int obstacle_count = solver.prepareObstacleCloud(search_cloud, h_transform, filter_params);
+
+    // 点数ログの出力
+    RCLCPP_INFO(
+        logger_,
+        "[GlobalSearch] Points Summary - Raw: %zu, Downsampled (stride=%d): %zu, Obstacles: %d",
+        total_points,
+        stride,
+        search_cloud.size() / 3,
+        obstacle_count
+    );
+
     if (obstacle_count <= 50) {
-        RCLCPP_WARN(logger_, "[GlobalSearch] Too few obstacle points. Search aborted.");
+        RCLCPP_WARN(
+            logger_,
+            "[GlobalSearch] Too few obstacle points (%d <= 50). Search aborted. "
+            "Consider reducing 'filter_params.robot_radius' or 'global_search.downsample_stride', "
+            "or check 'ground_z_thresh' / TF alignment.",
+            obstacle_count
+        );
         out_best_cost = std::numeric_limits<float>::max();
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
@@ -91,10 +109,21 @@ PoseCandidate GlobalSearcher::search(
         out_best_cost
     );
 
+    // 範囲外チェック
     if (refined_pose.x < config_.range_min_x || refined_pose.x > config_.range_max_x ||
         refined_pose.y < config_.range_min_y || refined_pose.y > config_.range_max_y) {
-        RCLCPP_WARN(logger_, "[GlobalSearch] Refined pose is outside the configured start area.");
+        RCLCPP_WARN(
+            logger_,
+            "[GlobalSearch] Refined pose (%.2f, %.2f) is outside configured area [%.2f~%.2f, %.2f~%.2f]. Rejecting pose.",
+            refined_pose.x,
+            refined_pose.y,
+            config_.range_min_x,
+            config_.range_max_x,
+            config_.range_min_y,
+            config_.range_max_y
+        );
         out_best_cost = std::numeric_limits<float>::max();
+        return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
 
     RCLCPP_INFO(
