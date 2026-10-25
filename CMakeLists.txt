@@ -126,6 +126,15 @@ target_link_libraries(pcd_to_esdf_converter
   ${PCL_LIBRARIES}
 )
 
+# ESDF -> 2D Costmap 変換 CLI ツール
+add_executable(esdf_to_costmap
+  src/esdf_to_costmap.cpp
+)
+target_link_libraries(esdf_to_costmap
+  gn10_esdf_lib
+  OpenMP::OpenMP_CXX
+)
+
 ament_target_dependencies(gn10_pointcloud_localization_node
   ament_index_cpp
   message_filters
@@ -146,6 +155,7 @@ install(TARGETS
   gn10_esdf_lib
   gn10_pointcloud_localization_node
   pcd_to_esdf_converter
+  esdf_to_costmap
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
