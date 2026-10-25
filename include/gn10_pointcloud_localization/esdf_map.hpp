@@ -65,20 +65,22 @@ public:
     bool saveBinary(const std::string& file_path) const;
     bool loadBinary(const std::string& file_path);
 
-    // 点群 (x, y, z float 配列) からの高速 ESDF 構築
+    // 点群 (x, y, z float 配列) からの高速 ESDF 構築 (床面フィルタ対応)
     bool buildFromPoints(
         const std::vector<float>& points_xyz,
         float resolution,
         float max_dist                    = 0.5f,
-        const ESDFCropBounds& crop_bounds = ESDFCropBounds{}
+        const ESDFCropBounds& crop_bounds = ESDFCropBounds{},
+        float ground_z_thresh             = 0.04f
     );
 
-    // PCD ファイルからの構築（自動キャッシュ機能対応）
+    // PCD ファイルからの構築（自動キャッシュ機能・床面フィルタ対応）
     bool buildFromPCD(
         const std::string& pcd_file_path,
         float resolution,
         float max_dist                    = 0.5f,
-        const ESDFCropBounds& crop_bounds = ESDFCropBounds{}
+        const ESDFCropBounds& crop_bounds = ESDFCropBounds{},
+        float ground_z_thresh             = 0.04f
     );
 
     // 従来のフィールド定義オブジェクトからの ESDF 構築（互換性用）

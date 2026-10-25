@@ -47,7 +47,8 @@ bool ESDFMap::buildFromPoints(
     const std::vector<float>& points_xyz,
     float resolution,
     float max_dist,
-    const ESDFCropBounds& crop_bounds
+    const ESDFCropBounds& crop_bounds,
+    float ground_z_thresh
 )
 {
     size_t num_pts = points_xyz.size() / 3;
@@ -69,11 +70,19 @@ bool ESDFMap::buildFromPoints(
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     cloud->points.reserve(num_pts);
 
+    size_t filtered_ground_pts = 0;
     for (size_t i = 0; i < num_pts; ++i) {
         float x = points_xyz[i * 3 + 0];
         float y = points_xyz[i * 3 + 1];
         float z = points_xyz[i * 3 + 2];
         if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
+
+        // 床面フィルタ: ground_z_thresh 以下の点は床とみなして障害物から除外
+        if (std::isfinite(ground_z_thresh) && z <= ground_z_thresh) {
+            filtered_ground_pts++;
+            continue;
+        }
+
         if (crop_bounds.enabled &&
             (x < crop_bounds.min_x || x > crop_bounds.max_x || y < crop_bounds.min_y ||
              y > crop_bounds.max_y || z < crop_bounds.min_z || z > crop_bounds.max_z)) {
@@ -90,7 +99,15 @@ bool ESDFMap::buildFromPoints(
         cloud->points.emplace_back(x, y, z);
     }
 
-    if (cloud->empty()) return false;
+    if (cloud->empty()) {
+        std::cerr << "[ESDFMap] No points remaining after ground filtering (ground_z_thresh="
+                  << ground_z_thresh << "m)." << std::endl;
+        return false;
+    }
+
+    std::cout << "[ESDFMap] Built obstacle pointcloud: " << cloud->points.size() << " / " << num_pts
+              << " points retained (" << filtered_ground_pts << " floor points removed with z <= "
+              << ground_z_thresh << "m)." << std::endl;
 
     if (crop_bounds.enabled) {
         min_x = crop_bounds.min_x;
@@ -162,7 +179,8 @@ bool ESDFMap::buildFromPCD(
     const std::string& pcd_file_path,
     float resolution,
     float max_dist,
-    const ESDFCropBounds& crop_bounds
+    const ESDFCropBounds& crop_bounds,
+    float ground_z_thresh
 )
 {
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -179,7 +197,7 @@ bool ESDFMap::buildFromPCD(
         pts.push_back(pt.z);
     }
 
-    return buildFromPoints(pts, resolution, max_dist, crop_bounds);
+    return buildFromPoints(pts, resolution, max_dist, crop_bounds, ground_z_thresh);
 }
 
 // 3D BOX (直方体) 表面までの最短距離計算
