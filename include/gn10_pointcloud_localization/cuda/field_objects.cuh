@@ -13,6 +13,21 @@ struct FieldObject {
     float center_x, center_y;
     float z_min, z_max;
     float param1, param2;
+
+    // 分かりやすいアクセサ
+    __host__ __device__ float radius() const { return param1; }
+    __host__ __device__ float half_x() const { return param1; }
+    __host__ __device__ float half_y() const { return param2; }
+    __host__ __device__ void set_radius(float r)
+    {
+        param1 = r;
+        param2 = 0.0f;
+    }
+    __host__ __device__ void set_half_sizes(float hx, float hy)
+    {
+        param1 = hx;
+        param2 = hy;
+    }
 };
 
 struct PoseCandidate {
