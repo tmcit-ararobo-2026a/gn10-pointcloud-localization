@@ -429,3 +429,76 @@ std::vector<ESDFMap::ESDFVoxelPoint> ESDFMap::extractVoxelPoints(
 
     return voxel_points;
 }
+
+bool ESDFMap::sliceTo2DCostmap(
+    float z_min,
+    float z_max,
+    float robot_radius,
+    float inflation_margin,
+    int& out_width,
+    int& out_height,
+    float& out_origin_x,
+    float& out_origin_y,
+    std::vector<int8_t>& out_costmap
+) const
+{
+    if (grid_.empty() || header_.resolution <= 0.0f || header_.size_x <= 0 ||
+        header_.size_y <= 0 || header_.size_z <= 0) {
+        return false;
+    }
+
+    out_width    = header_.size_x;
+    out_height   = header_.size_y;
+    out_origin_x = header_.min_x;
+    out_origin_y = header_.min_y;
+
+    const float res   = header_.resolution;
+    const int size_x  = header_.size_x;
+    const int size_y  = header_.size_y;
+    const int size_z  = header_.size_z;
+    const float min_z = header_.min_z;
+
+    int k_min = std::max(0, static_cast<int>(std::floor((z_min - min_z) / res)));
+    int k_max = std::min(size_z - 1, static_cast<int>(std::ceil((z_max - min_z) / res)));
+
+    if (k_min > k_max) {
+        return false;
+    }
+
+    const size_t num_2d_cells = static_cast<size_t>(size_x) * size_y;
+    out_costmap.assign(num_2d_cells, 0);
+
+    const size_t xy_stride = static_cast<size_t>(size_x) * size_y;
+
+#pragma omp parallel for schedule(static)
+    for (int y = 0; y < size_y; ++y) {
+        const size_t y_offset = static_cast<size_t>(y) * size_x;
+        for (int x = 0; x < size_x; ++x) {
+            float min_dist = std::numeric_limits<float>::infinity();
+
+            for (int z = k_min; z <= k_max; ++z) {
+                size_t idx = static_cast<size_t>(x) + y_offset + static_cast<size_t>(z) * xy_stride;
+                float d    = grid_[idx];
+                if (d < min_dist) {
+                    min_dist = d;
+                }
+            }
+
+            int8_t cell_cost = 0;
+            if (min_dist <= robot_radius) {
+                cell_cost = 100;
+            } else if (min_dist <= (robot_radius + inflation_margin) && inflation_margin > 0.0f) {
+                float factor = 1.0f - (min_dist - robot_radius) / inflation_margin;
+                cell_cost    = static_cast<int8_t>(
+                    std::clamp(static_cast<int>(std::round(factor * 99.0f)), 1, 99)
+                );
+            } else {
+                cell_cost = 0;
+            }
+
+            out_costmap[y_offset + x] = cell_cost;
+        }
+    }
+
+    return true;
+}
