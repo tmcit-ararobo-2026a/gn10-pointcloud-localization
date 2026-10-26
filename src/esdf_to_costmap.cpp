@@ -47,7 +47,6 @@ int main(int argc, char** argv)
     std::vector<int8_t> costmap_data;
 
     if (!map.sliceTo2DCostmap(
-<<<<<<< HEAD
             z_min,
             z_max,
             robot_radius,
@@ -57,17 +56,6 @@ int main(int argc, char** argv)
             origin_x,
             origin_y,
             costmap_data
-=======
-            z_min,
-            z_max,
-            robot_radius,
-            inflation_margin,
-            width,
-            height,
-            origin_x,
-            origin_y,
-            costmap_data
->>>>>>> feat/esdf-2d-slice-costmap
         )) {
         std::cerr << "[ESDF->Costmap] Failed to slice ESDF to 2D costmap." << std::endl;
         return 1;
@@ -95,11 +83,7 @@ int main(int argc, char** argv)
             } else if (c == 0) {
                 pixel = 254;  // 自由空間 (白)
             } else if (c >= 100) {
-<<<<<<< HEAD
                 pixel = 0;  // 不可侵障害物 (黒)
-=======
-                pixel = 0;  // 不可侵障害物 (黒)
->>>>>>> feat/esdf-2d-slice-costmap
             } else {
                 // 波及コスト 1..99 -> グレー階調 253..1
                 pixel = static_cast<uint8_t>(std::clamp(254 - (c * 254 / 100), 1, 253));
