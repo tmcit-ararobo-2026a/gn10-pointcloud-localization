@@ -98,6 +98,32 @@ public:
     float getDistance(float wx, float wy, float wz) const;
 
     /**
+     * @brief 3D ESDF から Z 軸最小値射影を行い、2D コストマップ（OccupancyGrid 準拠）を生成する
+     *
+     * @param z_min ロボット干渉範囲の下限 [m]
+     * @param z_max ロボット干渉範囲の上限 [m]
+     * @param robot_radius ロボット物理半径 [m] (この距離以内は不可侵 100)
+     * @param inflation_margin インフレーション波及マージン [m] (この範囲でコスト 99 から 1 へ減衰)
+     * @param out_width 出力 2D マップの幅 (セル数)
+     * @param out_height 出力 2D マップの高さ (セル数)
+     * @param out_origin_x 出力 2D マップの原点 X [m]
+     * @param out_origin_y 出力 2D マップの原点 Y [m]
+     * @param out_costmap 出力 2D コストマップ配列 (0..100)
+     * @return true 射影成功時
+     */
+    bool sliceTo2DCostmap(
+        float z_min,
+        float z_max,
+        float robot_radius,
+        float inflation_margin,
+        int& out_width,
+        int& out_height,
+        float& out_origin_x,
+        float& out_origin_y,
+        std::vector<int8_t>& out_costmap
+    ) const;
+
+    /**
      * @brief 可視化用 ESDF ボクセル点データ構造体
      */
     struct ESDFVoxelPoint {
