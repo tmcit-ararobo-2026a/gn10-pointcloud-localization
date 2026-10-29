@@ -244,7 +244,7 @@ static void extractDynamicPointsGPU(
     out_dynamic_pts.clear();
     if (num_points <= 0 || !g_esdf_loaded) return;
 
-    if (num_points > g_max_dynamic_pts) {
+    if (!d_compact_dynamic_pts || !d_is_dynamic || num_points > g_max_dynamic_pts) {
         if (d_is_dynamic) cudaFree(d_is_dynamic);
         if (d_compact_dynamic_pts) cudaFree(d_compact_dynamic_pts);
         g_max_dynamic_pts = num_points * 2;
@@ -322,6 +322,11 @@ void freeESDFMapFromGPU()
     if (g_esdf_array) {
         cudaFreeArray(g_esdf_array);
         g_esdf_array = nullptr;
+    }
+    if (d_is_dynamic) {
+        cudaFree(d_is_dynamic);
+        d_is_dynamic    = nullptr;
+        g_max_dynamic_pts = 0;
     }
     if (d_compact_dynamic_pts) {
         cudaFree(d_compact_dynamic_pts);
