@@ -11,7 +11,7 @@
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <memory>
-#include "gn10_pointcloud_localization/msg/localization_status.hpp"
+#include <std_msgs/msg/bool.hpp>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -38,16 +38,7 @@ private:
     void setupMapData();
     void configureESDFBounds();
     void setupROSInterfaces();
-    /** @brief Publish only a completed processing outcome, with actual finite metrics. */
-    void publish_processing_status(const rclcpp::Time & stamp, bool matched, float cost,
-                                   int inliers, float inlier_cost, bool inlier_metrics,
-                                   bool metrics, const std::string & reason);
-    rclcpp::Publisher<gn10_pointcloud_localization::msg::LocalizationStatus>::SharedPtr processing_status_publisher_;
-    uint64_t processor_session_{};
-    uint64_t result_sequence_{};
-    bool cloud_tf_available_{};
-    bool imu_tf_available_{};
-    bool using_fallback_map_{};
+    void publishLocalizationSuccess(bool success);
 
     // Callbacks
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
@@ -153,6 +144,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obstacle_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_ground_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_dynamic_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_localization_success_;
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_platform_pose_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_map_markers_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_esdf_map_;

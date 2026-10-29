@@ -48,9 +48,6 @@ void LocalizationNode::declareAndGetParameters()
 {
     this->declare_parameter("map_source_type", "json");
     this->declare_parameter("map_file_path", "");
-    for (const auto key : {"map_id", "team", "extrinsic_id", "implementation_id", "configuration_id"}) {
-        this->declare_parameter<std::string>(std::string("status_identity.") + key, "");
-    }
     this->declare_parameter("map_objects", std::vector<std::string>{});
     this->declare_parameter("esdf.resolution", 0.05);
     this->declare_parameter("esdf.max_dist", 0.50);
@@ -73,6 +70,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("topics.output_dynamic", "/dynamic_cloud");
     this->declare_parameter("topics.output_ground", "/ground_cloud");
     this->declare_parameter("topics.output_obstacle", "/obstacle_cloud");
+    this->declare_parameter("topics.output_localization_success", "/robot/operation/localization_success");
     this->declare_parameter("topics.output_pose", "/platform_constraint");
     this->declare_parameter("topics.output_markers", "/field_map_markers");
     this->declare_parameter("topics.output_esdf_map", "/esdf_map");
@@ -389,7 +387,6 @@ void LocalizationNode::setupMapData()
         RCLCPP_WARN(
             this->get_logger(), "Map is empty or failed to load. Falling back to default map."
         );
-        using_fallback_map_ = true;
         map_objects_ = MapLoader::createNHK2026FieldMap();
     }
 
@@ -444,11 +441,6 @@ void LocalizationNode::configureESDFBounds()
 
 void LocalizationNode::setupROSInterfaces()
 {
-    std::random_device random;
-    processor_session_ = (static_cast<uint64_t>(random()) << 32) | random();
-    if (processor_session_ == 0) { processor_session_ = 1; }
-    processing_status_publisher_ = create_publisher<gn10_pointcloud_localization::msg::LocalizationStatus>(
-        "/localization/status_raw", rclcpp::QoS(1).durability_volatile());
     auto clock           = this->get_clock();
     tf_buffer_           = std::make_unique<tf2_ros::Buffer>(clock);
     auto timer_interface = std::make_shared<tf2_ros::CreateTimerROS>(
@@ -485,6 +477,9 @@ void LocalizationNode::setupROSInterfaces()
         );
     }
 
+    pub_localization_success_ = this->create_publisher<std_msgs::msg::Bool>(
+        this->get_parameter("topics.output_localization_success").as_string(), 10
+    );
     pub_dynamic_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         this->get_parameter("topics.output_dynamic").as_string(), 10
     );
@@ -594,18 +589,15 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
 void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
     float h_transform[12];
-    cloud_tf_available_ = getTransformAsArray(msg->header.frame_id, msg->header.stamp, h_transform);
-    if (!cloud_tf_available_) {
-        publish_processing_status(rclcpp::Time(msg->header.stamp), false, 0, 0, 0,
-                                  false, false, "Cloud TF unavailable");
+    if (!getTransformAsArray(msg->header.frame_id, msg->header.stamp, h_transform)) {
+        publishLocalizationSuccess(false);
         return;
     }
 
     int64_t reference_ns;
     auto timed_points = extractTimedBasePoints(*msg, h_transform, reference_ns);
     if (timed_points.empty()) {
-        publish_processing_status(rclcpp::Time(msg->header.stamp), false, 0, 0, 0,
-                                  false, false, "No valid timed points");
+        publishLocalizationSuccess(false);
         return;
     }
     const rclcpp::Time reference_stamp(reference_ns, this->get_clock()->get_clock_type());
@@ -618,8 +610,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         is_lost_         = true;
     }
     if (!scan_accumulator_.append(timed_points, reference_ns)) {
-        publish_processing_status(reference_stamp, false, 0, 0, 0,
-                                  false, false, "Accumulation rejected");
+        publishLocalizationSuccess(false);
         return;
     }
     // Points are already in base_link, at their individual acquisition times.
@@ -688,18 +679,15 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         );
     }
     if (h_raw_cloud.size() < 150) {
-        publish_processing_status(reference_stamp, false, 0, 0, 0,
-                                  false, false, "Insufficient accumulated points");
+        publishLocalizationSuccess(false);
         return;
     }
 
-    bool inlier_metrics_available = false;
     int inlier_count  = -1;
     float inlier_cost = std::numeric_limits<float>::infinity();
 
     // A recent fused pose can reacquire locally even after the map matcher was lost.
     if (is_lost_ && has_fresh_prior) {
-        inlier_metrics_available = true;
         matched = solver_->processPointCloud(
             h_raw_cloud,
             identity,
@@ -729,7 +717,6 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     }
 
     if (is_lost_ && !matched) {
-        inlier_metrics_available = false;
         float current_prior_yaw = 0.0f;
         {
             std::lock_guard<std::mutex> lock(pose_mutex_);
@@ -760,7 +747,6 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             );
         }
     } else if (!matched) {
-        inlier_metrics_available = true;
         matched = solver_->processPointCloud(
             h_raw_cloud,
             identity,
@@ -830,8 +816,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     if (matched) {
         publishPoseAndTransform(reference_stamp, best_pose);
     }
-    publish_processing_status(reference_stamp, matched, best_cost, inlier_count, inlier_cost,
-                              inlier_metrics_available, true, "Pointcloud matching completed");
+    publishLocalizationSuccess(matched && !is_lost_);
 
     std_msgs::msg::Header out_header = msg->header;
     out_header.frame_id              = base_frame_;
@@ -863,11 +848,9 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
             R_base_imu                     = eigen_tf.rotation();
             tf_initialized                 = true;
         } catch (const tf2::TransformException&) {
-            imu_tf_available_ = false;
             return;
         }
     }
-    imu_tf_available_ = true;
 
     const Eigen::Vector3d omega_imu(
         msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z
@@ -1030,47 +1013,11 @@ void LocalizationNode::updateLostState(bool matched, float best_cost)
     }
 }
 
-void LocalizationNode::publish_processing_status(const rclcpp::Time & stamp, bool matched,
-    float cost, int inliers, float inlier_cost, bool inlier_metrics, bool metrics,
-    const std::string & reason)
+void LocalizationNode::publishLocalizationSuccess(bool success)
 {
-    gn10_pointcloud_localization::msg::LocalizationStatus status;
-    status.header.frame_id = map_frame_;
-    status.header.stamp = now();
-    status.measurement_stamp = stamp;
-    status.pose_stamp = last_match_stamp_;
-    status.pose.header.frame_id = map_frame_;
-    status.pose.header.stamp = last_match_stamp_;
-    {
-        std::lock_guard<std::mutex> lock(pose_mutex_);
-        status.pose.pose.position.x = last_known_pose_.x;
-        status.pose.pose.position.y = last_known_pose_.y;
-        status.pose.pose.orientation.z = std::sin(last_known_pose_.yaw * 0.5);
-        status.pose.pose.orientation.w = std::cos(last_known_pose_.yaw * 0.5);
-    }
-    status.pose_valid = matched;
-    status.map_id = get_parameter("status_identity.map_id").as_string();
-    status.team = get_parameter("status_identity.team").as_string();
-    status.extrinsic_id = get_parameter("status_identity.extrinsic_id").as_string();
-    status.implementation_id = get_parameter("status_identity.implementation_id").as_string();
-    status.configuration_id = get_parameter("status_identity.configuration_id").as_string();
-    status.processor_session = processor_session_;
-    status.result_sequence = ++result_sequence_;
-    status.last_match_success = matched;
-    status.lost = is_lost_;
-    status.cloud_tf_available = cloud_tf_available_;
-    status.imu_tf_available = imu_tf_available_;
-    status.map_loaded = !esdf_map_.empty() || !map_objects_.empty();
-    status.using_fallback_map = using_fallback_map_;
-    status.match_metrics_valid = metrics && std::isfinite(cost);
-    status.best_cost = cost;
-    status.inlier_metrics_valid = inlier_metrics && std::isfinite(inlier_cost) && inliers >= 0;
-    status.inlier_count = inliers;
-    status.inlier_cost = inlier_cost;
-    status.covariance_valid = false;
-    status.ready_quality_valid = false;
-    status.reason = reason;
-    processing_status_publisher_->publish(status);
+    std_msgs::msg::Bool msg;
+    msg.data = success;
+    pub_localization_success_->publish(msg);
 }
 
 void LocalizationNode::publishPoseAndTransform(const rclcpp::Time& stamp, const PoseCandidate& pose)
