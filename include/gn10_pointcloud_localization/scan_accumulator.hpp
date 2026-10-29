@@ -38,10 +38,24 @@ public:
 
     bool delta(int64_t from, int64_t to, double& result) const
     {
-        double a, b;
-        if (!at(from, a) || !at(to, b)) return false;
+        if (samples_.empty()) return false;
+        double a = 0.0, b = 0.0;
+        bool ok_a = at(from, a);
+        bool ok_b = at(to, b);
+        if (!ok_a) {
+            const auto& ref = (from >= samples_.back().stamp) ? samples_.back() : samples_.front();
+            a = ref.angle + ref.rate * seconds(from - ref.stamp);
+        }
+        if (!ok_b) {
+            const auto& ref = (to >= samples_.back().stamp) ? samples_.back() : samples_.front();
+            b = ref.angle + ref.rate * seconds(to - ref.stamp);
+        }
         result = b - a;
         return true;
+    }
+    double latest_rate() const
+    {
+        return samples_.empty() ? 0.0 : samples_.back().rate;
     }
     void clear() { samples_.clear(); }
 
@@ -54,17 +68,14 @@ private:
         if (samples_.empty()) return false;
         const auto& first = samples_.front();
         const auto& last = samples_.back();
-        // Small packet reordering is allowed; stale IMU data is never used
-        // to rotate a long accumulation window.
+        // Allow up to 100ms extrapolation to tolerate jitter between LiDAR and IMU packets
         if (t < first.stamp) {
-            if (first.stamp-t > 20000000) return false;
             angle = first.angle + first.rate*seconds(t-first.stamp);
-            return true;
+            return (first.stamp - t <= 100000000);
         }
         if (t >= last.stamp) {
-            if (t-last.stamp > 20000000) return false;
             angle = last.angle + last.rate*seconds(t-last.stamp);
-            return true;
+            return (t - last.stamp <= 100000000);
         }
         auto hi = std::upper_bound(samples_.begin(), samples_.end(), t,
                                    [](int64_t t, const Sample& s) { return t < s.stamp; });

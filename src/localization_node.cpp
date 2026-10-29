@@ -17,6 +17,15 @@
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+namespace {
+inline float normalizeAngle(float angle)
+{
+    while (angle > static_cast<float>(M_PI)) angle -= static_cast<float>(2.0 * M_PI);
+    while (angle < -static_cast<float>(M_PI)) angle += static_cast<float>(2.0 * M_PI);
+    return angle;
+}
+}  // namespace
+
 LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
 {
     declareAndGetParameters();
@@ -636,6 +645,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     // 速度予測モデル + IMU積分による探索中心 (search_base_pose) の計算
     PoseCandidate search_base_pose;
     bool has_fresh_prior = false;
+    float current_omega_z = 0.0f;
     {
         std::lock_guard<std::mutex> lock(pose_mutex_);
         search_base_pose = last_known_pose_;
@@ -644,6 +654,10 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             yaw_history_.delta(last_match_stamp_.nanoseconds(), reference_ns, rotation)) {
             search_base_pose.yaw += float(rotation);
         }
+        search_base_pose.yaw = normalizeAngle(search_base_pose.yaw);
+        predicted_pose_      = search_base_pose;
+        current_omega_z      = latest_omega_z_;
+
         if (has_velocity_ && !is_lost_) {
             const double dt = (reference_stamp - last_match_stamp_).seconds();
             if (dt > 0.0 && dt < 0.5) {
@@ -683,6 +697,14 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         return;
     }
 
+    MatchingParams active_match_params = match_params_;
+    const float abs_omega              = std::abs(current_omega_z);
+    if (abs_omega > 0.5f) {
+        // 高速旋回中（>0.5 rad/s: 約30deg/s）は角速度に応じて search_range_yaw を動的拡大（最大 0.35 rad: 約 20度）
+        active_match_params.range_yaw =
+            std::min(0.35f, std::max(match_params_.range_yaw, abs_omega * 0.15f));
+    }
+
     int inlier_count  = -1;
     float inlier_cost = std::numeric_limits<float>::infinity();
 
@@ -692,7 +714,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             h_raw_cloud,
             identity,
             filter_params_,
-            match_params_,
+            active_match_params,
             search_base_pose,
             dynamic_pts,
             best_pose,
@@ -717,11 +739,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     }
 
     if (is_lost_ && !matched) {
-        float current_prior_yaw = 0.0f;
-        {
-            std::lock_guard<std::mutex> lock(pose_mutex_);
-            current_prior_yaw = predicted_pose_.yaw;
-        }
+        float current_prior_yaw = search_base_pose.yaw;
 
         best_pose = global_searcher_->search(
             *solver_,
@@ -751,7 +769,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             h_raw_cloud,
             identity,
             filter_params_,
-            match_params_,
+            active_match_params,
             search_base_pose,
             dynamic_pts,
             best_pose,
@@ -814,7 +832,11 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     }
 
     if (matched) {
-        publishPoseAndTransform(reference_stamp, best_pose);
+        publishPoseAndTransform(reference_stamp, best_pose, false);
+    } else if (!is_lost_) {
+        // 単発のマッチング失敗時は、IMU積分と速度モデルによる予測姿勢 (search_base_pose) で TF を補間配信
+        // これにより高速旋回中の一時的ドロップ時でも TF 途絶・跳ねを完全に防止する
+        publishPoseAndTransform(reference_stamp, search_base_pose, true);
     }
     publishLocalizationSuccess(matched && !is_lost_);
 
@@ -863,6 +885,14 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
         velocity_history_.clear();
         has_velocity_ = false;
         is_lost_      = true;
+    }
+    latest_omega_z_ = static_cast<float>(omega_base.z());
+    if (imu_initialized_ && !is_lost_) {
+        const double dt = (stamp - last_imu_stamp_).seconds();
+        if (dt > 0.0 && dt < 0.1) {
+            predicted_pose_.yaw =
+                normalizeAngle(predicted_pose_.yaw + static_cast<float>(omega_base.z() * dt));
+        }
     }
     yaw_history_.add(stamp.nanoseconds(), omega_base.z());
     last_imu_stamp_  = stamp;
@@ -1020,9 +1050,11 @@ void LocalizationNode::publishLocalizationSuccess(bool success)
     pub_localization_success_->publish(msg);
 }
 
-void LocalizationNode::publishPoseAndTransform(const rclcpp::Time& stamp, const PoseCandidate& pose)
+void LocalizationNode::publishPoseAndTransform(
+    const rclcpp::Time& stamp, const PoseCandidate& pose, bool is_predicted
+)
 {
-    {
+    if (!is_predicted) {
         std::lock_guard<std::mutex> lock(pose_mutex_);
         last_known_pose_ = pose;
         predicted_pose_  = pose;
@@ -1038,9 +1070,12 @@ void LocalizationNode::publishPoseAndTransform(const rclcpp::Time& stamp, const 
     pose_msg->pose.pose.position.y  = pose.y;
     pose_msg->pose.pose.position.z  = 0.0f;
     pose_msg->pose.pose.orientation = tf2::toMsg(q);
-    pose_msg->pose.covariance[0]    = 0.005;
-    pose_msg->pose.covariance[7]    = 0.005;
-    pose_msg->pose.covariance[35]   = 0.002;
+
+    const double cov_pos = is_predicted ? 0.05 : 0.005;
+    const double cov_yaw = is_predicted ? 0.02 : 0.002;
+    pose_msg->pose.covariance[0]    = cov_pos;
+    pose_msg->pose.covariance[7]    = cov_pos;
+    pose_msg->pose.covariance[35]   = cov_yaw;
     pub_platform_pose_->publish(std::move(pose_msg));
 
     geometry_msgs::msg::TransformStamped tf_msg;
