@@ -94,6 +94,15 @@ public:
         float& out_best_cost
     );
 
+    struct ProfileMetrics {
+        double time_ground_filter_ms{0.0};
+        double time_matching_ms{0.0};
+        double time_dynamic_extraction_ms{0.0};
+        size_t d2h_transfer_bytes{0};
+    };
+    const ProfileMetrics& lastProfileMetrics() const { return last_metrics_; }
+    int obstacleCount() const { return obstacle_count_; }
+
 private:
     int max_points_;
     cudaStream_t stream_{nullptr};
@@ -111,4 +120,5 @@ private:
     int ground_count_{0};
     int obstacle_count_{0};
     bool use_esdf_{false};
+    ProfileMetrics last_metrics_{};
 };
