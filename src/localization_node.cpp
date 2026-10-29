@@ -352,7 +352,7 @@ void LocalizationNode::setupMapData()
                     esdf_res,
                     esdf_max_dist
                 );
-                if (esdf_map_.buildFromPCD(file_path, esdf_res, esdf_max_dist, esdf_crop_bounds_)) {
+                if (esdf_map_.buildFromPCD(file_path, esdf_res, esdf_max_dist, esdf_crop_bounds_, filter_params_.ground_z_thresh)) {
                     esdf_map_.saveBinary(cache_path);
                     RCLCPP_INFO(
                         this->get_logger(), "ESDF built and cached to: %s", cache_path.c_str()
