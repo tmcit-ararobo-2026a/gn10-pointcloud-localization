@@ -55,7 +55,7 @@ find_package(nlohmann_json REQUIRED)
 
 find_package(CUDAToolkit REQUIRED)
 find_package(MPI REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common io kdtree search)
+find_package(PCL REQUIRED QUIET COMPONENTS common io kdtree search)
 find_package(OpenMP REQUIRED)
 
 include_directories(
