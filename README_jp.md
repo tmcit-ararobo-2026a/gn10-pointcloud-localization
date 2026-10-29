@@ -209,6 +209,14 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 | :--- | :--- | :--- |
 | `topics.output_localization_success` | `/robot/operation/localization_success` | 自己位置推定の成否（`std_msgs/msg/Bool`）を出力するトピック名 |
 
+### RealSense 動的抽出の設定
+
+| パラメータ | 既定値 | 用途 |
+| :--- | :--- | :--- |
+| `realsense.enable` | `false` | RealSense 点群を用いた ESDF 動的障害物抽出の有効化 |
+| `realsense.input_topic` | `/realsense/cropped_cloud` | RealSense の入力点群トピック（base_link 変換対応） |
+| `realsense.output_topic` | `/realsense/dynamic_cloud` | ESDF 背景除去後の動的点群出力トピック |
+
 `start_lakibeam_tf`は既定でfalseです。後方LiDARの静的TFが必要な場合にtrueを指定します。
 
 ---

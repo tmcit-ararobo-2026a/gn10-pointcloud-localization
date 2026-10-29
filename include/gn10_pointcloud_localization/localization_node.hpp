@@ -45,9 +45,11 @@ private:
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
     void scan2dCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
+    void realsenseCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void fusedPriorCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
 
     // パイプライン分離ヘルパー関数
+    void processRealSenseDynamic(const rclcpp::Time& stamp, const PoseCandidate& confirmed_pose);
     bool getTransformAsArray(
         const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
     );
@@ -134,6 +136,15 @@ private:
     std::vector<float> latest_2d_points_;
     rclcpp::Time latest_2d_stamp_;
 
+    // RealSense Camera Integration (Dynamic Extraction Only)
+    bool use_realsense_{false};
+    std::string topic_realsense_cloud_{"/realsense/cropped_cloud"};
+    std::string topic_realsense_dynamic_{"/realsense/dynamic_cloud"};
+    std::mutex realsense_mutex_;
+    std::vector<float> latest_realsense_points_;
+    rclcpp::Time latest_realsense_stamp_;
+    bool has_new_realsense_{false};
+
     // ROS 2 Interfaces
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -143,11 +154,13 @@ private:
     std::shared_ptr<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>> tf_filter_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_2d_lidar_;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_realsense_cloud_;
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_fused_prior_;
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obstacle_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_ground_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_dynamic_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_realsense_dynamic_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_localization_success_;
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_platform_pose_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_map_markers_;
