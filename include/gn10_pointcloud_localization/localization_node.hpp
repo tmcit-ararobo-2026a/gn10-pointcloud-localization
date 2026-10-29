@@ -20,6 +20,7 @@
 #include <vector>
 #include <visualization_msgs/msg/marker_array.hpp>
 
+#include "gn10_pointcloud_localization/benchmark_profiler.hpp"
 #include "gn10_pointcloud_localization/esdf_map.hpp"
 #include "gn10_pointcloud_localization/global_searcher.hpp"
 #include "gn10_pointcloud_localization/map_loader.hpp"
@@ -165,6 +166,11 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_map_markers_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_esdf_map_;
     rclcpp::TimerBase::SharedPtr map_timer_;
+
+    // Benchmark Profiling
+    gn10_pointcloud_localization::BenchmarkProfiler profiler_;
+    bool benchmark_enable_{false};
+    std::string benchmark_csv_path_{""};
 
     // ESDF Map Visualization Parameters
     ESDFCropBounds esdf_crop_bounds_{};

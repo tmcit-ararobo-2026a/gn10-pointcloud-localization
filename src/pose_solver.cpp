@@ -3,6 +3,7 @@
 
 #include "gn10_pointcloud_localization/pose_solver.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -82,6 +83,9 @@ bool PoseSolver::processPointCloud(
         return false;
     }
 
+    last_metrics_ = ProfileMetrics{};
+    auto t_gf_start = std::chrono::high_resolution_clock::now();
+
     std::memcpy(h_in_, h_raw_cloud.data(), num_points * 3 * sizeof(float));
 
     cudaMemcpyAsync(d_in_, h_in_, num_points * 3 * sizeof(float), cudaMemcpyHostToDevice, stream_);
@@ -109,6 +113,9 @@ bool PoseSolver::processPointCloud(
     );
 
     cudaStreamSynchronize(stream_);
+    auto t_gf_end = std::chrono::high_resolution_clock::now();
+    last_metrics_.time_ground_filter_ms =
+        std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();
 
     // 2D LiDAR などの追加点群 (base_link 座標系) を障害物バッファにマージ
     if (extra_base_link_points && !extra_base_link_points->empty()) {
@@ -130,6 +137,7 @@ bool PoseSolver::processPointCloud(
     obstacle_count_ = h_obstacle_count;
 
     bool pose_matched = false;
+    auto t_match_start = std::chrono::high_resolution_clock::now();
     if (h_obstacle_count > 50) {
         PoseCandidate coarse_pose{};
         float coarse_cost = std::numeric_limits<float>::max();
@@ -257,6 +265,13 @@ bool PoseSolver::processPointCloud(
         out_dynamic_pts.clear();
     }
 
+    auto t_match_end = std::chrono::high_resolution_clock::now();
+    last_metrics_.time_matching_ms =
+        std::chrono::duration<double, std::milli>(t_match_end - t_match_start).count();
+    last_metrics_.d2h_transfer_bytes =
+        out_dynamic_pts.size() * sizeof(float) +
+        (out_inlier_count ? sizeof(int) + sizeof(float) : 0);
+
     return pose_matched;
 }
 
@@ -272,6 +287,9 @@ int PoseSolver::prepareObstacleCloud(
     if (num_points == 0 || num_points > max_points_) {
         return 0;
     }
+
+    last_metrics_ = ProfileMetrics{};
+    auto t_gf_start = std::chrono::high_resolution_clock::now();
 
     std::memcpy(h_in_, h_raw_cloud.data(), num_points * 3 * sizeof(float));
 
@@ -300,6 +318,9 @@ int PoseSolver::prepareObstacleCloud(
     );
 
     cudaStreamSynchronize(stream_);
+    auto t_gf_end = std::chrono::high_resolution_clock::now();
+    last_metrics_.time_ground_filter_ms =
+        std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();
     ground_count_   = h_ground_count;
     obstacle_count_ = h_obstacle_count;
     return h_obstacle_count;

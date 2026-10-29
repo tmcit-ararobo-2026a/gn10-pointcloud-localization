@@ -11,8 +11,8 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
-#include <random>
 #include <limits>
+#include <random>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -79,7 +79,9 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("topics.output_dynamic", "/dynamic_cloud");
     this->declare_parameter("topics.output_ground", "/ground_cloud");
     this->declare_parameter("topics.output_obstacle", "/obstacle_cloud");
-    this->declare_parameter("topics.output_localization_success", "/robot/operation/localization_success");
+    this->declare_parameter(
+        "topics.output_localization_success", "/robot/operation/localization_success"
+    );
     this->declare_parameter("topics.output_pose", "/platform_constraint");
     this->declare_parameter("topics.output_markers", "/field_map_markers");
     this->declare_parameter("topics.output_esdf_map", "/esdf_map");
@@ -150,6 +152,9 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("initial_pose.y", -4.0);
     this->declare_parameter("initial_pose.yaw", -1.5708);
     this->declare_parameter("initial_pose.use_for_local_search", false);
+
+    this->declare_parameter("benchmark.enable", false);
+    this->declare_parameter("benchmark.csv_output_path", "");
 
     map_frame_  = this->get_parameter("frames.map_frame").as_string();
     base_frame_ = this->get_parameter("frames.base_frame").as_string();
@@ -267,6 +272,17 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("esdf.publish_max_distance").as_double());
     esdf_publish_stride_ =
         std::max(1, static_cast<int>(this->get_parameter("esdf.publish_stride").as_int()));
+
+    benchmark_enable_   = this->get_parameter("benchmark.enable").as_bool();
+    benchmark_csv_path_ = this->get_parameter("benchmark.csv_output_path").as_string();
+    if (benchmark_enable_) {
+        profiler_.init(true, benchmark_csv_path_);
+        RCLCPP_INFO(
+            this->get_logger(),
+            "[BenchmarkProfiler] Enabled. Output CSV: '%s'",
+            benchmark_csv_path_.c_str()
+        );
+    }
 }
 
 void LocalizationNode::setupMapData()
@@ -367,7 +383,13 @@ void LocalizationNode::setupMapData()
                     esdf_res,
                     esdf_max_dist
                 );
-                if (esdf_map_.buildFromPCD(file_path, esdf_res, esdf_max_dist, esdf_crop_bounds_, filter_params_.ground_z_thresh)) {
+                if (esdf_map_.buildFromPCD(
+                        file_path,
+                        esdf_res,
+                        esdf_max_dist,
+                        esdf_crop_bounds_,
+                        filter_params_.ground_z_thresh
+                    )) {
                     esdf_map_.saveBinary(cache_path);
                     RCLCPP_INFO(
                         this->get_logger(), "ESDF built and cached to: %s", cache_path.c_str()
@@ -535,9 +557,8 @@ void LocalizationNode::setupROSInterfaces()
             rclcpp::SensorDataQoS(),
             std::bind(&LocalizationNode::realsenseCloudCallback, this, std::placeholders::_1)
         );
-        pub_realsense_dynamic_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-            topic_realsense_dynamic_, 10
-        );
+        pub_realsense_dynamic_ =
+            this->create_publisher<sensor_msgs::msg::PointCloud2>(topic_realsense_dynamic_, 10);
         RCLCPP_INFO(
             this->get_logger(),
             "RealSense dynamic filter enabled: input='%s', output='%s'",
@@ -715,6 +736,8 @@ void LocalizationNode::processRealSenseDynamic(
 
 void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
+    auto t_cb_start = std::chrono::high_resolution_clock::now();
+
     float h_transform[12];
     if (!getTransformAsArray(msg->header.frame_id, msg->header.stamp, h_transform)) {
         publishLocalizationSuccess(false);
@@ -762,7 +785,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     // 速度予測モデル + IMU積分による探索中心 (search_base_pose) の計算
     PoseCandidate search_base_pose;
-    bool has_fresh_prior = false;
+    bool has_fresh_prior  = false;
     float current_omega_z = 0.0f;
     {
         std::lock_guard<std::mutex> lock(pose_mutex_);
@@ -815,10 +838,15 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         return;
     }
 
+    auto t_deskew_end = std::chrono::high_resolution_clock::now();
+    double time_deskew_ms =
+        std::chrono::duration<double, std::milli>(t_deskew_end - t_cb_start).count();
+
     MatchingParams active_match_params = match_params_;
     const float abs_omega              = std::abs(current_omega_z);
     if (abs_omega > 0.5f) {
-        // 高速旋回中（>0.5 rad/s: 約30deg/s）は角速度に応じて search_range_yaw を動的拡大（最大 0.35 rad: 約 20度）
+        // 高速旋回中（>0.5 rad/s: 約30deg/s）は角速度に応じて search_range_yaw を動的拡大（最大
+        // 0.35 rad: 約 20度）
         active_match_params.range_yaw =
             std::min(0.35f, std::max(match_params_.range_yaw, abs_omega * 0.15f));
     }
@@ -949,11 +977,13 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     }
 
+    auto t_pub_start = std::chrono::high_resolution_clock::now();
+
     if (matched) {
         publishPoseAndTransform(reference_stamp, best_pose, false);
     } else if (!is_lost_) {
-        // 単発のマッチング失敗時は、IMU積分と速度モデルによる予測姿勢 (search_base_pose) で TF を補間配信
-        // これにより高速旋回中の一時的ドロップ時でも TF 途絶・跳ねを完全に防止する
+        // 単発のマッチング失敗時は、IMU積分と速度モデルによる予測姿勢 (search_base_pose) で TF
+        // を補間配信 これにより高速旋回中の一時的ドロップ時でも TF 途絶・跳ねを完全に防止する
         publishPoseAndTransform(reference_stamp, search_base_pose, true);
     }
     publishLocalizationSuccess(matched && !is_lost_);
@@ -971,6 +1001,28 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         if (need_obstacle) publishCloud(pub_obstacle_, out_header, obstacle_pts);
     }
     publishCloud(pub_dynamic_, out_header, dynamic_pts);
+
+    auto t_cb_end      = std::chrono::high_resolution_clock::now();
+    double time_pub_ms = std::chrono::duration<double, std::milli>(t_cb_end - t_pub_start).count();
+    double time_total_ms = std::chrono::duration<double, std::milli>(t_cb_end - t_cb_start).count();
+
+    if (profiler_.isEnabled()) {
+        const auto& metrics = solver_->lastProfileMetrics();
+        profiler_.recordFrame(
+            {reference_stamp.seconds(),
+             h_raw_cloud.size() / 3,
+             static_cast<size_t>(solver_->obstacleCount()),
+             dynamic_pts.size() / 3,
+             time_deskew_ms,
+             metrics.time_ground_filter_ms,
+             metrics.time_matching_ms,
+             metrics.time_dynamic_extraction_ms,
+             time_pub_ms,
+             time_total_ms,
+             metrics.d2h_transfer_bytes,
+             is_lost_}
+        );
+    }
 
     // 確定姿勢を用いた RealSense 動的点群の高速抽出 (Pose探索とは独立実行)
     if (use_realsense_ && !is_lost_) {
@@ -1194,11 +1246,11 @@ void LocalizationNode::publishPoseAndTransform(
     pose_msg->pose.pose.position.z  = 0.0f;
     pose_msg->pose.pose.orientation = tf2::toMsg(q);
 
-    const double cov_pos = is_predicted ? 0.05 : 0.005;
-    const double cov_yaw = is_predicted ? 0.02 : 0.002;
-    pose_msg->pose.covariance[0]    = cov_pos;
-    pose_msg->pose.covariance[7]    = cov_pos;
-    pose_msg->pose.covariance[35]   = cov_yaw;
+    const double cov_pos          = is_predicted ? 0.05 : 0.005;
+    const double cov_yaw          = is_predicted ? 0.02 : 0.002;
+    pose_msg->pose.covariance[0]  = cov_pos;
+    pose_msg->pose.covariance[7]  = cov_pos;
+    pose_msg->pose.covariance[35] = cov_yaw;
     pub_platform_pose_->publish(std::move(pose_msg));
 
     geometry_msgs::msg::TransformStamped tf_msg;
