@@ -388,3 +388,41 @@ bool PoseSolver::evaluateGlobalSDF(
         false
     );
 }
+
+bool PoseSolver::extractDynamicPointsOnly(
+    const std::vector<float>& h_raw_cloud,
+    const PoseCandidate& confirmed_pose,
+    float dynamic_dist_thresh,
+    float field_min_x,
+    float field_max_x,
+    float field_min_y,
+    float field_max_y,
+    std::vector<float>& out_dynamic_pts
+)
+{
+    int num_points = static_cast<int>(h_raw_cloud.size() / 3);
+    if (num_points <= 0 || !use_esdf_) return false;
+
+    int process_points = std::min(num_points, max_points_);
+
+    cudaMemcpyAsync(
+        d_in_,
+        h_raw_cloud.data(),
+        process_points * 3 * sizeof(float),
+        cudaMemcpyHostToDevice,
+        stream_
+    );
+
+    return launchESDFDynamicFilterOnly(
+        stream_,
+        d_in_,
+        process_points,
+        confirmed_pose,
+        dynamic_dist_thresh,
+        field_min_x,
+        field_max_x,
+        field_min_y,
+        field_max_y,
+        out_dynamic_pts
+    );
+}

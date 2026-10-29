@@ -70,6 +70,18 @@ public:
         const std::vector<float>* extra_base_link_points = nullptr
     );
 
+    // 確定姿勢を用いた動的点群の抽出 (Pose探索をスキップ)
+    bool extractDynamicPointsOnly(
+        const std::vector<float>& h_raw_cloud,
+        const PoseCandidate& confirmed_pose,
+        float dynamic_dist_thresh,
+        float field_min_x,
+        float field_max_x,
+        float field_min_y,
+        float field_max_y,
+        std::vector<float>& out_dynamic_pts
+    );
+
     // 点群の前処理（GroundFilter）のみを実行し GPU 上の d_obstacle_ に保持する
     int prepareObstacleCloud(
         const std::vector<float>& h_raw_cloud,

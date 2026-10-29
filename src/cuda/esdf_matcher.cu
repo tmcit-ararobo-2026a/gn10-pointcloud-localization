@@ -26,6 +26,14 @@ static int g_max_candidates        = 0;
 static uint8_t* d_is_dynamic = nullptr;
 static int g_max_dynamic_pts = 0;
 
+struct Point3D {
+    float x, y, z;
+};
+static Point3D* d_compact_dynamic_pts = nullptr;
+static int* d_compact_dynamic_count   = nullptr;
+static void* d_compact_temp_storage   = nullptr;
+static size_t g_compact_temp_bytes    = 0;
+
 static cub::KeyValuePair<int, float>* d_out_argmin = nullptr;
 static void* d_temp_storage                        = nullptr;
 static size_t temp_storage_bytes                   = 0;
@@ -220,6 +228,89 @@ __global__ void computeBestPoseMetricsESDFKernel(
     }
 }
 
+static void extractDynamicPointsGPU(
+    cudaStream_t stream,
+    const float* d_cloud,
+    int num_points,
+    const PoseCandidate& pose,
+    float dynamic_dist_thresh,
+    float field_min_x,
+    float field_max_x,
+    float field_min_y,
+    float field_max_y,
+    std::vector<float>& out_dynamic_pts
+)
+{
+    out_dynamic_pts.clear();
+    if (num_points <= 0 || !g_esdf_loaded) return;
+
+    if (num_points > g_max_dynamic_pts) {
+        if (d_is_dynamic) cudaFree(d_is_dynamic);
+        if (d_compact_dynamic_pts) cudaFree(d_compact_dynamic_pts);
+        g_max_dynamic_pts = num_points * 2;
+        cudaMalloc(&d_is_dynamic, g_max_dynamic_pts * sizeof(uint8_t));
+        cudaMalloc(&d_compact_dynamic_pts, g_max_dynamic_pts * sizeof(Point3D));
+    }
+    if (!d_compact_dynamic_count) {
+        cudaMalloc(&d_compact_dynamic_count, sizeof(int));
+    }
+
+    int dyn_threads = 256;
+    int dyn_blocks  = (num_points + dyn_threads - 1) / dyn_threads;
+    filterDynamicPointsESDFKernel<<<dyn_blocks, dyn_threads, 0, stream>>>(
+        g_esdf_tex,
+        d_cloud,
+        num_points,
+        pose,
+        dynamic_dist_thresh,
+        field_min_x,
+        field_max_x,
+        field_min_y,
+        field_max_y,
+        d_is_dynamic
+    );
+
+    const Point3D* d_in_pts = reinterpret_cast<const Point3D*>(d_cloud);
+
+    // CUB DeviceSelect::Flagged による GPU 内ストリームコンパクション
+    size_t required_temp_bytes = 0;
+    cub::DeviceSelect::Flagged(
+        nullptr, required_temp_bytes,
+        d_in_pts, d_is_dynamic, d_compact_dynamic_pts, d_compact_dynamic_count,
+        num_points, stream
+    );
+
+    if (required_temp_bytes > g_compact_temp_bytes) {
+        if (d_compact_temp_storage) cudaFree(d_compact_temp_storage);
+        g_compact_temp_bytes = required_temp_bytes * 2;
+        cudaMalloc(&d_compact_temp_storage, g_compact_temp_bytes);
+    }
+
+    cub::DeviceSelect::Flagged(
+        d_compact_temp_storage, g_compact_temp_bytes,
+        d_in_pts, d_is_dynamic, d_compact_dynamic_pts, d_compact_dynamic_count,
+        num_points, stream
+    );
+
+    int h_selected_count = 0;
+    cudaMemcpyAsync(
+        &h_selected_count, d_compact_dynamic_count, sizeof(int), cudaMemcpyDeviceToHost, stream
+    );
+    cudaStreamSynchronize(stream);
+
+    if (h_selected_count > 0 && h_selected_count <= num_points) {
+        out_dynamic_pts.resize(h_selected_count * 3);
+        cudaMemcpyAsync(
+            out_dynamic_pts.data(),
+            d_compact_dynamic_pts,
+            h_selected_count * sizeof(Point3D),
+            cudaMemcpyDeviceToHost,
+            stream
+        );
+        cudaStreamSynchronize(stream);
+    }
+}
+
 extern "C" {
 
 void freeESDFMapFromGPU()
@@ -231,6 +322,19 @@ void freeESDFMapFromGPU()
     if (g_esdf_array) {
         cudaFreeArray(g_esdf_array);
         g_esdf_array = nullptr;
+    }
+    if (d_compact_dynamic_pts) {
+        cudaFree(d_compact_dynamic_pts);
+        d_compact_dynamic_pts = nullptr;
+    }
+    if (d_compact_dynamic_count) {
+        cudaFree(d_compact_dynamic_count);
+        d_compact_dynamic_count = nullptr;
+    }
+    if (d_compact_temp_storage) {
+        cudaFree(d_compact_temp_storage);
+        d_compact_temp_storage = nullptr;
+        g_compact_temp_bytes = 0;
     }
     g_esdf_loaded = false;
 }
@@ -443,10 +547,8 @@ bool launchESDFMatcher(
     // 動的点群抽出
     out_dynamic_pts.clear();
     if (extract_dynamic) {
-        int dyn_threads = 256;
-        int dyn_blocks  = (num_points + dyn_threads - 1) / dyn_threads;
-        filterDynamicPointsESDFKernel<<<dyn_blocks, dyn_threads, 0, stream>>>(
-            g_esdf_tex,
+        extractDynamicPointsGPU(
+            stream,
             d_obstacle_cloud,
             num_points,
             out_best_pose,
@@ -455,39 +557,39 @@ bool launchESDFMatcher(
             field_max_x,
             field_min_y,
             field_max_y,
-            d_is_dynamic
+            out_dynamic_pts
         );
-
-        std::vector<uint8_t> h_is_dynamic(num_points);
-        std::vector<float> h_raw_cloud(num_points * 3);
-
-        cudaMemcpyAsync(
-            h_is_dynamic.data(),
-            d_is_dynamic,
-            num_points * sizeof(uint8_t),
-            cudaMemcpyDeviceToHost,
-            stream
-        );
-        cudaMemcpyAsync(
-            h_raw_cloud.data(),
-            d_obstacle_cloud,
-            num_points * 3 * sizeof(float),
-            cudaMemcpyDeviceToHost,
-            stream
-        );
-
-        cudaStreamSynchronize(stream);
-
-        out_dynamic_pts.reserve(num_points * 3);
-        for (int i = 0; i < num_points; ++i) {
-            if (h_is_dynamic[i]) {
-                out_dynamic_pts.push_back(h_raw_cloud[i * 3 + 0]);
-                out_dynamic_pts.push_back(h_raw_cloud[i * 3 + 1]);
-                out_dynamic_pts.push_back(h_raw_cloud[i * 3 + 2]);
-            }
-        }
     }
 
+    return true;
+}
+
+bool launchESDFDynamicFilterOnly(
+    cudaStream_t stream,
+    const float* d_cloud,
+    int num_points,
+    const PoseCandidate& confirmed_pose,
+    float dynamic_dist_thresh,
+    float field_min_x,
+    float field_max_x,
+    float field_min_y,
+    float field_max_y,
+    std::vector<float>& out_dynamic_pts
+)
+{
+    if (num_points <= 0 || !g_esdf_loaded) return false;
+    extractDynamicPointsGPU(
+        stream,
+        d_cloud,
+        num_points,
+        confirmed_pose,
+        dynamic_dist_thresh,
+        field_min_x,
+        field_max_x,
+        field_min_y,
+        field_max_y,
+        out_dynamic_pts
+    );
     return true;
 }
 

@@ -232,6 +232,14 @@ Shared settings are configured in [`config/common_params.yaml`](config/common_pa
 | --- | --- | --- |
 | `topics.output_localization_success` | `/robot/operation/localization_success` | Topic name for localization success boolean (`std_msgs/msg/Bool`). |
 
+### RealSense Dynamic Extraction Settings
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `realsense.enable` | `false` | Enable ESDF dynamic obstacle extraction for RealSense point cloud. |
+| `realsense.input_topic` | `/realsense/cropped_cloud` | Input point cloud topic from RealSense. |
+| `realsense.output_topic` | `/realsense/dynamic_cloud` | Output topic for extracted dynamic points after ESDF background removal. |
+
 `start_lakibeam_tf` defaults to false; set it to true only when the rear LiDAR static transform is required.
 
 ---

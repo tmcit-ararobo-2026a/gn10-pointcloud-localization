@@ -132,6 +132,10 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("lidar_2d.topic", "/lakibeam/scan");
     this->declare_parameter("lidar_2d.frame_id", "lakibeam_frame");
 
+    this->declare_parameter("realsense.enable", false);
+    this->declare_parameter("realsense.input_topic", "/realsense/cropped_cloud");
+    this->declare_parameter("realsense.output_topic", "/realsense/dynamic_cloud");
+
     this->declare_parameter("global_search.range_min_x", -5.25);
     this->declare_parameter("global_search.range_max_x", 5.25);
     this->declare_parameter("global_search.range_min_y", -5.70);
@@ -198,6 +202,10 @@ void LocalizationNode::declareAndGetParameters()
     use_2d_lidar_   = this->get_parameter("lidar_2d.enable").as_bool();
     topic_2d_lidar_ = this->get_parameter("lidar_2d.topic").as_string();
     lidar_2d_frame_ = this->get_parameter("lidar_2d.frame_id").as_string();
+
+    use_realsense_           = this->get_parameter("realsense.enable").as_bool();
+    topic_realsense_cloud_   = this->get_parameter("realsense.input_topic").as_string();
+    topic_realsense_dynamic_ = this->get_parameter("realsense.output_topic").as_string();
 
     global_range_min_x_ =
         static_cast<float>(this->get_parameter("global_search.range_min_x").as_double());
@@ -521,6 +529,23 @@ void LocalizationNode::setupROSInterfaces()
         );
     }
 
+    if (use_realsense_) {
+        sub_realsense_cloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+            topic_realsense_cloud_,
+            rclcpp::SensorDataQoS(),
+            std::bind(&LocalizationNode::realsenseCloudCallback, this, std::placeholders::_1)
+        );
+        pub_realsense_dynamic_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+            topic_realsense_dynamic_, 10
+        );
+        RCLCPP_INFO(
+            this->get_logger(),
+            "RealSense dynamic filter enabled: input='%s', output='%s'",
+            topic_realsense_cloud_.c_str(),
+            topic_realsense_dynamic_.c_str()
+        );
+    }
+
     using namespace std::chrono_literals;
     map_timer_ =
         this->create_wall_timer(1s, std::bind(&LocalizationNode::publishFieldMapMarkers, this));
@@ -592,6 +617,99 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
         std::lock_guard<std::mutex> lock(lidar_2d_mutex_);
         latest_2d_points_ = std::move(points);
         latest_2d_stamp_  = msg->header.stamp;
+    }
+}
+
+void LocalizationNode::realsenseCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+{
+    float h_transform[12];
+    if (!getTransformAsArray(msg->header.frame_id, msg->header.stamp, h_transform)) {
+        return;
+    }
+
+    const sensor_msgs::msg::PointField *xf = nullptr, *yf = nullptr, *zf = nullptr;
+    for (const auto& field : msg->fields) {
+        if (field.name == "x") xf = &field;
+        if (field.name == "y") yf = &field;
+        if (field.name == "z") zf = &field;
+    }
+    if (!xf || !yf || !zf) return;
+
+    const size_t total_points = msg->width * msg->height;
+    if (total_points < 20) return;
+
+    std::vector<float> points;
+    points.reserve(total_points * 3);
+
+    const uint8_t* ptr = msg->data.data();
+    for (size_t i = 0; i < total_points; ++i) {
+        float x = *reinterpret_cast<const float*>(ptr + xf->offset);
+        float y = *reinterpret_cast<const float*>(ptr + yf->offset);
+        float z = *reinterpret_cast<const float*>(ptr + zf->offset);
+        ptr += msg->point_step;
+
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
+
+        float bx = h_transform[0] * x + h_transform[1] * y + h_transform[2] * z + h_transform[3];
+        float by = h_transform[4] * x + h_transform[5] * y + h_transform[6] * z + h_transform[7];
+        float bz = h_transform[8] * x + h_transform[9] * y + h_transform[10] * z + h_transform[11];
+
+        if (bx * bx + by * by <= filter_params_.robot_radius * filter_params_.robot_radius) {
+            continue;
+        }
+
+        points.push_back(bx);
+        points.push_back(by);
+        points.push_back(bz);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(realsense_mutex_);
+        latest_realsense_points_ = std::move(points);
+        latest_realsense_stamp_  = msg->header.stamp;
+        has_new_realsense_       = true;
+    }
+}
+
+void LocalizationNode::processRealSenseDynamic(
+    const rclcpp::Time& stamp, const PoseCandidate& confirmed_pose
+)
+{
+    if (!use_realsense_ || !pub_realsense_dynamic_) return;
+
+    std::vector<float> rs_points;
+    rclcpp::Time rs_stamp;
+    {
+        std::lock_guard<std::mutex> lock(realsense_mutex_);
+        if (!has_new_realsense_ || latest_realsense_points_.empty()) return;
+        if (std::abs((stamp - latest_realsense_stamp_).seconds()) > 0.20) {
+            has_new_realsense_ = false;
+            return;
+        }
+        rs_points          = latest_realsense_points_;
+        rs_stamp           = latest_realsense_stamp_;
+        has_new_realsense_ = false;
+    }
+
+    if (rs_points.size() < 60) return;
+
+    std::vector<float> dynamic_rs_pts;
+    bool success = solver_->extractDynamicPointsOnly(
+        rs_points,
+        confirmed_pose,
+        match_params_.dynamic_dist_thresh,
+        match_params_.field_min_x,
+        match_params_.field_max_x,
+        match_params_.field_min_y,
+        match_params_.field_max_y,
+        dynamic_rs_pts
+    );
+
+    if (success) {
+        std_msgs::msg::Header header;
+        header.frame_id = base_frame_;
+        header.stamp    = rs_stamp;
+        publishCloud(pub_realsense_dynamic_, header, dynamic_rs_pts);
     }
 }
 
@@ -853,6 +971,11 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         if (need_obstacle) publishCloud(pub_obstacle_, out_header, obstacle_pts);
     }
     publishCloud(pub_dynamic_, out_header, dynamic_pts);
+
+    // 確定姿勢を用いた RealSense 動的点群の高速抽出 (Pose探索とは独立実行)
+    if (use_realsense_ && !is_lost_) {
+        processRealSenseDynamic(reference_stamp, best_pose);
+    }
 }
 
 void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
