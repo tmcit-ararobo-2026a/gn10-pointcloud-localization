@@ -54,7 +54,9 @@ private:
         const sensor_msgs::msg::PointCloud2& msg, const float transform[12], int64_t& end_ns
     );
     void updateLostState(bool matched, float best_cost);
-    void publishPoseAndTransform(const rclcpp::Time& stamp, const PoseCandidate& pose);
+    void publishPoseAndTransform(
+        const rclcpp::Time& stamp, const PoseCandidate& pose, bool is_predicted = false
+    );
 
     void publishCloud(
         const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& pub,
@@ -105,6 +107,7 @@ private:
     bool imu_initialized_{false};
     bool is_lost_{true};
     int lost_frame_count_{0};
+    float latest_omega_z_{0.0f};
 
     // Velocity & Motion Prediction
     float velocity_x_{0.0f};
