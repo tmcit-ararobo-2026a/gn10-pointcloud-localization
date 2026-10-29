@@ -147,6 +147,9 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("initial_pose.yaw", -1.5708);
     this->declare_parameter("initial_pose.use_for_local_search", false);
 
+    this->declare_parameter("benchmark.enable", false);
+    this->declare_parameter("benchmark.csv_output_path", "");
+
     map_frame_  = this->get_parameter("frames.map_frame").as_string();
     base_frame_ = this->get_parameter("frames.base_frame").as_string();
 
@@ -259,6 +262,17 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("esdf.publish_max_distance").as_double());
     esdf_publish_stride_ =
         std::max(1, static_cast<int>(this->get_parameter("esdf.publish_stride").as_int()));
+
+    benchmark_enable_   = this->get_parameter("benchmark.enable").as_bool();
+    benchmark_csv_path_ = this->get_parameter("benchmark.csv_output_path").as_string();
+    if (benchmark_enable_) {
+        profiler_.init(true, benchmark_csv_path_);
+        RCLCPP_INFO(
+            this->get_logger(),
+            "[BenchmarkProfiler] Enabled. Output CSV: '%s'",
+            benchmark_csv_path_.c_str()
+        );
+    }
 }
 
 void LocalizationNode::setupMapData()
@@ -597,6 +611,8 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
 
 void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
+    auto t_cb_start = std::chrono::high_resolution_clock::now();
+
     float h_transform[12];
     if (!getTransformAsArray(msg->header.frame_id, msg->header.stamp, h_transform)) {
         publishLocalizationSuccess(false);
@@ -696,6 +712,10 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         publishLocalizationSuccess(false);
         return;
     }
+
+    auto t_deskew_end = std::chrono::high_resolution_clock::now();
+    double time_deskew_ms =
+        std::chrono::duration<double, std::milli>(t_deskew_end - t_cb_start).count();
 
     MatchingParams active_match_params = match_params_;
     const float abs_omega              = std::abs(current_omega_z);
@@ -831,6 +851,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     }
 
+    auto t_pub_start = std::chrono::high_resolution_clock::now();
+
     if (matched) {
         publishPoseAndTransform(reference_stamp, best_pose, false);
     } else if (!is_lost_) {
@@ -853,6 +875,30 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         if (need_obstacle) publishCloud(pub_obstacle_, out_header, obstacle_pts);
     }
     publishCloud(pub_dynamic_, out_header, dynamic_pts);
+
+    auto t_cb_end = std::chrono::high_resolution_clock::now();
+    double time_pub_ms =
+        std::chrono::duration<double, std::milli>(t_cb_end - t_pub_start).count();
+    double time_total_ms =
+        std::chrono::duration<double, std::milli>(t_cb_end - t_cb_start).count();
+
+    if (profiler_.isEnabled()) {
+        const auto& metrics = solver_->lastProfileMetrics();
+        profiler_.recordFrame({
+            reference_stamp.seconds(),
+            h_raw_cloud.size() / 3,
+            static_cast<size_t>(solver_->obstacleCount()),
+            dynamic_pts.size() / 3,
+            time_deskew_ms,
+            metrics.time_ground_filter_ms,
+            metrics.time_matching_ms,
+            metrics.time_dynamic_extraction_ms,
+            time_pub_ms,
+            time_total_ms,
+            metrics.d2h_transfer_bytes,
+            is_lost_
+        });
+    }
 }
 
 void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
