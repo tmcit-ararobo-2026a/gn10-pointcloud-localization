@@ -43,6 +43,9 @@ private:
     void configureESDFBounds();
     void setupROSInterfaces();
     void publishLocalizationSuccess(bool success);
+    rcl_interfaces::msg::SetParametersResult onParametersChange(
+        const std::vector<rclcpp::Parameter>& parameters
+    );
 
     // Callbacks
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
@@ -189,6 +192,8 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_map_markers_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_esdf_map_;
     rclcpp::TimerBase::SharedPtr map_timer_;
+    OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+    std::mutex param_mutex_;
 
     // Benchmark Profiling
     gn10_pointcloud_localization::BenchmarkProfiler profiler_;
