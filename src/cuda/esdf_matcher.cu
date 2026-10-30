@@ -157,7 +157,10 @@ __global__ void filterDynamicPointsESDFKernel(
 
     const float dx=lx-keep_sphere.x, dy=ly-keep_sphere.y, dz=lz-keep_sphere.z;
     if (keep_sphere.w>0 && dx*dx+dy*dy+dz*dz<=keep_sphere.w*keep_sphere.w) {
-        out_is_dynamic[i]=1; return;
+        // 床面近傍の点は保護対象から除外 (床面ノイズの固定化を防止)
+        if (lz > 0.02f) {
+            out_is_dynamic[i]=1; return;
+        }
     }
     float wx = cos_y * lx - sin_y * ly + rx;
     float wy = sin_y * lx + cos_y * ly + ry;

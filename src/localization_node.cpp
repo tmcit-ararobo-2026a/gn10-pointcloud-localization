@@ -143,12 +143,15 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("realsense.tf_wait_sec", 0.15);
     this->declare_parameter("realsense.max_age_sec", 0.25);
     this->declare_parameter("realsense.pose_max_age_sec", 0.25);
-    this->declare_parameter("realsense.poll_sec", 0.005);
+    this->declare_parameter("realsense.poll_sec", 0.02);
     this->declare_parameter("realsense.queue_size", 8);
     this->declare_parameter("realsense.min_points", 1);
+    this->declare_parameter("realsense.min_dynamic_points", 15);
     this->declare_parameter("realsense.tracking_protection", false);
     this->declare_parameter("realsense.prediction_topic", "/cloth/filter_prediction");
     this->declare_parameter("realsense.dynamic_dist_thresh", -1.0);
+    this->declare_parameter("realsense.ground_z_thresh", -1.0);
+    this->declare_parameter("realsense.height_max", 1.5);
     this->declare_parameter("realsense.prediction_tolerance_sec", DEFAULT_PREDICTION_TOLERANCE_SEC);
 
     this->declare_parameter("global_search.range_min_x", -5.25);
@@ -230,15 +233,18 @@ void LocalizationNode::declareAndGetParameters()
     realsense_poll_sec_ = get_parameter("realsense.poll_sec").as_double();
     realsense_queue_size_ = get_parameter("realsense.queue_size").as_int();
     realsense_min_points_ = get_parameter("realsense.min_points").as_int();
+    realsense_min_dynamic_points_ = get_parameter("realsense.min_dynamic_points").as_int();
     realsense_tracking_protection_ = get_parameter("realsense.tracking_protection").as_bool();
     realsense_dynamic_dist_thresh_ = get_parameter("realsense.dynamic_dist_thresh").as_double();
+    realsense_ground_z_thresh_ = get_parameter("realsense.ground_z_thresh").as_double();
+    realsense_height_max_ = get_parameter("realsense.height_max").as_double();
     realsense_prediction_tolerance_sec_ = get_parameter("realsense.prediction_tolerance_sec").as_double();
     for (double value : {realsense_wait_sec_, realsense_max_age_sec_,
                          realsense_pose_max_age_sec_, realsense_poll_sec_,
-                         realsense_prediction_tolerance_sec_}) {
-        if (!std::isfinite(value) || value <= 0) throw std::invalid_argument("Invalid RealSense timing");
+                         realsense_prediction_tolerance_sec_, realsense_height_max_}) {
+        if (!std::isfinite(value) || value <= 0) throw std::invalid_argument("Invalid RealSense timing/range");
     }
-    if (realsense_queue_size_ <= 0 || realsense_min_points_ < 0)
+    if (realsense_queue_size_ <= 0 || realsense_min_points_ < 0 || realsense_min_dynamic_points_ < 0)
         throw std::invalid_argument("Invalid RealSense queue/point count");
 
     global_range_min_x_ =
@@ -778,6 +784,12 @@ void LocalizationNode::processRealSenseDynamic() {
             size_t(msg->row_step) < size_t(msg->width)*msg->point_step ||
             msg->data.size() < size_t(msg->row_step)*msg->height)
             throw std::invalid_argument("Invalid RealSense PointCloud2 layout");
+        const float ground_z = (realsense_ground_z_thresh_ >= 0.0)
+            ? static_cast<float>(realsense_ground_z_thresh_)
+            : filter_params_.ground_z_thresh;
+        const float height_max = static_cast<float>(realsense_height_max_);
+        const float radius_sq = filter_params_.robot_radius * filter_params_.robot_radius;
+
         std::vector<float> points;
         points.reserve(size_t(msg->width)*msg->height*3);
         for (size_t row=0; row<msg->height; ++row) for (size_t col=0; col<msg->width; ++col) {
@@ -788,7 +800,20 @@ void LocalizationNode::processRealSenseDynamic() {
             std::memcpy(&z, ptr + zf->offset, sizeof(float));
             if (!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)) continue;
             const Eigen::Vector3d point=transform*Eigen::Vector3d(x,y,z);
-            points.insert(points.end(), {float(point.x()),float(point.y()),float(point.z())});
+            const float px = static_cast<float>(point.x());
+            const float py = static_cast<float>(point.y());
+            const float pz = static_cast<float>(point.z());
+
+            // 1. 床面点群の除去 (ground_z_thresh 以下の点は床として除外)
+            if (pz <= ground_z) continue;
+
+            // 2. 上限高さ・ロボット近傍（自身のバンパー等）の除去
+            if (pz > height_max) continue;
+            if (px * px + py * py <= radius_sq) continue;
+
+            points.push_back(px);
+            points.push_back(py);
+            points.push_back(pz);
         }
         float sphere[4]{};
         if (prediction && prediction->action==visualization_msgs::msg::Marker::ADD) {
@@ -805,6 +830,12 @@ void LocalizationNode::processRealSenseDynamic() {
                 match_params_.field_min_x,match_params_.field_max_x,
                 match_params_.field_min_y,match_params_.field_max_y,dynamic,sphere))
                 throw std::runtime_error("RealSense ESDF extraction failed");
+        }
+
+        // 定常的微小ノイズの除去:
+        // 抽出された動的点群が min_dynamic_points 未満の場合は、強い照明等の散乱ノイズと判定してクリア
+        if (dynamic.size() / 3 < static_cast<size_t>(realsense_min_dynamic_points_)) {
+            dynamic.clear();
         }
         std_msgs::msg::Header header=msg->header; header.frame_id=base_frame_;
         // Empty observations are meaningful; always publish them for tracker loss handling.

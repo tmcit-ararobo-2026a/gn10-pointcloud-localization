@@ -157,10 +157,13 @@ private:
     std::deque<visualization_msgs::msg::Marker::SharedPtr> realsense_predictions_;
     rclcpp::Subscription<visualization_msgs::msg::Marker>::SharedPtr sub_realsense_prediction_;
     double realsense_wait_sec_{0.15}, realsense_max_age_sec_{0.25};
-    double realsense_pose_max_age_sec_{0.25}, realsense_poll_sec_{0.005};
+    double realsense_pose_max_age_sec_{0.25}, realsense_poll_sec_{0.02};
     double realsense_dynamic_dist_thresh_{-1.0};
+    double realsense_ground_z_thresh_{-1.0};
+    double realsense_height_max_{1.5};
     double realsense_prediction_tolerance_sec_{0.05};
     int realsense_queue_size_{8}, realsense_min_points_{1};
+    int realsense_min_dynamic_points_{15};
     int64_t realsense_last_stamp_ns_{-1};
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_realsense_status_;
     rclcpp::TimerBase::SharedPtr realsense_timer_;

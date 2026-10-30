@@ -83,13 +83,16 @@
       status_topic: "/realsense/filter_status"# フィルター状態通知 (READY, WAITING_FOR_TF等)
       prediction_topic: "/cloth/filter_prediction" # トラッカーからの予測位置マーカー
       prediction_tolerance_sec: 0.05        # 予測マーカーと点群の時刻照合許容差 [s]
-      dynamic_dist_thresh: 0.08             # 動的判定距離閾値 [m] (床面近傍での消失防止)
+      dynamic_dist_thresh: 0.15             # 動的判定距離閾値 [m] (ESDFボクセル解像度0.05mに対して安定な値)
+      ground_z_thresh: -1.0                 # 床面高さ除外閾値 [m] (<0でfilter_params.ground_z_threshを継承)
+      height_max: 1.5                       # 高さ上限除外閾値 [m]
       tf_wait_sec: 0.15                     # TF 待機タイムアウト [s]
       max_age_sec: 0.25                     # 点群許容遅延 [s]
       pose_max_age_sec: 0.25                # 姿勢許容遅延 [s]
-      poll_sec: 0.005                       # 独立タイマー周期 [s] (200Hz)
+      poll_sec: 0.02                        # 独立タイマー周期 [s] (50Hz: CPU負荷とLiDARジッター低減)
       queue_size: 8                         # キュー最大保持フレーム数
       min_points: 1                         # 最小入力点数
+      min_dynamic_points: 15                # 抽出後の最小動的点数 (照明等の散乱ノイズカット)
       tracking_protection: true             # 予測マーカー近傍保護の有効化
 
     global_search:
