@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
 
 #include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
 
@@ -650,13 +651,16 @@ bool PoseSolver::extractDynamicPointsOnly(
     float field_max_x,
     float field_min_y,
     float field_max_y,
-    std::vector<float>& out_dynamic_pts
+    std::vector<float>& out_dynamic_pts,
+    const float* tracking_sphere
 )
 {
     int num_points = static_cast<int>(h_raw_cloud.size() / 3);
     if (num_points <= 0 || !use_esdf_) return false;
 
-    int process_points = std::min(num_points, max_points_);
+    if (num_points > max_points_)
+        throw std::invalid_argument("RealSense point cloud exceeds filter_params.max_points");
+    int process_points = num_points;
 
     cudaMemcpyAsync(
         d_in_,
@@ -676,6 +680,7 @@ bool PoseSolver::extractDynamicPointsOnly(
         field_max_x,
         field_min_y,
         field_max_y,
-        out_dynamic_pts
+        out_dynamic_pts,
+        tracking_sphere
     );
 }

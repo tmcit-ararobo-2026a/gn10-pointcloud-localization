@@ -54,7 +54,8 @@ bool launchESDFDynamicFilterOnly(
     float field_max_x,
     float field_min_y,
     float field_max_y,
-    std::vector<float>& out_dynamic_pts
+    std::vector<float>& out_dynamic_pts,
+        const float* tracking_sphere = nullptr
 );
 
 #ifdef __cplusplus
