@@ -342,6 +342,17 @@ void LocalizationNode::setupMapData()
                 file_path = map_dir_path.string();
             }
         }
+
+        // 拡張子から map_source_type を自動推論
+        std::string ext = p.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return std::tolower(c); });
+        if (ext == ".pcd" && map_source != "pcd") {
+            map_source = "pcd";
+        } else if (ext == ".esdf" && map_source != "esdf") {
+            map_source = "esdf";
+        } else if (ext == ".json" && map_source != "json") {
+            map_source = "json";
+        }
     }
 
     if (map_source == "esdf") {
