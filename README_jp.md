@@ -224,3 +224,18 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 ## 7. ライセンス
 
 本リポジトリは [Apache 2.0 ライセンス](./LICENSE) のもとで公開されています。
+
+### 雑巾追跡向けRealSense差分の検証ブランチ
+
+RealSense入力はROI・Voxel処理済みのXYZ PointCloud2を受け取ります。自己位置探索へ混ぜず、撮影時刻のTFでbase_linkへ変換して、同じESDFで背景を除外します。`realsense_filter_params.yaml`（実機）と `unity_realsense_filter_params.yaml`（Unity）で有効化できます。通常のcommon設定は無効のままです。
+
+- `realsense.tf_wait_sec`：撮影時刻のTF・有効な自己位置を待つ実時間の上限。
+- `realsense.max_age_sec`：入力時刻とROS時刻の許容差。
+- `realsense.pose_max_age_sec`：直近の照合成功時刻との許容差。
+- `realsense.poll_sec` / `queue_size`：処理タイマー周期と待機キュー上限。
+- `realsense.min_points`：入力の最小有効点数（少数点の観測にも対応）。
+- `realsense.status_topic`：`READY`、`WAITING_FOR_TF`、`WAITING_FOR_LOCALIZATION`、`IMAGE_TIME_INVALID`、`QUEUE_OVERFLOW`、`WAITING_FOR_PREDICTION`、`FILTER_ERROR` を配信。
+
+LiDARコールバックと同じ排他的コールバックグループで処理し、共有PoseSolverのGPUバッファを並列使用しません。出力はbase_link座標、元の撮影時刻で配信します。差分が空のフレームも配信します。地図の内容はJSON/PCD/ESDFのどれから生成したESDFでも共通に利用できます。
+
+`realsense.tracking_protection: true` の場合、`realsense.prediction_topic` のMarkerと入力点群を同じ撮影時刻で対応付けます。ADDの球内は背景除外を緩め、DELETEでは通常の地図差分を行います。両メッセージが揃わない場合もTF待ちと同じ実時間上限で破棄し、過去の予測を別フレームへ流用しません。この機能は対応するcloth trackerとの接続時に有効にします。

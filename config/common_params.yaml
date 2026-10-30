@@ -80,6 +80,15 @@
       enable: false
       input_topic: "/realsense/cropped_cloud"
       output_topic: "/realsense/dynamic_cloud"
+      status_topic: "/realsense/filter_status"
+      tf_wait_sec: 0.15
+      max_age_sec: 0.25
+      pose_max_age_sec: 0.25
+      poll_sec: 0.005
+      queue_size: 8
+      min_points: 1
+      tracking_protection: false
+      prediction_topic: /cloth/filter_prediction
 
     global_search:
       range_min_x: -5.25
