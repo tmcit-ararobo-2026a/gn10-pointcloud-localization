@@ -7,11 +7,13 @@ option(BUILD_RUNTIME_NODES "Build localization runtime nodes" ON)
 option(BUILD_GPU_NODES "Build CUDA matcher (CPU monitor can be built separately)" ON)
 
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES 87 89)
+  set(CMAKE_CUDA_ARCHITECTURES 86 87)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
@@ -33,7 +35,6 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
-find_package(Ceres REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
@@ -45,7 +46,6 @@ find_package(OpenMP REQUIRED)
 include_directories(
   include
   ${EIGEN3_INCLUDE_DIRS}
-  ${CERES_INCLUDE_DIRS}
   ${CUDAToolkit_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
 )
@@ -60,12 +60,14 @@ add_library(gn10_cuda_lib
   src/cuda/esdf_matcher.cu
 )
 set_target_properties(gn10_cuda_lib PROPERTIES
-  CUDA_SEPARABLE_COMPILATION ON
+  CUDA_SEPARABLE_COMPILATION OFF
 )
 
 # nvcc 内部で生成されるコードの -Wpedantic 警告を抑制
+target_include_directories(gn10_cuda_lib BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include_fix)
 target_compile_options(gn10_cuda_lib PRIVATE
   $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>
+  $<$<COMPILE_LANGUAGE:CUDA>:-isystem${CMAKE_CURRENT_SOURCE_DIR}/include_fix>
 )
 
 # 共通 ESDF ライブラリ
@@ -94,7 +96,7 @@ target_compile_options(gn10_pointcloud_localization_node PRIVATE
 target_link_libraries(gn10_pointcloud_localization_node
   gn10_cuda_lib
   gn10_esdf_lib
-  ${CERES_LIBRARIES}
+  nlohmann_json::nlohmann_json
   ${PCL_LIBRARIES}
   OpenMP::OpenMP_CXX
   CUDA::cudart
@@ -144,6 +146,16 @@ install(TARGETS
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
+
+if(BUILD_TESTING)
+  enable_testing()
+  add_executable(dynamic_filter_test tests/test_dynamic_filter.cu)
+  target_include_directories(dynamic_filter_test PRIVATE include)
+  target_link_libraries(dynamic_filter_test gn10_cuda_lib CUDA::cudart)
+  target_compile_options(dynamic_filter_test PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-UNDEBUG>)
+  add_test(NAME dynamic_filter COMMAND dynamic_filter_test)
+  set_tests_properties(dynamic_filter PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 
 # 他のノードや環境変数のためにライブラリをエクスポート
 ament_export_libraries(gn10_cuda_lib gn10_esdf_lib)

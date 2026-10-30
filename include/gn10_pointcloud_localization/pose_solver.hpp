@@ -98,7 +98,8 @@ public:
         float field_max_x,
         float field_min_y,
         float field_max_y,
-        std::vector<float>& out_dynamic_pts
+        std::vector<float>& out_dynamic_pts,
+        const float* tracking_sphere = nullptr
     );
 
     // 点群の前処理（GroundFilter）のみを実行し GPU 上の d_obstacle_ に保持する

@@ -9,6 +9,7 @@
 #include <cub/cub.cuh>
 #include <iostream>
 #include <vector>
+#include <stdexcept>
 
 #include "gn10_pointcloud_localization/cuda/esdf_matcher.cuh"
 
@@ -29,6 +30,7 @@ static int g_max_dynamic_pts = 0;
 struct Point3D {
     float x, y, z;
 };
+static_assert(sizeof(Point3D) == 3 * sizeof(float), "Point3D must be packed XYZ");
 static Point3D* d_compact_dynamic_pts = nullptr;
 static int* d_compact_dynamic_count   = nullptr;
 static void* d_compact_temp_storage   = nullptr;
@@ -135,6 +137,7 @@ __global__ void filterDynamicPointsESDFKernel(
     float field_max_x,
     float field_min_y,
     float field_max_y,
+    float4 keep_sphere,
     uint8_t* __restrict__ out_is_dynamic
 )
 {
@@ -152,6 +155,10 @@ __global__ void filterDynamicPointsESDFKernel(
     float ly = cloud[i * 3 + 1];
     float lz = cloud[i * 3 + 2];
 
+    const float dx=lx-keep_sphere.x, dy=ly-keep_sphere.y, dz=lz-keep_sphere.z;
+    if (keep_sphere.w>0 && dx*dx+dy*dy+dz*dz<=keep_sphere.w*keep_sphere.w) {
+        out_is_dynamic[i]=1; return;
+    }
     float wx = cos_y * lx - sin_y * ly + rx;
     float wy = sin_y * lx + cos_y * ly + ry;
     float wz = lz;
@@ -228,6 +235,10 @@ __global__ void computeBestPoseMetricsESDFKernel(
     }
 }
 
+static void checkDynamicCuda(cudaError_t error) {
+    if (error != cudaSuccess) throw std::runtime_error(cudaGetErrorString(error));
+}
+
 static void extractDynamicPointsGPU(
     cudaStream_t stream,
     const float* d_cloud,
@@ -238,7 +249,8 @@ static void extractDynamicPointsGPU(
     float field_max_x,
     float field_min_y,
     float field_max_y,
-    std::vector<float>& out_dynamic_pts
+    std::vector<float>& out_dynamic_pts,
+    const float* tracking_sphere = nullptr
 )
 {
     out_dynamic_pts.clear();
@@ -248,11 +260,11 @@ static void extractDynamicPointsGPU(
         if (d_is_dynamic) cudaFree(d_is_dynamic);
         if (d_compact_dynamic_pts) cudaFree(d_compact_dynamic_pts);
         g_max_dynamic_pts = num_points * 2;
-        cudaMalloc(&d_is_dynamic, g_max_dynamic_pts * sizeof(uint8_t));
-        cudaMalloc(&d_compact_dynamic_pts, g_max_dynamic_pts * sizeof(Point3D));
+        checkDynamicCuda(cudaMalloc(&d_is_dynamic, g_max_dynamic_pts * sizeof(uint8_t)));
+        checkDynamicCuda(cudaMalloc(&d_compact_dynamic_pts, g_max_dynamic_pts * sizeof(Point3D)));
     }
     if (!d_compact_dynamic_count) {
-        cudaMalloc(&d_compact_dynamic_count, sizeof(int));
+        checkDynamicCuda(cudaMalloc(&d_compact_dynamic_count, sizeof(int)));
     }
 
     int dyn_threads = 256;
@@ -267,47 +279,51 @@ static void extractDynamicPointsGPU(
         field_max_x,
         field_min_y,
         field_max_y,
+        tracking_sphere ? make_float4(tracking_sphere[0],tracking_sphere[1],tracking_sphere[2],tracking_sphere[3]) : make_float4(0,0,0,0),
         d_is_dynamic
     );
+
+    checkDynamicCuda(cudaGetLastError());
 
     const Point3D* d_in_pts = reinterpret_cast<const Point3D*>(d_cloud);
 
     // CUB DeviceSelect::Flagged による GPU 内ストリームコンパクション
     size_t required_temp_bytes = 0;
-    cub::DeviceSelect::Flagged(
+    checkDynamicCuda(cub::DeviceSelect::Flagged(
         nullptr, required_temp_bytes,
         d_in_pts, d_is_dynamic, d_compact_dynamic_pts, d_compact_dynamic_count,
         num_points, stream
-    );
+    ));
 
     if (required_temp_bytes > g_compact_temp_bytes) {
         if (d_compact_temp_storage) cudaFree(d_compact_temp_storage);
         g_compact_temp_bytes = required_temp_bytes * 2;
-        cudaMalloc(&d_compact_temp_storage, g_compact_temp_bytes);
+        checkDynamicCuda(cudaMalloc(&d_compact_temp_storage, g_compact_temp_bytes));
     }
 
-    cub::DeviceSelect::Flagged(
+    checkDynamicCuda(cub::DeviceSelect::Flagged(
         d_compact_temp_storage, g_compact_temp_bytes,
         d_in_pts, d_is_dynamic, d_compact_dynamic_pts, d_compact_dynamic_count,
         num_points, stream
-    );
+    ));
 
     int h_selected_count = 0;
-    cudaMemcpyAsync(
+    checkDynamicCuda(cudaMemcpyAsync(
         &h_selected_count, d_compact_dynamic_count, sizeof(int), cudaMemcpyDeviceToHost, stream
-    );
-    cudaStreamSynchronize(stream);
+    ));
+    checkDynamicCuda(cudaStreamSynchronize(stream));
 
-    if (h_selected_count > 0 && h_selected_count <= num_points) {
+    if (h_selected_count < 0 || h_selected_count > num_points) throw std::runtime_error("Invalid compacted point count");
+    if (h_selected_count > 0) {
         out_dynamic_pts.resize(h_selected_count * 3);
-        cudaMemcpyAsync(
+        checkDynamicCuda(cudaMemcpyAsync(
             out_dynamic_pts.data(),
             d_compact_dynamic_pts,
             h_selected_count * sizeof(Point3D),
             cudaMemcpyDeviceToHost,
             stream
-        );
-        cudaStreamSynchronize(stream);
+        ));
+        checkDynamicCuda(cudaStreamSynchronize(stream));
     }
 }
 
@@ -461,11 +477,6 @@ bool launchESDFMatcher(
         cudaMalloc(&d_temp_storage, temp_storage_bytes);
     }
 
-    if (num_points > g_max_dynamic_pts) {
-        if (d_is_dynamic) cudaFree(d_is_dynamic);
-        g_max_dynamic_pts = num_points * 2;
-        cudaMalloc(&d_is_dynamic, g_max_dynamic_pts * sizeof(uint8_t));
-    }
 
     if (!d_inlier_count) {
         cudaMalloc(&d_inlier_count, sizeof(int));
@@ -579,7 +590,8 @@ bool launchESDFDynamicFilterOnly(
     float field_max_x,
     float field_min_y,
     float field_max_y,
-    std::vector<float>& out_dynamic_pts
+    std::vector<float>& out_dynamic_pts,
+    const float* tracking_sphere
 )
 {
     if (num_points <= 0 || !g_esdf_loaded) return false;
@@ -593,7 +605,8 @@ bool launchESDFDynamicFilterOnly(
         field_max_x,
         field_min_y,
         field_max_y,
-        out_dynamic_pts
+        out_dynamic_pts,
+        tracking_sphere
     );
     return true;
 }

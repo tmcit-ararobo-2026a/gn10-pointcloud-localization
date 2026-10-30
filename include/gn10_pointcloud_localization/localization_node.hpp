@@ -12,6 +12,9 @@
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <memory>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <deque>
+#include <chrono>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -49,7 +52,9 @@ private:
     void fusedPriorCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
 
     // パイプライン分離ヘルパー関数
-    void processRealSenseDynamic(const rclcpp::Time& stamp, const PoseCandidate& confirmed_pose);
+    void processRealSenseDynamic();
+    void publishRealSenseStatus(const std::string& status);
+    std::string last_realsense_status_;
     bool getTransformAsArray(
         const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
     );
@@ -143,10 +148,22 @@ private:
     bool use_realsense_{false};
     std::string topic_realsense_cloud_{"/realsense/cropped_cloud"};
     std::string topic_realsense_dynamic_{"/realsense/dynamic_cloud"};
-    std::mutex realsense_mutex_;
-    std::vector<float> latest_realsense_points_;
-    rclcpp::Time latest_realsense_stamp_;
-    bool has_new_realsense_{false};
+    struct PendingRealSense {
+        sensor_msgs::msg::PointCloud2::SharedPtr cloud;
+        std::chrono::steady_clock::time_point received;
+    };
+    std::deque<PendingRealSense> realsense_queue_;
+    bool realsense_tracking_protection_{false};
+    std::deque<visualization_msgs::msg::Marker::SharedPtr> realsense_predictions_;
+    rclcpp::Subscription<visualization_msgs::msg::Marker>::SharedPtr sub_realsense_prediction_;
+    double realsense_wait_sec_{0.15}, realsense_max_age_sec_{0.25};
+    double realsense_pose_max_age_sec_{0.25}, realsense_poll_sec_{0.005};
+    double realsense_dynamic_dist_thresh_{-1.0};
+    double realsense_prediction_tolerance_sec_{0.05};
+    int realsense_queue_size_{8}, realsense_min_points_{1};
+    int64_t realsense_last_stamp_ns_{-1};
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_realsense_status_;
+    rclcpp::TimerBase::SharedPtr realsense_timer_;
 
     // ROS 2 Interfaces
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
