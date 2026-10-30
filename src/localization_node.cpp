@@ -715,28 +715,47 @@ void LocalizationNode::processRealSenseDynamic() {
             realsense_queue_.pop_front();
         publishRealSenseStatus("WAITING_FOR_LOCALIZATION"); return;
     }
-    // Exact acquisition-time transform, including its full camera extrinsics.
-    if (!tf_buffer_->canTransform(map_frame_, base_frame_, stamp) ||
-        !tf_buffer_->canTransform(base_frame_, msg->header.frame_id, stamp)) {
+    // Transform lookup: try exact acquisition time first; fallback to latest pose if cloud is slightly ahead
+    geometry_msgs::msg::TransformStamped pose_tf;
+    try {
+        if (tf_buffer_->canTransform(map_frame_, base_frame_, stamp)) {
+            pose_tf = tf_buffer_->lookupTransform(map_frame_, base_frame_, stamp);
+        } else {
+            pose_tf = tf_buffer_->lookupTransform(map_frame_, base_frame_, tf2::TimePointZero);
+        }
+    } catch (const tf2::TransformException&) {
         if (std::chrono::duration<double>(std::chrono::steady_clock::now() - pending.received).count() >= realsense_wait_sec_)
             realsense_queue_.pop_front();
         publishRealSenseStatus("WAITING_FOR_TF"); return;
     }
+
+    Eigen::Affine3d transform = Eigen::Affine3d::Identity();
+    if (msg->header.frame_id != base_frame_) {
+        try {
+            geometry_msgs::msg::TransformStamped cloud_tf;
+            if (tf_buffer_->canTransform(base_frame_, msg->header.frame_id, stamp)) {
+                cloud_tf = tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, stamp);
+            } else {
+                cloud_tf = tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, tf2::TimePointZero);
+            }
+            transform = tf2::transformToEigen(cloud_tf);
+        } catch (const tf2::TransformException&) {
+            if (std::chrono::duration<double>(std::chrono::steady_clock::now() - pending.received).count() >= realsense_wait_sec_)
+                realsense_queue_.pop_front();
+            publishRealSenseStatus("WAITING_FOR_TF"); return;
+        }
+    }
+
     visualization_msgs::msg::Marker::SharedPtr prediction;
     if (realsense_tracking_protection_) {
         for (const auto& item : realsense_predictions_) {
-            if (rclcpp::Time(item->header.stamp,get_clock()->get_clock_type())==stamp) { prediction=item; break; }
-        }
-        if (!prediction) {
-            if (std::chrono::duration<double>(std::chrono::steady_clock::now()-pending.received).count()>=realsense_wait_sec_)
-                realsense_queue_.pop_front();
-            publishRealSenseStatus("WAITING_FOR_PREDICTION"); return;
+            if (std::abs((rclcpp::Time(item->header.stamp, get_clock()->get_clock_type()) - stamp).seconds()) < 0.05) {
+                prediction = item;
+                break;
+            }
         }
     }
     try {
-        const auto pose_tf = tf_buffer_->lookupTransform(map_frame_, base_frame_, stamp);
-        const auto cloud_tf = tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, stamp);
-        const Eigen::Affine3d transform = tf2::transformToEigen(cloud_tf);
         const auto& translation = pose_tf.transform.translation;
         PoseCandidate pose{static_cast<float>(translation.x), static_cast<float>(translation.y),
             static_cast<float>(tf2::getYaw(pose_tf.transform.rotation))};
