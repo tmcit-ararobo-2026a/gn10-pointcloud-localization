@@ -235,36 +235,15 @@ Shared settings are configured in [`config/common_params.yaml`](config/common_pa
 ### RealSense Dynamic Extraction Settings
 
 | Parameter | Default | Purpose |
-| --- | :---: | --- |
-| `realsense.enable` | `true` | Enable ESDF dynamic obstacle extraction for RealSense point cloud (real robot default). |
-| `realsense.input_topic` | `/realsense/cropped_cloud` | Input point cloud topic from RealSense (base_link frame compatible). |
+| --- | --- | --- |
+| `realsense.enable` | `false` | Enable ESDF dynamic obstacle extraction for RealSense point cloud. |
+| `realsense.input_topic` | `/realsense/cropped_cloud` | Input point cloud topic from RealSense. |
 | `realsense.output_topic` | `/realsense/dynamic_cloud` | Output topic for extracted dynamic points after ESDF background removal. |
-| `realsense.status_topic` | `/realsense/filter_status` | Status notification topic (`READY`, `WAITING_FOR_TF`, etc.). |
-| `realsense.dynamic_dist_thresh` | `0.08` | Distance threshold [m] for dynamic classification (prevents floor erasure). |
-| `realsense.prediction_tolerance_sec` | `0.05` | Timestamp tolerance [s] between prediction marker and point cloud. |
-| `realsense.tf_wait_sec` | `0.15` | TF acquisition timeout [s] (falls back to latest TF if camera leads LiDAR). |
-| `realsense.tracking_protection` | `true` | Enable protection sphere around tracker prediction markers. |
 
 `start_lakibeam_tf` defaults to false; set it to true only when the rear LiDAR static transform is required.
 
 ---
 
-## 7. Launch Instructions
-
-### Real Robot (Zero-Argument Launch)
-```bash
-source ~/ros2_ws/install/setup.bash
-ros2 launch gn10_pointcloud_localization localization.launch.py
-```
-
-### Unity Simulation Launch
-```bash
-source ~/ros2_ws/install/setup.bash
-ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=true
-```
-
----
-
-## 8. License
+## 7. License
 
 This repository is released under the [Apache 2.0 License](LICENSE).

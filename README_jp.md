@@ -212,38 +212,15 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 ### RealSense 動的抽出の設定
 
 | パラメータ | 既定値 | 用途 |
-| :--- | :---: | :--- |
-| `realsense.enable` | `true` | RealSense 点群を用いた ESDF 動的障害物抽出の有効化（実機デフォルト） |
+| :--- | :--- | :--- |
+| `realsense.enable` | `false` | RealSense 点群を用いた ESDF 動的障害物抽出の有効化 |
 | `realsense.input_topic` | `/realsense/cropped_cloud` | RealSense の入力点群トピック（base_link 変換対応） |
 | `realsense.output_topic` | `/realsense/dynamic_cloud` | ESDF 背景除去後の動的点群出力トピック |
-| `realsense.status_topic` | `/realsense/filter_status` | フィルター状態通知（`READY`、`WAITING_FOR_TF`、`WAITING_FOR_LOCALIZATION` 等） |
-| `realsense.dynamic_dist_thresh` | `0.08` | 動的判定距離閾値 [m]（床面近傍での雑巾消失防止） |
-| `realsense.prediction_tolerance_sec` | `0.05` | 予測マーカーと点群の時刻照合許容差 [s] |
-| `realsense.tf_wait_sec` | `0.15` | 撮影時刻の TF 待機タイムアウト [s]（先行時は最新TFへ自動フォールバック） |
-| `realsense.tracking_protection` | `true` | 追跡候補球による近傍点保護の有効化 |
 
 `start_lakibeam_tf`は既定でfalseです。後方LiDARの静的TFが必要な場合にtrueを指定します。
 
 ---
 
-## 7. 実機・シミュレーション起動手順
-
-### 実機起動（ゼロ引数起動）
-```bash
-source ~/ros2_ws/install/setup.bash
-ros2 launch gn10_pointcloud_localization localization.launch.py
-```
-- LiDAR による自己位置推定（TF `map -> base_link`）および RealSense 動的背景除去フィルタが完全自動で起動します。
-- 雑巾トラッカー（`realsense_dust_cloth`）からのクロップ点群を受信し次第、即座に ESDF 背景除去を実行して `/realsense/dynamic_cloud` を発行します。
-
-### Unity シミュレーション起動
-```bash
-source ~/ros2_ws/install/setup.bash
-ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=true
-```
-
----
-
-## 8. ライセンス
+## 7. ライセンス
 
 本リポジトリは [Apache 2.0 ライセンス](./LICENSE) のもとで公開されています。
