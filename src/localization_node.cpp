@@ -1188,7 +1188,6 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
              is_lost_}
         );
     }
-
 }
 
 void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)

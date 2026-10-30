@@ -165,7 +165,6 @@ private:
     int obstacle_count_{0};
     bool use_esdf_{false};
     ProfileMetrics last_metrics_{};
-
     bool matchObstacleCloud(
         int h_obstacle_count,
         const MatchingParams& match_params,
