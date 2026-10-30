@@ -32,6 +32,10 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 
+import re
+import shutil
+
+
 class SystemGPUMonitor:
     def __init__(self, target_process_name="gn10_pointcloud_localization_node", sample_interval_s=0.05):
         self.target_name = target_process_name
@@ -40,6 +44,19 @@ class SystemGPUMonitor:
         self.thread = None
         self.records = []
         self.target_pid = None
+
+        # Check GPU monitoring backend
+        self.backend = "none"
+        if shutil.which("nvidia-smi"):
+            try:
+                subprocess.check_output(["nvidia-smi", "-L"], stderr=subprocess.DEVNULL, timeout=1.0)
+                self.backend = "nvidia-smi"
+            except Exception:
+                pass
+
+        if self.backend == "none" and (shutil.which("tegrastats") or os.path.exists("/usr/bin/tegrastats")):
+            self.backend = "tegrastats"
+            self.tegrastats_bin = shutil.which("tegrastats") or "/usr/bin/tegrastats"
 
     def find_target_pid(self):
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
@@ -53,6 +70,19 @@ class SystemGPUMonitor:
         return None
 
     def query_gpu_metrics(self):
+        if self.backend == "nvidia-smi":
+            return self._query_nvidia_smi()
+        elif self.backend == "tegrastats":
+            return self._query_tegrastats()
+        return {
+            'gpu_util_pct': np.nan,
+            'gpu_mem_used_mb': np.nan,
+            'gpu_mem_total_mb': np.nan,
+            'gpu_power_w': np.nan,
+            'gpu_temp_c': np.nan,
+        }
+
+    def _query_nvidia_smi(self):
         try:
             cmd = [
                 'nvidia-smi',
@@ -75,6 +105,57 @@ class SystemGPUMonitor:
                 'gpu_mem_total_mb': parts[2] if len(parts) > 2 else np.nan,
                 'gpu_power_w': parts[3] if len(parts) > 3 else np.nan,
                 'gpu_temp_c': parts[4] if len(parts) > 4 else np.nan,
+            }
+        except Exception:
+            return {
+                'gpu_util_pct': np.nan,
+                'gpu_mem_used_mb': np.nan,
+                'gpu_mem_total_mb': np.nan,
+                'gpu_power_w': np.nan,
+                'gpu_temp_c': np.nan,
+            }
+
+    def _query_tegrastats(self):
+        try:
+            # Query one line of tegrastats
+            cmd = [self.tegrastats_bin, "--interval", "100"]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            out, _ = proc.communicate(timeout=0.4)
+            line = out.strip().splitlines()[0] if out else ""
+
+            gpu_util = np.nan
+            mem_used = np.nan
+            mem_total = np.nan
+            power_w = np.nan
+            temp_c = np.nan
+
+            # Parse GR3D_FREQ (GPU compute util %)
+            m_gpu = re.search(r'GR3D_FREQ\s+(\d+)%', line)
+            if m_gpu:
+                gpu_util = float(m_gpu.group(1))
+
+            # Parse RAM (unified memory on Jetson)
+            m_ram = re.search(r'RAM\s+(\d+)/(\d+)MB', line)
+            if m_ram:
+                mem_used = float(m_ram.group(1))
+                mem_total = float(m_ram.group(2))
+
+            # Parse power (VDD_IN or POM_5V_IN in mW)
+            m_pow = re.search(r'(?:VDD_IN|POM_5V_IN)\s+(\d+)mW', line)
+            if m_pow:
+                power_w = float(m_pow.group(1)) / 1000.0
+
+            # Parse GPU temperature (GPU@XXC)
+            m_temp = re.search(r'GPU@([\d\.]+)C', line)
+            if m_temp:
+                temp_c = float(m_temp.group(1))
+
+            return {
+                'gpu_util_pct': gpu_util,
+                'gpu_mem_used_mb': mem_used,
+                'gpu_mem_total_mb': mem_total,
+                'gpu_power_w': power_w,
+                'gpu_temp_c': temp_c,
             }
         except Exception:
             return {
@@ -168,32 +249,14 @@ def run_benchmark_trial(bag_path, trial_duration_s=25.0, output_dir=Path("./benc
     launch_cmd = [
         "ros2", "launch", "gn10_pointcloud_localization", "localization.launch.py",
         "use_sim_time:=true",
+        "benchmark:=true",
+        f"benchmark_csv:={pipeline_csv.resolve()}"
     ]
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
 
-    # launch に渡すパラメータファイルに benchmark 設定が反映されるようオーバーライド引数またはパラメータ直接指定
-    node_cmd = [
-        "ros2", "run", "gn10_pointcloud_localization", "gn10_pointcloud_localization_node",
-        "--ros-args",
-        "--params-file", str(Path("/home/gn10/ros2_ws/install/gn10_pointcloud_localization/share/gn10_pointcloud_localization/config/common_params.yaml").resolve()),
-        "--params-file", str(Path("/home/gn10/ros2_ws/install/gn10_pointcloud_localization/share/gn10_pointcloud_localization/config/localization_params.yaml").resolve()),
-        "-p", "use_sim_time:=true",
-        "-p", "benchmark.enable:=true",
-        "-p", f"benchmark.csv_output_path:={pipeline_csv.resolve()}"
-    ]
-
-    tf_cmd = [
-        "ros2", "run", "tf2_ros", "static_transform_publisher",
-        "--x", "0.24", "--y", "-0.25", "--z", "1.09",
-        "--yaw", "0.0", "--pitch", "-0.273", "--roll", "3.13",
-        "--frame-id", "base_link", "--child-frame-id", "livox_frame"
-    ]
-
-    tf_proc = subprocess.Popen(tf_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    node_proc = subprocess.Popen(node_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-
-    time.sleep(2.5)  # ESDF マップ初期化待機
+    launch_proc = subprocess.Popen(launch_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(3.0)  # ESDF マップ初期化待機
 
     # 4. rosbag 再生
     bag_cmd = [
@@ -207,17 +270,12 @@ def run_benchmark_trial(bag_path, trial_duration_s=25.0, output_dir=Path("./benc
     print("[*] Benchmark run completed. Shutting down nodes...")
     monitor.stop()
 
-    node_proc.send_signal(signal.SIGINT)
+    launch_proc.send_signal(signal.SIGINT)
     try:
-        node_proc.wait(timeout=3.0)
+        launch_proc.wait(timeout=3.0)
     except subprocess.TimeoutExpired:
-        node_proc.kill()
-
-    tf_proc.send_signal(signal.SIGINT)
-    try:
-        tf_proc.wait(timeout=1.0)
-    except subprocess.TimeoutExpired:
-        tf_proc.kill()
+        launch_proc.kill()
+    subprocess.run(["pkill", "-9", "-f", "gn10_pointcloud_localization_node"], stderr=subprocess.DEVNULL)
 
     # 6. リソース CSV の保存
     df_res = monitor.to_dataframe()
@@ -238,12 +296,24 @@ def run_benchmark_trial(bag_path, trial_duration_s=25.0, output_dir=Path("./benc
 def compute_statistics(series, name=""):
     s = series.dropna()
     if len(s) == 0:
-        return {}
+        return {
+            'name': name,
+            'count': 0,
+            'mean': np.nan,
+            'std': np.nan,
+            'min': np.nan,
+            'q25': np.nan,
+            'median': np.nan,
+            'q75': np.nan,
+            'p95': np.nan,
+            'p99': np.nan,
+            'max': np.nan
+        }
     return {
         'name': name,
         'count': int(len(s)),
         'mean': float(s.mean()),
-        'std': float(s.std()),
+        'std': float(s.std()) if len(s) > 1 else 0.0,
         'min': float(s.min()),
         'q25': float(s.quantile(0.25)),
         'median': float(s.median()),
@@ -429,16 +499,21 @@ def generate_markdown_and_latex_reports(df_pipe, df_res, output_dir=Path("./benc
     header_line = "| " + " | ".join(h.ljust(w) for h, w in zip(headers, col_w)) + " |"
     sep_line = "|-" + "-|-".join("-" * w for w in col_w) + "-|"
     rows = [header_line, sep_line]
+    def fmt(v):
+        if not np.isfinite(v):
+            return "N/A"
+        return f"{v:.2f}"
+
     for m in metrics_list:
         row = [
             m['name'].ljust(col_w[0]),
-            f"{m['mean']:.2f}".rjust(col_w[1]),
-            f"{m['std']:.2f}".rjust(col_w[2]),
-            f"{m['min']:.2f}".rjust(col_w[3]),
-            f"{m['median']:.2f}".rjust(col_w[4]),
-            f"{m['p95']:.2f}".rjust(col_w[5]),
-            f"{m['p99']:.2f}".rjust(col_w[6]),
-            f"{m['max']:.2f}".rjust(col_w[7]),
+            fmt(m['mean']).rjust(col_w[1]),
+            fmt(m['std']).rjust(col_w[2]),
+            fmt(m['min']).rjust(col_w[3]),
+            fmt(m['median']).rjust(col_w[4]),
+            fmt(m['p95']).rjust(col_w[5]),
+            fmt(m['p99']).rjust(col_w[6]),
+            fmt(m['max']).rjust(col_w[7]),
         ]
         rows.append("| " + " | ".join(row) + " |")
     md_table = "\n".join(rows)
@@ -460,7 +535,7 @@ def generate_markdown_and_latex_reports(df_pipe, df_res, output_dir=Path("./benc
         f.write("\\begin{tabular}{lrrrrrrrr}\n\\hline\n")
         f.write("Metric & Mean & Std & Min & Median & p95 & p99 & Max \\\\\n\\hline\n")
         for m in metrics_list:
-            f.write(f"{m['name']} & {m['mean']:.2f} & {m['std']:.2f} & {m['min']:.2f} & {m['median']:.2f} & {m['p95']:.2f} & {m['p99']:.2f} & {m['max']:.2f} \\\\\n")
+            f.write(f"{m['name']} & {fmt(m['mean'])} & {fmt(m['std'])} & {fmt(m['min'])} & {fmt(m['median'])} & {fmt(m['p95'])} & {fmt(m['p99'])} & {fmt(m['max'])} \\\\\n")
         f.write("\\hline\n\\end{tabular}\n\\end{table*}\n")
     print(f"[+] Saved LaTeX summary table: {latex_path}")
 

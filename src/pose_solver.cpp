@@ -430,7 +430,6 @@ bool PoseSolver::matchObstacleCloud(
     auto t_match_end = std::chrono::high_resolution_clock::now();
     last_metrics_.time_matching_ms =
         std::chrono::duration<double, std::milli>(t_match_end - t_match_start).count();
-
     size_t inlier_bytes = 0;
     if (out_inlier_count != nullptr) {
         inlier_bytes = sizeof(int) + sizeof(float);
