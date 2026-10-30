@@ -53,6 +53,9 @@ private:
     bool getTransformAsArray(
         const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
     );
+    std::vector<TimedScanPoint> extractRawTimedPoints(
+        const sensor_msgs::msg::PointCloud2& msg, int64_t& end_ns
+    );
     std::vector<TimedScanPoint> extractTimedBasePoints(
         const sensor_msgs::msg::PointCloud2& msg, const float transform[12], int64_t& end_ns
     );

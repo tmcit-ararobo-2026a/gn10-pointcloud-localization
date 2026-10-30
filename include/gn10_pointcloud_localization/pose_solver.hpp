@@ -9,6 +9,7 @@
 
 #include "gn10_pointcloud_localization/cuda/field_objects.cuh"
 #include "gn10_pointcloud_localization/cuda/esdf_matcher.cuh"
+#include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
 #include "gn10_pointcloud_localization/esdf_map.hpp"
 
 struct GroundFilterParams {
@@ -70,6 +71,24 @@ public:
         const std::vector<float>* extra_base_link_points = nullptr
     );
 
+    // Deskew 統合通常追従用（GPU Deskew + GroundFilter + SDF Matcher + Dynamic Point 抽出）
+    bool processPointCloud(
+        const std::vector<TimedScanPoint>& timed_points,
+        const float h_transform[12],
+        const DeskewParams& deskew_params,
+        const std::vector<IMUSample>& imu_samples,
+        int stride,
+        const GroundFilterParams& filter_params,
+        const MatchingParams& match_params,
+        const PoseCandidate& search_base_pose,
+        std::vector<float>& out_dynamic_pts,
+        PoseCandidate& out_best_pose,
+        float& out_best_cost,
+        int* out_inlier_count                            = nullptr,
+        float* out_inlier_cost                           = nullptr,
+        const std::vector<float>* extra_base_link_points = nullptr
+    );
+
     // 確定姿勢を用いた動的点群の抽出 (Pose探索をスキップ)
     bool extractDynamicPointsOnly(
         const std::vector<float>& h_raw_cloud,
@@ -86,6 +105,16 @@ public:
     int prepareObstacleCloud(
         const std::vector<float>& h_raw_cloud,
         const float h_transform[12],
+        const GroundFilterParams& filter_params
+    );
+
+    // 点群の前処理（GPU Deskew + GroundFilter）を実行し GPU 上の d_obstacle_ に保持する
+    int prepareObstacleCloud(
+        const std::vector<TimedScanPoint>& timed_points,
+        const float h_transform[12],
+        const DeskewParams& deskew_params,
+        const std::vector<IMUSample>& imu_samples,
+        int stride,
         const GroundFilterParams& filter_params
     );
 
@@ -121,6 +150,8 @@ private:
 
     // Device Memory
     float* d_in_{nullptr};
+    TimedScanPoint* d_timed_in_{nullptr};
+    IMUSample* d_imu_samples_{nullptr};
     float* d_ground_{nullptr};
     float* d_obstacle_{nullptr};
     float* d_transform_{nullptr};
@@ -133,4 +164,15 @@ private:
     int obstacle_count_{0};
     bool use_esdf_{false};
     ProfileMetrics last_metrics_{};
+
+    bool matchObstacleCloud(
+        int h_obstacle_count,
+        const MatchingParams& match_params,
+        const PoseCandidate& search_base_pose,
+        std::vector<float>& out_dynamic_pts,
+        PoseCandidate& out_best_pose,
+        float& out_best_cost,
+        int* out_inlier_count,
+        float* out_inlier_cost
+    );
 };

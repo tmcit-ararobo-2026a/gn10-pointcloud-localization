@@ -744,8 +744,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         return;
     }
 
-    int64_t reference_ns;
-    auto timed_points = extractTimedBasePoints(*msg, h_transform, reference_ns);
+    int64_t reference_ns = 0;
+    auto timed_points = extractRawTimedPoints(*msg, reference_ns);
     if (timed_points.empty()) {
         publishLocalizationSuccess(false);
         return;
@@ -763,9 +763,13 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         publishLocalizationSuccess(false);
         return;
     }
-    // Points are already in base_link, at their individual acquisition times.
-    std::vector<float> h_raw_cloud;
-    const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+
+    const auto& accumulated_points = scan_accumulator_.points();
+    if (accumulated_points.size() < 150) {
+        publishLocalizationSuccess(false);
+        return;
+    }
+
     std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
     PoseCandidate best_pose;
     float best_cost = std::numeric_limits<float>::infinity();
@@ -815,16 +819,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     }
 
-    bool fully_deskewed = false;
-    h_raw_cloud         = scan_accumulator_.cloud(
-        reference_ns,
-        yaw_history_,
-        search_base_pose.yaw,
-        has_velocity_ ? velocity_x_ : 0.0,
-        has_velocity_ ? velocity_y_ : 0.0,
-        size_t(this->get_parameter("filter_params.max_points").as_int()),
-        &fully_deskewed
-    );
+    bool fully_deskewed = scan_accumulator_.is_fully_covered(reference_ns, yaw_history_);
     if (!fully_deskewed) {
         RCLCPP_WARN_THROTTLE(
             this->get_logger(),
@@ -833,10 +828,33 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             "IMU does not cover the accumulation window; using only the newest scan"
         );
     }
-    if (h_raw_cloud.size() < 150) {
-        publishLocalizationSuccess(false);
-        return;
+
+    // GPU Deskew 用パラメータの構築
+    DeskewParams deskew_params;
+    deskew_params.enabled = true;
+    deskew_params.reference_ns = reference_ns;
+    if (fully_deskewed) {
+        deskew_params.min_stamp_ns = 0;
+    } else {
+        deskew_params.min_stamp_ns = scan_accumulator_.newest_start_stamp();
     }
+    deskew_params.ref_yaw = search_base_pose.yaw;
+    if (has_velocity_) {
+        deskew_params.vx_world = velocity_x_;
+        deskew_params.vy_world = velocity_y_;
+    } else {
+        deskew_params.vx_world = 0.0f;
+        deskew_params.vy_world = 0.0f;
+    }
+    double ref_angle = 0.0;
+    yaw_history_.get_angle_at(reference_ns, ref_angle);
+    deskew_params.ref_imu_angle = static_cast<float>(ref_angle);
+
+    std::vector<IMUSample> imu_samples;
+    yaw_history_.get_imu_samples(imu_samples);
+
+    size_t max_points_param = static_cast<size_t>(this->get_parameter("filter_params.max_points").as_int());
+    int stride = static_cast<int>(std::max(size_t(1), (accumulated_points.size() + max_points_param - 1) / max_points_param));
 
     auto t_deskew_end = std::chrono::high_resolution_clock::now();
     double time_deskew_ms =
@@ -845,8 +863,6 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     MatchingParams active_match_params = match_params_;
     const float abs_omega              = std::abs(current_omega_z);
     if (abs_omega > 0.5f) {
-        // 高速旋回中（>0.5 rad/s: 約30deg/s）は角速度に応じて search_range_yaw を動的拡大（最大
-        // 0.35 rad: 約 20度）
         active_match_params.range_yaw =
             std::min(0.35f, std::max(match_params_.range_yaw, abs_omega * 0.15f));
     }
@@ -854,11 +870,19 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     int inlier_count  = -1;
     float inlier_cost = std::numeric_limits<float>::infinity();
 
+    const std::vector<float>* extra_pts_ptr = nullptr;
+    if (!extra_2d_points.empty()) {
+        extra_pts_ptr = &extra_2d_points;
+    }
+
     // A recent fused pose can reacquire locally even after the map matcher was lost.
     if (is_lost_ && has_fresh_prior) {
         matched = solver_->processPointCloud(
-            h_raw_cloud,
-            identity,
+            accumulated_points,
+            h_transform,
+            deskew_params,
+            imu_samples,
+            stride,
             filter_params_,
             active_match_params,
             search_base_pose,
@@ -867,7 +891,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             best_cost,
             &inlier_count,
             &inlier_cost,
-            extra_2d_points.empty() ? nullptr : &extra_2d_points
+            extra_pts_ptr
         );
         const bool accepted = matched && std::isfinite(best_cost) &&
                               ((best_cost < match_params_.cost_threshold) ||
@@ -889,8 +913,11 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
         best_pose = global_searcher_->search(
             *solver_,
-            h_raw_cloud,
-            identity,
+            accumulated_points,
+            h_transform,
+            deskew_params,
+            imu_samples,
+            stride,
             filter_params_,
             match_params_,
             current_prior_yaw,
@@ -912,8 +939,11 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     } else if (!matched) {
         matched = solver_->processPointCloud(
-            h_raw_cloud,
-            identity,
+            accumulated_points,
+            h_transform,
+            deskew_params,
+            imu_samples,
+            stride,
             filter_params_,
             active_match_params,
             search_base_pose,
@@ -922,7 +952,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             best_cost,
             &inlier_count,
             &inlier_cost,
-            extra_2d_points.empty() ? nullptr : &extra_2d_points
+            extra_pts_ptr
         );
 
         // 動的障害物に対するロバスト合否判定:
@@ -1010,7 +1040,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         const auto& metrics = solver_->lastProfileMetrics();
         profiler_.recordFrame(
             {reference_stamp.seconds(),
-             h_raw_cloud.size() / 3,
+             accumulated_points.size(),
              static_cast<size_t>(solver_->obstacleCount()),
              dynamic_pts.size() / 3,
              time_deskew_ms,
@@ -1110,6 +1140,111 @@ bool LocalizationNode::getTransformAsArray(
         RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
         return false;
     }
+}
+
+std::vector<TimedScanPoint> LocalizationNode::extractRawTimedPoints(
+    const sensor_msgs::msg::PointCloud2& msg, int64_t& end_ns
+)
+{
+    const int64_t header_ns                = rclcpp::Time(msg.header.stamp).nanoseconds();
+    end_ns                                 = header_ns;
+    const sensor_msgs::msg::PointField *xf = nullptr;
+    const sensor_msgs::msg::PointField *yf = nullptr;
+    const sensor_msgs::msg::PointField *zf = nullptr;
+    const sensor_msgs::msg::PointField *tf = nullptr;
+    for (const auto& field : msg.fields) {
+        if (field.name == "x") xf = &field;
+        if (field.name == "y") yf = &field;
+        if (field.name == "z") zf = &field;
+        if (field.name == timestamp_field_) tf = &field;
+    }
+    using Field = sensor_msgs::msg::PointField;
+    if (!xf || !yf || !zf || xf->datatype != Field::FLOAT32 || yf->datatype != Field::FLOAT32 ||
+        zf->datatype != Field::FLOAT32 || xf->offset + 4 > msg.point_step ||
+        yf->offset + 4 > msg.point_step || zf->offset + 4 > msg.point_step) {
+        return {};
+    }
+
+    size_t time_size = 0;
+    if (tf != nullptr) {
+        if (tf->datatype == Field::FLOAT64) {
+            time_size = 8;
+        } else if (tf->datatype == Field::FLOAT32 || tf->datatype == Field::UINT32) {
+            time_size = 4;
+        }
+    }
+    bool has_time = false;
+    if (tf != nullptr && time_size > 0 && tf->offset + time_size <= msg.point_step) {
+        has_time = true;
+    }
+
+    if (!has_time) {
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            10000,
+            "No usable per-point '%s' timestamp; using cloud stamps for accumulation",
+            timestamp_field_.c_str()
+        );
+    }
+    const auto read = [&](const uint8_t* source, auto& value) {
+        std::memcpy(&value, source, sizeof(value));
+        if (msg.is_bigendian) {
+            auto* bytes = reinterpret_cast<uint8_t*>(&value);
+            std::reverse(bytes, bytes + sizeof(value));
+        }
+    };
+    std::vector<TimedScanPoint> result;
+    result.reserve(size_t(msg.width) * msg.height);
+    for (size_t row = 0; row < msg.height; ++row) {
+        for (size_t col = 0; col < msg.width; ++col) {
+            const size_t offset = row * msg.row_step + col * msg.point_step;
+            if (offset + msg.point_step > msg.data.size()) {
+                return {};
+            }
+            const auto* p = msg.data.data() + offset;
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+            read(p + xf->offset, x);
+            read(p + yf->offset, y);
+            read(p + zf->offset, z);
+            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+                continue;
+            }
+            int64_t ns = header_ns;
+            if (has_time) {
+                double timestamp = 0.0;
+                if (tf->datatype == Field::FLOAT64) {
+                    read(p + tf->offset, timestamp);
+                } else if (tf->datatype == Field::FLOAT32) {
+                    float value = 0.0f;
+                    read(p + tf->offset, value);
+                    timestamp = value;
+                } else {
+                    uint32_t value = 0;
+                    read(p + tf->offset, value);
+                    timestamp = value;
+                }
+                long double rel_base = 0.0L;
+                if (timestamp_relative_) {
+                    rel_base = header_ns;
+                }
+                const long double value_ns =
+                    static_cast<long double>(timestamp) * timestamp_scale_ * 1e9L + rel_base;
+                if (std::isfinite(timestamp) && value_ns >= header_ns - 5000000 &&
+                    value_ns <= header_ns + 500000000) {
+                    ns = int64_t(std::llround(value_ns));
+                }
+            }
+            if (ns > end_ns) {
+                end_ns = ns;
+            }
+            // センサ座標系の生点群を格納（事前加工ゼロ）
+            result.push_back({x, y, z, ns});
+        }
+    }
+    return result;
 }
 
 std::vector<TimedScanPoint> LocalizationNode::extractTimedBasePoints(
