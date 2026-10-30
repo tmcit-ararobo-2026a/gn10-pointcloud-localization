@@ -14,9 +14,7 @@ def _create_localization_node(context):
     common_param_file = os.path.join(pkg_dir, 'config', 'common_params.yaml')
 
     use_sim_time_str = LaunchConfiguration('use_sim_time').perform(context).lower()
-    use_sim_time = use_sim_time_str == 'true'
-    realsense_str = LaunchConfiguration('realsense').perform(context).lower()
-    enable_realsense = realsense_str == 'true'
+    use_sim_time = use_sim_time_str in ('true', '1')
 
     params_file = LaunchConfiguration('params_file').perform(context)
     default_param_file = os.path.join(pkg_dir, 'config', 'localization_params.yaml')
@@ -29,8 +27,60 @@ def _create_localization_node(context):
             params_file = candidate
 
     overrides = {'use_sim_time': use_sim_time}
-    if enable_realsense:
-        overrides['realsense.enable'] = True
+
+    # 1. Map file & source type overrides
+    map_arg = LaunchConfiguration('map').perform(context).strip()
+    map_type_arg = LaunchConfiguration('map_type').perform(context).strip().lower()
+
+    if map_arg:
+        if not os.path.isabs(map_arg) and not os.path.exists(map_arg):
+            candidate = os.path.join(pkg_dir, 'map', map_arg)
+            if os.path.exists(candidate):
+                map_arg = candidate
+        overrides['map_file_path'] = map_arg
+        if not map_type_arg:
+            ext = os.path.splitext(map_arg)[1].lower().lstrip('.')
+            if ext in ('pcd', 'json', 'esdf'):
+                map_type_arg = ext
+
+    if map_type_arg:
+        overrides['map_source_type'] = map_type_arg
+
+    # 2. Matching parameters overrides
+    def _override_float(arg_name, param_key):
+        val = LaunchConfiguration(arg_name).perform(context).strip()
+        if val:
+            try:
+                overrides[param_key] = float(val)
+            except ValueError:
+                pass
+
+    def _override_bool(arg_name, param_key):
+        val = LaunchConfiguration(arg_name).perform(context).strip().lower()
+        if val in ('true', '1'):
+            overrides[param_key] = True
+        elif val in ('false', '0'):
+            overrides[param_key] = False
+
+    _override_float('max_dist_thresh', 'matching_params.max_dist_thresh')
+    _override_float('cost_threshold', 'matching_params.cost_threshold')
+    _override_float('dynamic_dist_thresh', 'matching_params.dynamic_dist_thresh')
+
+    # 3. Sensor integrations
+    _override_bool('lidar_2d', 'lidar_2d.enable')
+    _override_bool('realsense', 'realsense.enable')
+
+    # 4. Initial pose overrides
+    _override_bool('initial_local_search', 'initial_pose.use_for_local_search')
+    _override_float('initial_x', 'initial_pose.x')
+    _override_float('initial_y', 'initial_pose.y')
+    _override_float('initial_yaw', 'initial_pose.yaw')
+
+    # 5. Benchmark profiler overrides
+    _override_bool('benchmark', 'benchmark.enable')
+    bench_csv = LaunchConfiguration('benchmark_csv').perform(context).strip()
+    if bench_csv:
+        overrides['benchmark.csv_output_path'] = bench_csv
 
     return [
         Node(
@@ -56,22 +106,99 @@ def generate_launch_description():
         description='Use simulation (Gazebo/Rosbag) clock if true'
     )
 
+    declare_params_file = DeclareLaunchArgument(
+        'params_file',
+        default_value=default_param_file,
+        description='Full path or filename in config/ of profile YAML to overlay on common_params.yaml'
+    )
+
+    # --- Map Arguments ---
+    declare_map = DeclareLaunchArgument(
+        'map',
+        default_value='',
+        description='Path or filename in map/ of map file (json/pcd/esdf). Overrides map_file_path.'
+    )
+
+    declare_map_type = DeclareLaunchArgument(
+        'map_type',
+        default_value='',
+        description='Map source type (json, pcd, esdf). Inferred from file extension if empty.'
+    )
+
+    # --- Matching Threshold Overrides ---
+    declare_max_dist_thresh = DeclareLaunchArgument(
+        'max_dist_thresh',
+        default_value='',
+        description='Override matching_params.max_dist_thresh'
+    )
+
+    declare_cost_threshold = DeclareLaunchArgument(
+        'cost_threshold',
+        default_value='',
+        description='Override matching_params.cost_threshold'
+    )
+
+    declare_dynamic_dist_thresh = DeclareLaunchArgument(
+        'dynamic_dist_thresh',
+        default_value='',
+        description='Override matching_params.dynamic_dist_thresh'
+    )
+
+    # --- Sensor switches ---
     declare_realsense = DeclareLaunchArgument(
         'realsense',
         default_value='true',
         description='Enable RealSense ESDF dynamic background filter (default: true)'
     )
 
-    declare_params_file = DeclareLaunchArgument(
-        'params_file',
-        default_value=default_param_file,
-        description='Full path or filename in config/ of parameter YAML to use'
+    declare_lidar_2d = DeclareLaunchArgument(
+        'lidar_2d',
+        default_value='',
+        description='Enable 2D LiDAR (Lakibeam) integration (true/false)'
     )
 
     declare_lakibeam_tf = DeclareLaunchArgument(
         'start_lakibeam_tf',
         default_value='false',
         description='Publish static TF for rear Lakibeam 1 LiDAR (base_link -> lakibeam_frame)'
+    )
+
+    # --- Initial Pose Overrides ---
+    declare_initial_local_search = DeclareLaunchArgument(
+        'initial_local_search',
+        default_value='',
+        description='Override initial_pose.use_for_local_search (true/false)'
+    )
+
+    declare_initial_x = DeclareLaunchArgument(
+        'initial_x',
+        default_value='',
+        description='Override initial_pose.x'
+    )
+
+    declare_initial_y = DeclareLaunchArgument(
+        'initial_y',
+        default_value='',
+        description='Override initial_pose.y'
+    )
+
+    declare_initial_yaw = DeclareLaunchArgument(
+        'initial_yaw',
+        default_value='',
+        description='Override initial_pose.yaw'
+    )
+
+    # --- Benchmark Profiler Overrides ---
+    declare_benchmark = DeclareLaunchArgument(
+        'benchmark',
+        default_value='',
+        description='Enable benchmark profiler (true/false)'
+    )
+
+    declare_benchmark_csv = DeclareLaunchArgument(
+        'benchmark_csv',
+        default_value='',
+        description='Path to benchmark CSV output file'
     )
 
     localization_node = OpaqueFunction(function=_create_localization_node)
@@ -111,9 +238,21 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_use_sim_time,
-        declare_realsense,
         declare_params_file,
+        declare_map,
+        declare_map_type,
+        declare_max_dist_thresh,
+        declare_cost_threshold,
+        declare_dynamic_dist_thresh,
+        declare_realsense,
+        declare_lidar_2d,
         declare_lakibeam_tf,
+        declare_initial_local_search,
+        declare_initial_x,
+        declare_initial_y,
+        declare_initial_yaw,
+        declare_benchmark,
+        declare_benchmark_csv,
         localization_node,
         livox_tf_node,
         lakibeam_tf_node
