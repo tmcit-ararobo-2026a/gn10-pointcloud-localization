@@ -79,8 +79,8 @@
     realsense:
       enable: true                          # RealSense 動的背景除去フィルタの有効化 (実機デフォルト: true)
       input_topic: "/realsense/cropped_cloud" # トラッカーからのROIクロップ点群
-      output_topic: "/realsense/dynamic_cloud"# 静的マップ差分後の動的点群
-      status_topic: "/realsense/filter_status"# フィルター状態通知 (READY, WAITING_FOR_TF等)
+      output_topic: "/realsense/dynamic_cloud" # 静的マップ差分後の動的点群
+      status_topic: "/realsense/filter_status" # フィルター状態通知 (READY, WAITING_FOR_TF等)
       prediction_topic: "/cloth/filter_prediction" # トラッカーからの予測位置マーカー
       prediction_tolerance_sec: 0.05        # 予測マーカーと点群の時刻照合許容差 [s]
       dynamic_dist_thresh: 0.15             # 動的判定距離閾値 [m] (ESDFボクセル解像度0.05mに対して安定な値)
