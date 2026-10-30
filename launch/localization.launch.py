@@ -4,30 +4,70 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-def generate_launch_description():
-    # パッケージの share ディレクトリを取得
+def _create_localization_node(context):
     pkg_dir = get_package_share_directory('gn10_pointcloud_localization')
-    
-    # デフォルトのパラメータファイルパス
     common_param_file = os.path.join(pkg_dir, 'config', 'common_params.yaml')
+
+    use_sim_time_str = LaunchConfiguration('use_sim_time').perform(context).lower()
+    use_sim_time = use_sim_time_str == 'true'
+    realsense_str = LaunchConfiguration('realsense').perform(context).lower()
+    enable_realsense = realsense_str == 'true'
+
+    params_file = LaunchConfiguration('params_file').perform(context)
+
+    # If user enabled realsense and did not explicitly specify a non-default params_file:
+    default_param_file = os.path.join(pkg_dir, 'config', 'localization_params.yaml')
+    if enable_realsense and params_file in ('', default_param_file, 'localization_params.yaml'):
+        target_name = 'unity_realsense_filter_params.yaml' if use_sim_time else 'realsense_filter_params.yaml'
+        params_file = os.path.join(pkg_dir, 'config', target_name)
+    elif not os.path.isabs(params_file) and not os.path.exists(params_file):
+        candidate = os.path.join(pkg_dir, 'config', params_file)
+        if os.path.exists(candidate):
+            params_file = candidate
+
+    overrides = {'use_sim_time': use_sim_time}
+    if enable_realsense:
+        overrides['realsense.enable'] = True
+
+    return [
+        Node(
+            package='gn10_pointcloud_localization',
+            executable='gn10_pointcloud_localization_node',
+            name='gn10_pointcloud_localization_node',
+            output='screen',
+            parameters=[
+                common_param_file,
+                params_file,
+                overrides
+            ],
+        )
+    ]
+
+def generate_launch_description():
+    pkg_dir = get_package_share_directory('gn10_pointcloud_localization')
     default_param_file = os.path.join(pkg_dir, 'config', 'localization_params.yaml')
 
-    # Launch 引数の定義
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
         description='Use simulation (Gazebo/Rosbag) clock if true'
     )
 
+    declare_realsense = DeclareLaunchArgument(
+        'realsense',
+        default_value='false',
+        description='Enable RealSense ESDF dynamic background filter (selects realsense_filter_params automatically)'
+    )
+
     declare_params_file = DeclareLaunchArgument(
         'params_file',
         default_value=default_param_file,
-        description='Full path to the ROS2 parameters file to use'
+        description='Full path or filename in config/ of parameter YAML to use'
     )
 
     declare_lakibeam_tf = DeclareLaunchArgument(
@@ -36,18 +76,7 @@ def generate_launch_description():
         description='Publish static TF for rear Lakibeam 1 LiDAR (base_link -> lakibeam_frame)'
     )
 
-    # ノードの設定
-    localization_node = Node(
-        package='gn10_pointcloud_localization',
-        executable='gn10_pointcloud_localization_node',
-        name='gn10_pointcloud_localization_node',
-        output='screen',
-        parameters=[
-            common_param_file,
-            LaunchConfiguration('params_file'),
-            {'use_sim_time': LaunchConfiguration('use_sim_time')}
-        ],
-    )
+    localization_node = OpaqueFunction(function=_create_localization_node)
 
     livox_tf_node = Node(
         package='tf2_ros',
@@ -84,6 +113,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_use_sim_time,
+        declare_realsense,
         declare_params_file,
         declare_lakibeam_tf,
         localization_node,
