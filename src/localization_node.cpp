@@ -18,6 +18,8 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace {
+constexpr double DEFAULT_PREDICTION_TOLERANCE_SEC = 0.05;
+
 inline float normalizeAngle(float angle)
 {
     while (angle > static_cast<float>(M_PI)) angle -= static_cast<float>(2.0 * M_PI);
@@ -147,6 +149,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("realsense.tracking_protection", false);
     this->declare_parameter("realsense.prediction_topic", "/cloth/filter_prediction");
     this->declare_parameter("realsense.dynamic_dist_thresh", -1.0);
+    this->declare_parameter("realsense.prediction_tolerance_sec", DEFAULT_PREDICTION_TOLERANCE_SEC);
 
     this->declare_parameter("global_search.range_min_x", -5.25);
     this->declare_parameter("global_search.range_max_x", 5.25);
@@ -229,8 +232,10 @@ void LocalizationNode::declareAndGetParameters()
     realsense_min_points_ = get_parameter("realsense.min_points").as_int();
     realsense_tracking_protection_ = get_parameter("realsense.tracking_protection").as_bool();
     realsense_dynamic_dist_thresh_ = get_parameter("realsense.dynamic_dist_thresh").as_double();
+    realsense_prediction_tolerance_sec_ = get_parameter("realsense.prediction_tolerance_sec").as_double();
     for (double value : {realsense_wait_sec_, realsense_max_age_sec_,
-                         realsense_pose_max_age_sec_, realsense_poll_sec_}) {
+                         realsense_pose_max_age_sec_, realsense_poll_sec_,
+                         realsense_prediction_tolerance_sec_}) {
         if (!std::isfinite(value) || value <= 0) throw std::invalid_argument("Invalid RealSense timing");
     }
     if (realsense_queue_size_ <= 0 || realsense_min_points_ < 0)
@@ -749,7 +754,7 @@ void LocalizationNode::processRealSenseDynamic() {
     visualization_msgs::msg::Marker::SharedPtr prediction;
     if (realsense_tracking_protection_) {
         for (const auto& item : realsense_predictions_) {
-            if (std::abs((rclcpp::Time(item->header.stamp, get_clock()->get_clock_type()) - stamp).seconds()) < 0.05) {
+            if (std::abs((rclcpp::Time(item->header.stamp, get_clock()->get_clock_type()) - stamp).seconds()) < realsense_prediction_tolerance_sec_) {
                 prediction = item;
                 break;
             }
@@ -778,7 +783,9 @@ void LocalizationNode::processRealSenseDynamic() {
         for (size_t row=0; row<msg->height; ++row) for (size_t col=0; col<msg->width; ++col) {
             const auto* ptr=msg->data.data()+row*msg->row_step+col*msg->point_step;
             float x,y,z;
-            std::memcpy(&x,ptr+xf->offset,4); std::memcpy(&y,ptr+yf->offset,4); std::memcpy(&z,ptr+zf->offset,4);
+            std::memcpy(&x, ptr + xf->offset, sizeof(float));
+            std::memcpy(&y, ptr + yf->offset, sizeof(float));
+            std::memcpy(&z, ptr + zf->offset, sizeof(float));
             if (!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)) continue;
             const Eigen::Vector3d point=transform*Eigen::Vector3d(x,y,z);
             points.insert(points.end(), {float(point.x()),float(point.y()),float(point.z())});

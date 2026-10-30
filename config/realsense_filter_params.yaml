@@ -80,6 +80,7 @@
       min_points: 1
       tracking_protection: true
       prediction_topic: /cloth/filter_prediction
+      prediction_tolerance_sec: 0.05
       dynamic_dist_thresh: 0.08
     global_search:
       range_min_x: -5.25
