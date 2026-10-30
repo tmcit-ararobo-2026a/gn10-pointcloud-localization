@@ -60,8 +60,8 @@ def generate_launch_description():
 
     declare_realsense = DeclareLaunchArgument(
         'realsense',
-        default_value='false',
-        description='Enable RealSense ESDF dynamic background filter (selects realsense_filter_params automatically)'
+        default_value='true',
+        description='Enable RealSense ESDF dynamic background filter (default: true)'
     )
 
     declare_params_file = DeclareLaunchArgument(

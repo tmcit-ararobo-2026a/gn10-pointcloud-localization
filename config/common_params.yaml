@@ -77,7 +77,7 @@
       frame_id: "lakibeam_frame"
 
     realsense:
-      enable: false
+      enable: true
       input_topic: "/realsense/cropped_cloud"
       output_topic: "/realsense/dynamic_cloud"
       status_topic: "/realsense/filter_status"
@@ -87,8 +87,9 @@
       poll_sec: 0.005
       queue_size: 8
       min_points: 1
-      tracking_protection: false
+      tracking_protection: true
       prediction_topic: /cloth/filter_prediction
+      dynamic_dist_thresh: 0.08
 
     global_search:
       range_min_x: -5.25
