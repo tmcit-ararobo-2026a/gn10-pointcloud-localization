@@ -19,12 +19,10 @@ def _create_localization_node(context):
     enable_realsense = realsense_str == 'true'
 
     params_file = LaunchConfiguration('params_file').perform(context)
-
-    # If user enabled realsense and did not explicitly specify a non-default params_file:
     default_param_file = os.path.join(pkg_dir, 'config', 'localization_params.yaml')
-    if enable_realsense and params_file in ('', default_param_file, 'localization_params.yaml'):
-        target_name = 'unity_realsense_filter_params.yaml' if use_sim_time else 'realsense_filter_params.yaml'
-        params_file = os.path.join(pkg_dir, 'config', target_name)
+
+    if not params_file:
+        params_file = default_param_file
     elif not os.path.isabs(params_file) and not os.path.exists(params_file):
         candidate = os.path.join(pkg_dir, 'config', params_file)
         if os.path.exists(candidate):

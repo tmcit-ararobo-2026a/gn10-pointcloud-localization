@@ -7,7 +7,7 @@ option(BUILD_RUNTIME_NODES "Build localization runtime nodes" ON)
 option(BUILD_GPU_NODES "Build CUDA matcher (CPU monitor can be built separately)" ON)
 
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES 86 87)
+  set(CMAKE_CUDA_ARCHITECTURES 72 86 87 89)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -64,10 +64,8 @@ set_target_properties(gn10_cuda_lib PROPERTIES
 )
 
 # nvcc 内部で生成されるコードの -Wpedantic 警告を抑制
-target_include_directories(gn10_cuda_lib BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include_fix)
 target_compile_options(gn10_cuda_lib PRIVATE
   $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>
-  $<$<COMPILE_LANGUAGE:CUDA>:-isystem${CMAKE_CURRENT_SOURCE_DIR}/include_fix>
 )
 
 # 共通 ESDF ライブラリ
