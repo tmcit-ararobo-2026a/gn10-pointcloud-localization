@@ -15,6 +15,8 @@ PoseSolver::PoseSolver(int max_points) : max_points_(max_points)
     cudaStreamCreate(&stream_);
 
     cudaMalloc(&d_in_, max_points_ * 3 * sizeof(float));
+    cudaMalloc(&d_timed_in_, max_points_ * sizeof(TimedScanPoint));
+    cudaMalloc(&d_imu_samples_, 256 * sizeof(IMUSample));
     cudaMalloc(&d_ground_, max_points_ * 3 * sizeof(float));
     cudaMalloc(&d_obstacle_, max_points_ * 3 * sizeof(float));
     cudaMalloc(&d_ground_count_, sizeof(int));
@@ -32,6 +34,8 @@ PoseSolver::~PoseSolver()
     }
 
     cudaFree(d_in_);
+    cudaFree(d_timed_in_);
+    cudaFree(d_imu_samples_);
     cudaFree(d_ground_);
     cudaFree(d_obstacle_);
     cudaFree(d_ground_count_);
@@ -136,12 +140,159 @@ bool PoseSolver::processPointCloud(
     ground_count_   = h_ground_count;
     obstacle_count_ = h_obstacle_count;
 
+    return matchObstacleCloud(
+        h_obstacle_count,
+        match_params,
+        search_base_pose,
+        out_dynamic_pts,
+        out_best_pose,
+        out_best_cost,
+        out_inlier_count,
+        out_inlier_cost
+    );
+}
+
+bool PoseSolver::processPointCloud(
+    const std::vector<TimedScanPoint>& timed_points,
+    const float h_transform[12],
+    const DeskewParams& deskew_params,
+    const std::vector<IMUSample>& imu_samples,
+    int stride,
+    const GroundFilterParams& filter_params,
+    const MatchingParams& match_params,
+    const PoseCandidate& search_base_pose,
+    std::vector<float>& out_dynamic_pts,
+    PoseCandidate& out_best_pose,
+    float& out_best_cost,
+    int* out_inlier_count,
+    float* out_inlier_cost,
+    const std::vector<float>* extra_base_link_points
+)
+{
+    int num_points = static_cast<int>(timed_points.size());
+    ground_count_   = 0;
+    obstacle_count_ = 0;
+    if (num_points == 0 || num_points > max_points_) {
+        out_best_cost = std::numeric_limits<float>::max();
+        if (out_inlier_count != nullptr) {
+            *out_inlier_count = 0;
+        }
+        if (out_inlier_cost != nullptr) {
+            *out_inlier_cost = 1.0f;
+        }
+        return false;
+    }
+
+    last_metrics_ = ProfileMetrics{};
+    auto t_gf_start = std::chrono::high_resolution_clock::now();
+
+    // タイムスタンプ付き点群および静的変換・IMUサンプルのGPU非同期転送
+    cudaMemcpyAsync(
+        d_timed_in_, timed_points.data(), num_points * sizeof(TimedScanPoint), cudaMemcpyHostToDevice, stream_
+    );
+    cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
+
+    int num_samples = static_cast<int>(imu_samples.size());
+    if (num_samples > 256) {
+        num_samples = 256;
+    }
+    if (num_samples > 0) {
+        cudaMemcpyAsync(
+            d_imu_samples_, imu_samples.data(), num_samples * sizeof(IMUSample), cudaMemcpyHostToDevice, stream_
+        );
+    }
+
+    int h_ground_count   = 0;
+    int h_obstacle_count = 0;
+
+    // GPU Deskew 統合 Ground Filter の起動
+    launchGroundFilterWithDeskew(
+        stream_,
+        d_timed_in_,
+        d_ground_,
+        d_obstacle_,
+        d_transform_,
+        num_points,
+        stride,
+        deskew_params,
+        d_imu_samples_,
+        num_samples,
+        filter_params.range_max,
+        filter_params.robot_radius,
+        filter_params.robot_height_min,
+        filter_params.robot_height_max,
+        filter_params.ground_z_thresh,
+        d_ground_count_,
+        d_obstacle_count_,
+        &h_ground_count,
+        &h_obstacle_count
+    );
+
+    cudaStreamSynchronize(stream_);
+    auto t_gf_end = std::chrono::high_resolution_clock::now();
+    last_metrics_.time_ground_filter_ms =
+        std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();
+
+    // 2D LiDAR などの追加点群 (base_link 座標系) を障害物バッファにマージ
+    if (extra_base_link_points != nullptr && !extra_base_link_points->empty()) {
+        int extra_points = static_cast<int>(extra_base_link_points->size() / 3);
+        if (h_obstacle_count + extra_points <= max_points_) {
+            cudaMemcpyAsync(
+                d_obstacle_ + h_obstacle_count * 3,
+                extra_base_link_points->data(),
+                extra_points * 3 * sizeof(float),
+                cudaMemcpyHostToDevice,
+                stream_
+            );
+            h_obstacle_count += extra_points;
+            cudaStreamSynchronize(stream_);
+        }
+    }
+
+    ground_count_   = h_ground_count;
+    obstacle_count_ = h_obstacle_count;
+
+    return matchObstacleCloud(
+        h_obstacle_count,
+        match_params,
+        search_base_pose,
+        out_dynamic_pts,
+        out_best_pose,
+        out_best_cost,
+        out_inlier_count,
+        out_inlier_cost
+    );
+}
+
+bool PoseSolver::matchObstacleCloud(
+    int h_obstacle_count,
+    const MatchingParams& match_params,
+    const PoseCandidate& search_base_pose,
+    std::vector<float>& out_dynamic_pts,
+    PoseCandidate& out_best_pose,
+    float& out_best_cost,
+    int* out_inlier_count,
+    float* out_inlier_cost
+)
+{
     bool pose_matched = false;
     auto t_match_start = std::chrono::high_resolution_clock::now();
     if (h_obstacle_count > 50) {
         PoseCandidate coarse_pose{};
         float coarse_cost = std::numeric_limits<float>::max();
         std::vector<float> ignored_dynamic;
+
+        int* step_inlier_count = nullptr;
+        float* step_inlier_cost = nullptr;
+        bool output_coarse_dynamic = false;
+        if (!match_params.fine_refine) {
+            step_inlier_count = out_inlier_count;
+            step_inlier_cost = out_inlier_cost;
+            output_coarse_dynamic = true;
+        }
+
+        std::vector<float>& target_dynamic_buf = output_coarse_dynamic ? out_dynamic_pts : ignored_dynamic;
+
         if (use_esdf_) {
             pose_matched = launchESDFMatcher(
                 stream_,
@@ -161,10 +312,10 @@ bool PoseSolver::processPointCloud(
                 match_params.field_max_y,
                 coarse_pose,
                 coarse_cost,
-                match_params.fine_refine ? ignored_dynamic : out_dynamic_pts,
-                !match_params.fine_refine,
-                match_params.fine_refine ? nullptr : out_inlier_count,
-                match_params.fine_refine ? nullptr : out_inlier_cost,
+                target_dynamic_buf,
+                output_coarse_dynamic,
+                step_inlier_count,
+                step_inlier_cost,
                 match_params.inlier_dist_thresh
             );
         } else {
@@ -186,27 +337,33 @@ bool PoseSolver::processPointCloud(
                 match_params.field_max_y,
                 coarse_pose,
                 coarse_cost,
-                match_params.fine_refine ? ignored_dynamic : out_dynamic_pts,
-                !match_params.fine_refine,
-                match_params.fine_refine ? nullptr : out_inlier_count,
-                match_params.fine_refine ? nullptr : out_inlier_cost,
+                target_dynamic_buf,
+                output_coarse_dynamic,
+                step_inlier_count,
+                step_inlier_cost,
                 match_params.inlier_dist_thresh
             );
         }
         out_best_pose = coarse_pose;
         out_best_cost = coarse_cost;
         if (pose_matched && match_params.fine_refine) {
-            // Repeated 5x5x5 searches retain the previous winner and remove
-            // the 1 cm / 0.01 rad quantization left by a single refinement.
             float fine_xy = match_params.step_xy;
             float fine_yaw = match_params.step_yaw;
             for (int level = 0; level < match_params.fine_refine_levels && pose_matched; ++level) {
                 fine_xy /= 5.0f;
                 fine_yaw /= 5.0f;
                 const PoseCandidate center = out_best_pose;
-                const bool final = level+1 == match_params.fine_refine_levels;
+                const bool is_final_level = (level + 1 == match_params.fine_refine_levels);
+
+                int* fine_inlier_count = nullptr;
+                float* fine_inlier_cost = nullptr;
+                if (is_final_level) {
+                    fine_inlier_count = out_inlier_count;
+                    fine_inlier_cost = out_inlier_cost;
+                }
+
                 if (use_esdf_) {
-                    pose_matched     = launchESDFMatcher(
+                    pose_matched = launchESDFMatcher(
                         stream_,
                         d_obstacle_,
                         h_obstacle_count,
@@ -225,13 +382,13 @@ bool PoseSolver::processPointCloud(
                         out_best_pose,
                         out_best_cost,
                         out_dynamic_pts,
-                        final,
-                        final ? out_inlier_count : nullptr,
-                        final ? out_inlier_cost : nullptr,
+                        is_final_level,
+                        fine_inlier_count,
+                        fine_inlier_cost,
                         match_params.inlier_dist_thresh
                     );
                 } else {
-                    pose_matched     = launchFieldSDFMatcher(
+                    pose_matched = launchFieldSDFMatcher(
                         stream_,
                         d_obstacle_,
                         h_obstacle_count,
@@ -250,9 +407,9 @@ bool PoseSolver::processPointCloud(
                         out_best_pose,
                         out_best_cost,
                         out_dynamic_pts,
-                        final,
-                        final ? out_inlier_count : nullptr,
-                        final ? out_inlier_cost : nullptr,
+                        is_final_level,
+                        fine_inlier_count,
+                        fine_inlier_cost,
                         match_params.inlier_dist_thresh
                     );
                 }
@@ -260,19 +417,94 @@ bool PoseSolver::processPointCloud(
         }
     } else {
         out_best_cost = std::numeric_limits<float>::max();
-        if (out_inlier_count) *out_inlier_count = 0;
-        if (out_inlier_cost) *out_inlier_cost = 1.0f;
+        if (out_inlier_count != nullptr) {
+            *out_inlier_count = 0;
+        }
+        if (out_inlier_cost != nullptr) {
+            *out_inlier_cost = 1.0f;
+        }
         out_dynamic_pts.clear();
     }
 
     auto t_match_end = std::chrono::high_resolution_clock::now();
     last_metrics_.time_matching_ms =
         std::chrono::duration<double, std::milli>(t_match_end - t_match_start).count();
-    last_metrics_.d2h_transfer_bytes =
-        out_dynamic_pts.size() * sizeof(float) +
-        (out_inlier_count ? sizeof(int) + sizeof(float) : 0);
+
+    size_t inlier_bytes = 0;
+    if (out_inlier_count != nullptr) {
+        inlier_bytes = sizeof(int) + sizeof(float);
+    }
+    last_metrics_.d2h_transfer_bytes = out_dynamic_pts.size() * sizeof(float) + inlier_bytes;
 
     return pose_matched;
+}
+
+int PoseSolver::prepareObstacleCloud(
+    const std::vector<TimedScanPoint>& timed_points,
+    const float h_transform[12],
+    const DeskewParams& deskew_params,
+    const std::vector<IMUSample>& imu_samples,
+    int stride,
+    const GroundFilterParams& filter_params
+)
+{
+    int num_points = static_cast<int>(timed_points.size());
+    ground_count_   = 0;
+    obstacle_count_ = 0;
+    if (num_points == 0 || num_points > max_points_) {
+        return 0;
+    }
+
+    last_metrics_ = ProfileMetrics{};
+    auto t_gf_start = std::chrono::high_resolution_clock::now();
+
+    cudaMemcpyAsync(
+        d_timed_in_, timed_points.data(), num_points * sizeof(TimedScanPoint), cudaMemcpyHostToDevice, stream_
+    );
+    cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
+
+    int num_samples = static_cast<int>(imu_samples.size());
+    if (num_samples > 256) {
+        num_samples = 256;
+    }
+    if (num_samples > 0) {
+        cudaMemcpyAsync(
+            d_imu_samples_, imu_samples.data(), num_samples * sizeof(IMUSample), cudaMemcpyHostToDevice, stream_
+        );
+    }
+
+    int h_ground_count   = 0;
+    int h_obstacle_count = 0;
+
+    launchGroundFilterWithDeskew(
+        stream_,
+        d_timed_in_,
+        d_ground_,
+        d_obstacle_,
+        d_transform_,
+        num_points,
+        stride,
+        deskew_params,
+        d_imu_samples_,
+        num_samples,
+        filter_params.range_max,
+        filter_params.robot_radius,
+        filter_params.robot_height_min,
+        filter_params.robot_height_max,
+        filter_params.ground_z_thresh,
+        d_ground_count_,
+        d_obstacle_count_,
+        &h_ground_count,
+        &h_obstacle_count
+    );
+
+    cudaStreamSynchronize(stream_);
+    auto t_gf_end = std::chrono::high_resolution_clock::now();
+    last_metrics_.time_ground_filter_ms =
+        std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();
+    ground_count_   = h_ground_count;
+    obstacle_count_ = h_obstacle_count;
+    return h_obstacle_count;
 }
 
 int PoseSolver::prepareObstacleCloud(

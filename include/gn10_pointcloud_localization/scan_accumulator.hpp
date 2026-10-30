@@ -9,10 +9,7 @@
 #include <deque>
 #include <vector>
 
-struct TimedScanPoint {
-    float x, y, z;
-    int64_t stamp_ns;
-};
+#include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
 
 // A time-indexed integral prevents a cloud callback from discarding IMU
 // rotation that arrived after the cloud's reference time.
@@ -43,20 +40,63 @@ public:
         bool ok_a = at(from, a);
         bool ok_b = at(to, b);
         if (!ok_a) {
-            const auto& ref = (from >= samples_.back().stamp) ? samples_.back() : samples_.front();
-            a = ref.angle + ref.rate * seconds(from - ref.stamp);
+            if (from >= samples_.back().stamp) {
+                const auto& ref = samples_.back();
+                a = ref.angle + ref.rate * seconds(from - ref.stamp);
+            } else {
+                const auto& ref = samples_.front();
+                a = ref.angle + ref.rate * seconds(from - ref.stamp);
+            }
         }
         if (!ok_b) {
-            const auto& ref = (to >= samples_.back().stamp) ? samples_.back() : samples_.front();
-            b = ref.angle + ref.rate * seconds(to - ref.stamp);
+            if (to >= samples_.back().stamp) {
+                const auto& ref = samples_.back();
+                b = ref.angle + ref.rate * seconds(to - ref.stamp);
+            } else {
+                const auto& ref = samples_.front();
+                b = ref.angle + ref.rate * seconds(to - ref.stamp);
+            }
         }
         result = b - a;
         return true;
     }
+
+    /**
+     * @brief IMUサンプル列を取得する
+     * @param out_samples サンプルの出力先
+     */
+    void get_imu_samples(std::vector<IMUSample>& out_samples) const
+    {
+        out_samples.clear();
+        out_samples.reserve(samples_.size());
+        for (const auto& sample : samples_) {
+            IMUSample item;
+            item.stamp_ns = sample.stamp;
+            item.rate = static_cast<float>(sample.rate);
+            item.angle = static_cast<float>(sample.angle);
+            out_samples.push_back(item);
+        }
+    }
+
+    /**
+     * @brief 指定時刻における積分角度を取得する
+     * @param target_stamp_ns 対象時刻[ns]
+     * @param out_angle 算出された角度[rad]
+     * @return 取得に成功したかどうか
+     */
+    bool get_angle_at(int64_t target_stamp_ns, double& out_angle) const
+    {
+        return at(target_stamp_ns, out_angle);
+    }
+
     double latest_rate() const
     {
-        return samples_.empty() ? 0.0 : samples_.back().rate;
+        if (samples_.empty()) {
+            return 0.0;
+        }
+        return samples_.back().rate;
     }
+
     void clear() { samples_.clear(); }
 
 private:
@@ -118,6 +158,39 @@ public:
         points_.erase(std::remove_if(points_.begin(), points_.end(),
                       [begin](const auto& p) { return p.stamp_ns < begin; }), points_.end());
         return window_ns_ == 0 || reference-first_stamp_ >= window_ns_-2000000;
+    }
+
+    /**
+     * @brief 蓄積された生点群を取得する
+     * @return 蓄積点群への参照
+     */
+    const std::vector<TimedScanPoint>& points() const
+    {
+        return points_;
+    }
+
+    /**
+     * @brief IMUカバレッジ状態を確認する
+     * @param reference 基準時刻[ns]
+     * @param imu IMU履歴
+     * @return 最古点までIMUでカバーされているかどうか
+     */
+    bool is_fully_covered(int64_t reference, const YawHistory& imu) const
+    {
+        if (points_.empty()) {
+            return false;
+        }
+        double unused_angle = 0.0;
+        return imu.delta(reference, points_.front().stamp_ns, unused_angle);
+    }
+
+    /**
+     * @brief 最新スキャンの開始時刻を取得する
+     * @return 最新スキャンの開始時刻[ns]
+     */
+    int64_t newest_start_stamp() const
+    {
+        return newest_start_;
     }
 
     std::vector<float> cloud(int64_t reference, const YawHistory& imu,
