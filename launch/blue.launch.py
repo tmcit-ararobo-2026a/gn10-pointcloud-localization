@@ -67,7 +67,7 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='lakibeam_tf',
         arguments=[
-            '--x', '-0.3',
+            '--x', '-0.33',
             '--y', '0.0',
             '--z', '0.08',
             '--yaw', '3.14159',

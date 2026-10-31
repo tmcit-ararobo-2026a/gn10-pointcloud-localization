@@ -239,7 +239,7 @@ def generate_launch_description():
         name='lakibeam_tf',
         condition=IfCondition(LaunchConfiguration('start_lakibeam_tf')),
         arguments=[
-            '--x', '-0.3',
+            '--x', '-0.33',
             '--y', '0.0',
             '--z', '0.08',
             '--yaw', '3.14159',
