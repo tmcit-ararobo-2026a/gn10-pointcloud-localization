@@ -65,6 +65,7 @@ def _create_localization_node(context):
     _override_float('max_dist_thresh', 'matching_params.max_dist_thresh')
     _override_float('cost_threshold', 'matching_params.cost_threshold')
     _override_float('dynamic_dist_thresh', 'matching_params.dynamic_dist_thresh')
+    _override_float('weight_2d_lidar', 'matching_params.weight_2d_lidar')
 
     # 3. Sensor integrations
     _override_bool('lidar_2d', 'lidar_2d.enable')
@@ -164,6 +165,12 @@ def generate_launch_description():
         description='Enable 2D LiDAR deskew distortion correction (true/false)'
     )
 
+    declare_weight_2d_lidar = DeclareLaunchArgument(
+        'weight_2d_lidar',
+        default_value='',
+        description='Weight for 2D LiDAR residual term (0.0 - 1.0)'
+    )
+
     declare_lakibeam_tf = DeclareLaunchArgument(
         'start_lakibeam_tf',
         default_value='false',
@@ -254,6 +261,7 @@ def generate_launch_description():
         declare_realsense,
         declare_lidar_2d,
         declare_lidar_2d_deskew,
+        declare_weight_2d_lidar,
         declare_lakibeam_tf,
         declare_initial_local_search,
         declare_initial_x,

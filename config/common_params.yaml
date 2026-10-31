@@ -70,6 +70,9 @@
       inlier_dist_thresh: 0.08
       min_inliers: 60
       inlier_cost_thresh: 0.05
+      weight_2d_lidar: 0.40
+      min_2d_points: 30
+      target_2d_points: 200
 
     lidar_2d:
       enable: false

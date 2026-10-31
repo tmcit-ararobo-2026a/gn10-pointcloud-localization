@@ -125,6 +125,9 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.inlier_dist_thresh", 0.08);
     this->declare_parameter("matching_params.min_inliers", 60);
     this->declare_parameter("matching_params.inlier_cost_thresh", 0.05);
+    this->declare_parameter("matching_params.weight_2d_lidar", 0.40);
+    this->declare_parameter("matching_params.min_2d_points", 30);
+    this->declare_parameter("matching_params.target_2d_points", 200);
 
     this->declare_parameter("lidar_2d.enable", false);
     this->declare_parameter("lidar_2d.deskew", true);
@@ -215,6 +218,10 @@ void LocalizationNode::declareAndGetParameters()
     match_params_.min_inliers = this->get_parameter("matching_params.min_inliers").as_int();
     match_params_.inlier_cost_thresh =
         static_cast<float>(this->get_parameter("matching_params.inlier_cost_thresh").as_double());
+    match_params_.weight_2d_lidar =
+        static_cast<float>(this->get_parameter("matching_params.weight_2d_lidar").as_double());
+    match_params_.min_2d_points = this->get_parameter("matching_params.min_2d_points").as_int();
+    match_params_.target_2d_points = this->get_parameter("matching_params.target_2d_points").as_int();
 
     use_2d_lidar_        = this->get_parameter("lidar_2d.enable").as_bool();
     use_2d_lidar_deskew_ = this->get_parameter("lidar_2d.deskew").as_bool();
@@ -1151,10 +1158,15 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                 velocity_history_.clear();
                 RCLCPP_WARN(
                     this->get_logger(),
-                    "Localization lost! (best_cost: %.4f, inliers: %d, inlier_cost: %.4f)",
+                    "Localization lost! (best_cost: %.4f, inliers: %d, inlier_cost: %.4f, 3D: %.4f [%d pts], 2D: %.4f [%d pts], w_2d: %.2f)",
                     best_cost,
                     inlier_count,
-                    inlier_cost
+                    inlier_cost,
+                    solver_->lastCost3D(),
+                    solver_->obstacleCount3D(),
+                    solver_->lastCost2D(),
+                    solver_->obstacleCount2D(),
+                    solver_->lastWeight2D()
                 );
             }
         }
@@ -1819,6 +1831,12 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             use_2d_lidar_ = param.as_bool();
         } else if (name == "lidar_2d.deskew") {
             use_2d_lidar_deskew_ = param.as_bool();
+        } else if (name == "matching_params.weight_2d_lidar") {
+            match_params_.weight_2d_lidar = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.min_2d_points") {
+            match_params_.min_2d_points = static_cast<int>(param.as_int());
+        } else if (name == "matching_params.target_2d_points") {
+            match_params_.target_2d_points = static_cast<int>(param.as_int());
         }
 
         RCLCPP_INFO(this->get_logger(), "[DynamicReconfigure] Successfully updated parameter '%s'", name.c_str());
