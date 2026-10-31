@@ -26,6 +26,7 @@
 #include "gn10_pointcloud_localization/benchmark_profiler.hpp"
 #include "gn10_pointcloud_localization/esdf_map.hpp"
 #include "gn10_pointcloud_localization/global_searcher.hpp"
+#include "gn10_pointcloud_localization/laser_scan_deskew.hpp"
 #include "gn10_pointcloud_localization/map_loader.hpp"
 #include "gn10_pointcloud_localization/pose_solver.hpp"
 #include "gn10_pointcloud_localization/scan_accumulator.hpp"
@@ -141,7 +142,9 @@ private:
 
     // 2D LiDAR (Lakibeam 1) Integration
     bool use_2d_lidar_{false};
+    bool use_2d_lidar_deskew_{true};
     std::string topic_2d_lidar_{"/lakibeam/scan"};
+    std::string topic_2d_deskewed_{"/lakibeam/deskewed_cloud"};
     std::string lidar_2d_frame_{"lakibeam_frame"};
     std::mutex lidar_2d_mutex_;
     std::vector<float> latest_2d_points_;
@@ -187,6 +190,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_ground_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_dynamic_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_realsense_dynamic_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_2d_deskewed_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_localization_success_;
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_platform_pose_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_map_markers_;

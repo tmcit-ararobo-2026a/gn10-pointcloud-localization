@@ -68,6 +68,7 @@ def _create_localization_node(context):
 
     # 3. Sensor integrations
     _override_bool('lidar_2d', 'lidar_2d.enable')
+    _override_bool('lidar_2d_deskew', 'lidar_2d.deskew')
     _override_bool('realsense', 'realsense.enable')
 
     # 4. Initial pose overrides
@@ -155,6 +156,12 @@ def generate_launch_description():
         'lidar_2d',
         default_value='',
         description='Enable 2D LiDAR (Lakibeam) integration (true/false)'
+    )
+
+    declare_lidar_2d_deskew = DeclareLaunchArgument(
+        'lidar_2d_deskew',
+        default_value='',
+        description='Enable 2D LiDAR deskew distortion correction (true/false)'
     )
 
     declare_lakibeam_tf = DeclareLaunchArgument(
@@ -246,6 +253,7 @@ def generate_launch_description():
         declare_dynamic_dist_thresh,
         declare_realsense,
         declare_lidar_2d,
+        declare_lidar_2d_deskew,
         declare_lakibeam_tf,
         declare_initial_local_search,
         declare_initial_x,

@@ -127,8 +127,10 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.inlier_cost_thresh", 0.05);
 
     this->declare_parameter("lidar_2d.enable", false);
+    this->declare_parameter("lidar_2d.deskew", true);
     this->declare_parameter("lidar_2d.topic", "/lakibeam/scan");
     this->declare_parameter("lidar_2d.frame_id", "lakibeam_frame");
+    this->declare_parameter("topics.output_2d_deskewed", "/lakibeam/deskewed_cloud");
 
     this->declare_parameter("realsense.enable", false);
     this->declare_parameter("realsense.input_topic", "/realsense/cropped_cloud");
@@ -214,9 +216,11 @@ void LocalizationNode::declareAndGetParameters()
     match_params_.inlier_cost_thresh =
         static_cast<float>(this->get_parameter("matching_params.inlier_cost_thresh").as_double());
 
-    use_2d_lidar_   = this->get_parameter("lidar_2d.enable").as_bool();
-    topic_2d_lidar_ = this->get_parameter("lidar_2d.topic").as_string();
-    lidar_2d_frame_ = this->get_parameter("lidar_2d.frame_id").as_string();
+    use_2d_lidar_        = this->get_parameter("lidar_2d.enable").as_bool();
+    use_2d_lidar_deskew_ = this->get_parameter("lidar_2d.deskew").as_bool();
+    topic_2d_lidar_      = this->get_parameter("lidar_2d.topic").as_string();
+    topic_2d_deskewed_   = this->get_parameter("topics.output_2d_deskewed").as_string();
+    lidar_2d_frame_      = this->get_parameter("lidar_2d.frame_id").as_string();
 
     use_realsense_           = this->get_parameter("realsense.enable").as_bool();
     topic_realsense_cloud_   = this->get_parameter("realsense.input_topic").as_string();
@@ -586,8 +590,15 @@ void LocalizationNode::setupROSInterfaces()
             rclcpp::SensorDataQoS(),
             std::bind(&LocalizationNode::scan2dCallback, this, std::placeholders::_1)
         );
+        pub_2d_deskewed_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+            topic_2d_deskewed_, 10
+        );
         RCLCPP_INFO(
-            this->get_logger(), "Subscribed to 2D LiDAR on topic: %s", topic_2d_lidar_.c_str()
+            this->get_logger(),
+            "Subscribed to 2D LiDAR on topic: %s (deskew: %s, debug_pub: %s)",
+            topic_2d_lidar_.c_str(),
+            use_2d_lidar_deskew_ ? "enabled" : "disabled",
+            topic_2d_deskewed_.c_str()
         );
     }
 
@@ -660,43 +671,43 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
 
     const double siny_cosp = 2.0 * (qw * qz + qx * qy);
     const double cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
-    const double yaw       = std::atan2(siny_cosp, cosy_cosp);
-    const float cos_y      = static_cast<float>(std::cos(yaw));
-    const float sin_y      = static_cast<float>(std::sin(yaw));
+    const double tf_yaw    = std::atan2(siny_cosp, cosy_cosp);
 
-    std::vector<float> points;
-    points.reserve(msg->ranges.size() * 3);
-
-    const float angle_min = msg->angle_min;
-    const float angle_inc = msg->angle_increment;
-    const float range_min = msg->range_min;
-    const float range_max = std::min(msg->range_max, filter_params_.range_max);
-
-    for (size_t i = 0; i < msg->ranges.size(); ++i) {
-        const float r = msg->ranges[i];
-        if (!std::isfinite(r) || r < range_min || r > range_max) continue;
-
-        const float angle = angle_min + static_cast<float>(i) * angle_inc;
-        const float xl    = r * std::cos(angle);
-        const float yl    = r * std::sin(angle);
-
-        const float xb = cos_y * xl - sin_y * yl + static_cast<float>(tx);
-        const float yb = sin_y * xl + cos_y * yl + static_cast<float>(ty);
-        const float zb = static_cast<float>(tz);
-
-        if (xb * xb + yb * yb <= filter_params_.robot_radius * filter_params_.robot_radius) {
-            continue;
-        }
-
-        points.push_back(xb);
-        points.push_back(yb);
-        points.push_back(zb);
+    YawHistory imu_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(pose_mutex_);
+        imu_snapshot = yaw_history_;
     }
+
+    GroundFilterParams active_filter;
+    {
+        std::lock_guard<std::mutex> lock(param_mutex_);
+        active_filter = filter_params_;
+    }
+
+    gn10_pointcloud_localization::LaserScanDeskewConfig deskew_cfg;
+    deskew_cfg.enable_deskew   = use_2d_lidar_deskew_;
+    deskew_cfg.range_max_limit = active_filter.range_max;
+    deskew_cfg.robot_radius    = active_filter.robot_radius;
+
+    int64_t ref_stamp_ns = 0;
+    std::vector<float> points = gn10_pointcloud_localization::deskewLaserScan(
+        *msg, tx, ty, tz, tf_yaw, imu_snapshot, deskew_cfg, ref_stamp_ns
+    );
+
+    const rclcpp::Time ref_stamp(ref_stamp_ns, this->get_clock()->get_clock_type());
 
     {
         std::lock_guard<std::mutex> lock(lidar_2d_mutex_);
-        latest_2d_points_ = std::move(points);
-        latest_2d_stamp_  = msg->header.stamp;
+        latest_2d_points_ = points;
+        latest_2d_stamp_  = ref_stamp;
+    }
+
+    if (pub_2d_deskewed_ && pub_2d_deskewed_->get_subscription_count() > 0) {
+        std_msgs::msg::Header out_header = msg->header;
+        out_header.frame_id              = base_frame_;
+        out_header.stamp                 = ref_stamp;
+        publishCloud(pub_2d_deskewed_, out_header, points);
     }
 }
 
@@ -1806,6 +1817,8 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         // --- lidar_2d ---
         } else if (name == "lidar_2d.enable") {
             use_2d_lidar_ = param.as_bool();
+        } else if (name == "lidar_2d.deskew") {
+            use_2d_lidar_deskew_ = param.as_bool();
         }
 
         RCLCPP_INFO(this->get_logger(), "[DynamicReconfigure] Successfully updated parameter '%s'", name.c_str());
