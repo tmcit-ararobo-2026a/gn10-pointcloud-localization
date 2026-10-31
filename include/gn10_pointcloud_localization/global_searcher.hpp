@@ -32,7 +32,9 @@ public:
         const MatchingParams& match_params,
         float prior_yaw,
         float max_yaw_diff,
-        float& out_best_cost
+        float& out_best_cost,
+        int* out_inlier_count = nullptr,
+        float* out_inlier_cost = nullptr
     );
 
     PoseCandidate search(
@@ -46,7 +48,9 @@ public:
         const MatchingParams& match_params,
         float prior_yaw,
         float max_yaw_diff,
-        float& out_best_cost
+        float& out_best_cost,
+        int* out_inlier_count = nullptr,
+        float* out_inlier_cost = nullptr
     );
 
 private:

@@ -1053,10 +1053,17 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             active_match_params,
             current_prior_yaw,
             global_range_yaw_diff_,
-            best_cost
+            best_cost,
+            &inlier_count,
+            &inlier_cost
         );
 
-        if (best_cost < active_match_params.cost_threshold) {
+        const bool global_recovered = std::isfinite(best_cost) &&
+                                      ((best_cost < active_match_params.cost_threshold) ||
+                                       (inlier_count >= active_match_params.min_inliers &&
+                                        inlier_cost < active_match_params.inlier_cost_thresh));
+
+        if (global_recovered) {
             is_lost_          = false;
             lost_frame_count_ = 0;
             matched           = true;
@@ -1065,7 +1072,11 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             velocity_history_.push_back({reference_stamp, best_pose});
             last_match_stamp_ = reference_stamp;
             RCLCPP_INFO(
-                this->get_logger(), "[GlobalSearch] Successfully recovered from lost state."
+                this->get_logger(),
+                "[GlobalSearch] Successfully recovered from lost state. (cost: %.4f, inliers: %d, inlier_cost: %.4f)",
+                best_cost,
+                inlier_count,
+                inlier_cost
             );
         }
     } else if (!matched) {

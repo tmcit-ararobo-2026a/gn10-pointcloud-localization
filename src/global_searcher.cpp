@@ -19,7 +19,9 @@ PoseCandidate GlobalSearcher::search(
     const MatchingParams& match_params,
     float prior_yaw,
     float max_yaw_diff,
-    float& out_best_cost
+    float& out_best_cost,
+    int* out_inlier_count,
+    float* out_inlier_cost
 )
 {
     RCLCPP_INFO(logger_, "[GlobalSearch] Starting GPU-Batched Yaw-Constrained Search...");
@@ -109,7 +111,9 @@ PoseCandidate GlobalSearcher::search(
         best_coarse_pose,
         dummy_dynamic,
         refined_pose,
-        out_best_cost
+        out_best_cost,
+        out_inlier_count,
+        out_inlier_cost
     );
 
     // 範囲外チェック
@@ -154,7 +158,9 @@ PoseCandidate GlobalSearcher::search(
     const MatchingParams& match_params,
     float prior_yaw,
     float max_yaw_diff,
-    float& out_best_cost
+    float& out_best_cost,
+    int* out_inlier_count,
+    float* out_inlier_cost
 )
 {
     RCLCPP_INFO(logger_, "[GlobalSearch] Starting GPU-Batched Yaw-Constrained Search (with GPU Deskew)...");
@@ -244,7 +250,9 @@ PoseCandidate GlobalSearcher::search(
         best_coarse_pose,
         dummy_dynamic,
         refined_pose,
-        out_best_cost
+        out_best_cost,
+        out_inlier_count,
+        out_inlier_cost
     );
 
     // 範囲外チェック
