@@ -188,6 +188,13 @@ void testESDFMatcherWeightedResidual()
 int main()
 {
     testFoVWeightingLogic();
+
+    int devices = 0;
+    if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0) {
+        std::cout << "No CUDA device available. Skipping GPU residual weighting test." << std::endl;
+        return 77;
+    }
+
     testESDFMatcherWeightedResidual();
     std::cout << "All Independent 2D Residual Weighting tests PASSED successfully!" << std::endl;
     return 0;
