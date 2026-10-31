@@ -153,6 +153,11 @@ if(BUILD_TESTING)
   target_compile_options(dynamic_filter_test PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-UNDEBUG>)
   add_test(NAME dynamic_filter COMMAND dynamic_filter_test)
   set_tests_properties(dynamic_filter PROPERTIES SKIP_RETURN_CODE 77)
+
+  add_executable(angle_and_imu_bounds_test tests/test_angle_and_imu_bounds.cpp)
+  target_include_directories(angle_and_imu_bounds_test PRIVATE include)
+  target_link_libraries(angle_and_imu_bounds_test gn10_cuda_lib gn10_esdf_lib CUDA::cudart)
+  add_test(NAME angle_and_imu_bounds COMMAND angle_and_imu_bounds_test)
 endif()
 
 # 他のノードや環境変数のためにライブラリをエクスポート

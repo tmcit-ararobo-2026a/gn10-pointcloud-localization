@@ -20,13 +20,6 @@
 
 namespace {
 constexpr double DEFAULT_PREDICTION_TOLERANCE_SEC = 0.05;
-
-inline float normalizeAngle(float angle)
-{
-    while (angle > static_cast<float>(M_PI)) angle -= static_cast<float>(2.0 * M_PI);
-    while (angle < -static_cast<float>(M_PI)) angle += static_cast<float>(2.0 * M_PI);
-    return angle;
-}
 }  // namespace
 
 LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
@@ -924,9 +917,12 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         std::lock_guard<std::mutex> lock(pose_mutex_);
         search_base_pose = last_known_pose_;
         double rotation  = 0;
-        if (imu_initialized_ &&
-            yaw_history_.delta(last_match_stamp_.nanoseconds(), reference_ns, rotation)) {
-            search_base_pose.yaw += float(rotation);
+        if (imu_initialized_ && last_match_stamp_.nanoseconds() > 0 && !is_lost_) {
+            const double dt = (reference_stamp - last_match_stamp_).seconds();
+            if (dt > 0.0 && dt < 1.0 &&
+                yaw_history_.delta(last_match_stamp_.nanoseconds(), reference_ns, rotation)) {
+                search_base_pose.yaw += float(rotation);
+            }
         }
         search_base_pose.yaw = normalizeAngle(search_base_pose.yaw);
         predicted_pose_      = search_base_pose;

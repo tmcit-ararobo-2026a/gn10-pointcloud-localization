@@ -5,12 +5,25 @@
 
 #include <cuda_runtime.h>
 
+#include <cmath>
 #include <vector>
 
 #include "gn10_pointcloud_localization/cuda/field_objects.cuh"
 #include "gn10_pointcloud_localization/cuda/esdf_matcher.cuh"
 #include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
 #include "gn10_pointcloud_localization/esdf_map.hpp"
+
+inline float normalizeAngle(float angle)
+{
+    if (!std::isfinite(angle)) {
+        return 0.0f;
+    }
+    float a = std::fmod(angle + static_cast<float>(M_PI), static_cast<float>(2.0 * M_PI));
+    if (a < 0.0f) {
+        a += static_cast<float>(2.0 * M_PI);
+    }
+    return a - static_cast<float>(M_PI);
+}
 
 struct GroundFilterParams {
     float range_max{12.0f};
