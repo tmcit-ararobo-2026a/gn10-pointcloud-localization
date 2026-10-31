@@ -7,10 +7,10 @@
       resolution: 0.05
       max_dist: 0.50
       crop_enabled: true
-      crop_min_x: -5.5
-      crop_max_x: 5.5
-      crop_min_y: -6.0
-      crop_max_y: 6.0
+      crop_min_x: -20.0
+      crop_max_x: 10.0
+      crop_min_y: -10.0
+      crop_max_y: 15.0
       min_z: -0.20
       max_z: 4.00
       publish_map: true
@@ -39,7 +39,7 @@
       prior_max_age_s: 0.25
 
     filter_params:
-      max_range: 12.0
+      max_range: 20.0
       robot_radius: 0.8
       robot_height_min: 0.0
       robot_height_max: 1.2
@@ -60,7 +60,7 @@
       fine_refine: true
       fine_refine_levels: 2
       max_dist_thresh: 0.25
-      cost_threshold: 0.01
+      cost_threshold: 0.125
       dynamic_dist_thresh: 0.15
       field_min_x: -5.5
       field_max_x: 5.5
@@ -85,14 +85,14 @@
       prediction_tolerance_sec: 0.05        # 予測マーカーと点群の時刻照合許容差 [s]
       dynamic_dist_thresh: 0.15             # 動的判定距離閾値 [m] (ESDFボクセル解像度0.05mに対して安定な値)
       ground_z_thresh: -1.0                 # 床面高さ除外閾値 [m] (<0でfilter_params.ground_z_threshを継承)
-      height_max: 1.5                       # 高さ上限除外閾値 [m]
+      height_max: 4.0                       # 高さ上限除外閾値 [m]
       tf_wait_sec: 0.15                     # TF 待機タイムアウト [s]
       max_age_sec: 0.25                     # 点群許容遅延 [s]
       pose_max_age_sec: 0.25                # 姿勢許容遅延 [s]
       poll_sec: 0.02                        # 独立タイマー周期 [s] (50Hz: CPU負荷とLiDARジッター低減)
       queue_size: 8                         # キュー最大保持フレーム数
       min_points: 1                         # 最小入力点数
-      min_dynamic_points: 15                # 抽出後の最小動的点数 (照明等の散乱ノイズカット)
+      min_dynamic_points: 4                # 抽出後の最小動的点数 (照明等の散乱ノイズカット)
       tracking_protection: true             # 予測マーカー近傍保護の有効化
 
     global_search:
@@ -103,8 +103,8 @@
       range_yaw_diff: 3.1415
       step_xy: 0.30
       step_yaw: 0.3
-      downsample_stride: 2
-      lost_count_thresh: 10
+      downsample_stride: 1
+      lost_count_thresh: 50
 
     initial_pose:
       use_for_local_search: false
