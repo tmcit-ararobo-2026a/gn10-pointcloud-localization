@@ -240,7 +240,7 @@ Shared settings are configured in [`config/common_params.yaml`](config/common_pa
 | `realsense.input_topic` | `/realsense/cropped_cloud` | Input point cloud topic from RealSense. |
 | `realsense.output_topic` | `/realsense/dynamic_cloud` | Output topic for extracted dynamic points after ESDF background removal. |
 
-`start_lakibeam_tf` defaults to false; set it to true only when the rear LiDAR static transform is required.
+`start_lakibeam_tf` defaults to true (mounting at $x = -0.30\,\text{m}$, $y = 0.0\,\text{m}$, $z = 0.08\,\text{m}$, $\text{yaw} = \pi$ rad); set to false if published elsewhere.
 
 ---
 

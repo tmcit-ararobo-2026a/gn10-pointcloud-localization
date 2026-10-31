@@ -173,7 +173,7 @@ def generate_launch_description():
 
     declare_lakibeam_tf = DeclareLaunchArgument(
         'start_lakibeam_tf',
-        default_value='false',
+        default_value='true',
         description='Publish static TF for rear Lakibeam 1 LiDAR (base_link -> lakibeam_frame)'
     )
 
@@ -239,7 +239,7 @@ def generate_launch_description():
         name='lakibeam_tf',
         condition=IfCondition(LaunchConfiguration('start_lakibeam_tf')),
         arguments=[
-            '--x', '-0.4',
+            '--x', '-0.3',
             '--y', '0.0',
             '--z', '0.08',
             '--yaw', '3.14159',

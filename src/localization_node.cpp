@@ -663,7 +663,16 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
         try {
             tf_stamped =
                 tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, tf2::TimePointZero);
-        } catch (const tf2::TransformException&) {
+        } catch (const tf2::TransformException& ex) {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(),
+                *this->get_clock(),
+                2000,
+                "[2D LiDAR] TF lookup failed from '%s' to '%s': %s",
+                base_frame_.c_str(),
+                msg->header.frame_id.c_str(),
+                ex.what()
+            );
             return;
         }
     }

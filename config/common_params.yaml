@@ -75,7 +75,7 @@
       target_2d_points: 200
 
     lidar_2d:
-      enable: false
+      enable: true
       deskew: true
       topic: "/lakibeam/scan"
       frame_id: "lakibeam_frame"
