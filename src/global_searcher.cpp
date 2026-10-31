@@ -129,6 +129,8 @@ PoseCandidate GlobalSearcher::search(
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
 
+    refined_pose.yaw = normalizeAngle(refined_pose.yaw);
+
     RCLCPP_INFO(
         logger_,
         "[GlobalSearch] Complete. Best Pose: (%.2f, %.2f, %.2f rad), Cost: %.4f",
@@ -261,6 +263,8 @@ PoseCandidate GlobalSearcher::search(
         out_best_cost = std::numeric_limits<float>::max();
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
+
+    refined_pose.yaw = normalizeAngle(refined_pose.yaw);
 
     RCLCPP_INFO(
         logger_,

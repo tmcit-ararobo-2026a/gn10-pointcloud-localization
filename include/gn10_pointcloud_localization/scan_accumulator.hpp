@@ -36,26 +36,10 @@ public:
     bool delta(int64_t from, int64_t to, double& result) const
     {
         if (samples_.empty()) return false;
+        if (from <= 0 || to <= 0) return false;
         double a = 0.0, b = 0.0;
-        bool ok_a = at(from, a);
-        bool ok_b = at(to, b);
-        if (!ok_a) {
-            if (from >= samples_.back().stamp) {
-                const auto& ref = samples_.back();
-                a = ref.angle + ref.rate * seconds(from - ref.stamp);
-            } else {
-                const auto& ref = samples_.front();
-                a = ref.angle + ref.rate * seconds(from - ref.stamp);
-            }
-        }
-        if (!ok_b) {
-            if (to >= samples_.back().stamp) {
-                const auto& ref = samples_.back();
-                b = ref.angle + ref.rate * seconds(to - ref.stamp);
-            } else {
-                const auto& ref = samples_.front();
-                b = ref.angle + ref.rate * seconds(to - ref.stamp);
-            }
+        if (!at(from, a) || !at(to, b)) {
+            return false;
         }
         result = b - a;
         return true;
