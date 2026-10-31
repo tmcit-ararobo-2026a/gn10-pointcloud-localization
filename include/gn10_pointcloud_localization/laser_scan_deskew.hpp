@@ -101,7 +101,7 @@ inline std::vector<float> deskewLaserScan(
                 start_stamp_ns + static_cast<int64_t>(i * time_inc * 1e9);
             double beam_imu_angle = 0.0;
             if (yaw_history.get_angle_at(beam_stamp_ns, beam_imu_angle)) {
-                const float delta_yaw = static_cast<float>(ref_imu_angle - beam_imu_angle);
+                const float delta_yaw = static_cast<float>(beam_imu_angle - ref_imu_angle);
                 const float cos_d = std::cos(delta_yaw);
                 const float sin_d = std::sin(delta_yaw);
                 const float x_rot = cos_d * xb - sin_d * yb;
@@ -125,3 +125,4 @@ inline std::vector<float> deskewLaserScan(
 }
 
 }  // namespace gn10_pointcloud_localization
+
