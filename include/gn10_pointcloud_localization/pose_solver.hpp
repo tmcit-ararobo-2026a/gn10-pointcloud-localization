@@ -50,6 +50,9 @@ struct MatchingParams {
     float inlier_dist_thresh{0.08f};
     int min_inliers{60};
     float inlier_cost_thresh{0.05f};
+    float weight_2d_lidar{0.40f};
+    int min_2d_points{30};
+    int target_2d_points{200};
 
     void useESDFBounds(const ESDFHeader& header)
     {
@@ -157,6 +160,11 @@ public:
     };
     const ProfileMetrics& lastProfileMetrics() const { return last_metrics_; }
     int obstacleCount() const { return obstacle_count_; }
+    int obstacleCount3D() const { return num_3d_obstacles_; }
+    int obstacleCount2D() const { return num_2d_obstacles_; }
+    float lastCost3D() const { return last_cost_3d_; }
+    float lastCost2D() const { return last_cost_2d_; }
+    float lastWeight2D() const { return last_weight_2d_; }
 
 private:
     int max_points_;
@@ -176,6 +184,11 @@ private:
     float* h_in_{nullptr};
     int ground_count_{0};
     int obstacle_count_{0};
+    int num_3d_obstacles_{0};
+    int num_2d_obstacles_{0};
+    float last_cost_3d_{0.0f};
+    float last_cost_2d_{0.0f};
+    float last_weight_2d_{0.0f};
     bool use_esdf_{false};
     ProfileMetrics last_metrics_{};
     bool matchObstacleCloud(
