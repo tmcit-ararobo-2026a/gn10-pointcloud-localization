@@ -40,7 +40,12 @@ bool launchESDFMatcher(
     bool extract_dynamic     = true,
     int* out_inlier_count    = nullptr,
     float* out_inlier_cost   = nullptr,
-    float inlier_dist_thresh = 0.08f
+    float inlier_dist_thresh = 0.08f,
+    int num_3d_points        = -1,
+    int num_2d_points        = 0,
+    float weight_2d          = 0.0f,
+    float* out_cost_3d       = nullptr,
+    float* out_cost_2d       = nullptr
 );
 
 // 確定姿勢を用いた動的点群の高速抽出 (Pose探索をスキップ)

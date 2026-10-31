@@ -122,6 +122,9 @@ bool PoseSolver::processPointCloud(
     last_metrics_.time_ground_filter_ms =
         std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();
 
+    num_3d_obstacles_ = h_obstacle_count;
+    num_2d_obstacles_ = 0;
+
     // 2D LiDAR などの追加点群 (base_link 座標系) を障害物バッファにマージ
     if (extra_base_link_points && !extra_base_link_points->empty()) {
         int extra_points = static_cast<int>(extra_base_link_points->size() / 3);
@@ -133,6 +136,7 @@ bool PoseSolver::processPointCloud(
                 cudaMemcpyHostToDevice,
                 stream_
             );
+            num_2d_obstacles_ = extra_points;
             h_obstacle_count += extra_points;
             cudaStreamSynchronize(stream_);
         }
@@ -234,6 +238,9 @@ bool PoseSolver::processPointCloud(
     last_metrics_.time_ground_filter_ms =
         std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();
 
+    num_3d_obstacles_ = h_obstacle_count;
+    num_2d_obstacles_ = 0;
+
     // 2D LiDAR などの追加点群 (base_link 座標系) を障害物バッファにマージ
     if (extra_base_link_points != nullptr && !extra_base_link_points->empty()) {
         int extra_points = static_cast<int>(extra_base_link_points->size() / 3);
@@ -245,6 +252,7 @@ bool PoseSolver::processPointCloud(
                 cudaMemcpyHostToDevice,
                 stream_
             );
+            num_2d_obstacles_ = extra_points;
             h_obstacle_count += extra_points;
             cudaStreamSynchronize(stream_);
         }
@@ -279,6 +287,21 @@ bool PoseSolver::matchObstacleCloud(
     bool pose_matched = false;
     auto t_match_start = std::chrono::high_resolution_clock::now();
     if (h_obstacle_count > 50) {
+        // 2D LiDAR の有効点数および視野に基づく動的重み付け計算
+        float effective_weight_2d = 0.0f;
+        if (num_2d_obstacles_ >= match_params.min_2d_points && num_3d_obstacles_ >= 50) {
+            float fov_scale = std::min(
+                1.0f,
+                static_cast<float>(num_2d_obstacles_) / static_cast<float>(match_params.target_2d_points)
+            );
+            effective_weight_2d = match_params.weight_2d_lidar * fov_scale;
+        } else if (num_2d_obstacles_ >= match_params.min_2d_points && num_3d_obstacles_ < 50) {
+            effective_weight_2d = 1.0f;
+        } else {
+            effective_weight_2d = 0.0f;
+        }
+        last_weight_2d_ = effective_weight_2d;
+
         PoseCandidate coarse_pose{};
         float coarse_cost = std::numeric_limits<float>::max();
         std::vector<float> ignored_dynamic;
@@ -317,7 +340,12 @@ bool PoseSolver::matchObstacleCloud(
                 output_coarse_dynamic,
                 step_inlier_count,
                 step_inlier_cost,
-                match_params.inlier_dist_thresh
+                match_params.inlier_dist_thresh,
+                num_3d_obstacles_,
+                num_2d_obstacles_,
+                effective_weight_2d,
+                (!match_params.fine_refine) ? &last_cost_3d_ : nullptr,
+                (!match_params.fine_refine) ? &last_cost_2d_ : nullptr
             );
         } else {
             pose_matched = launchFieldSDFMatcher(
@@ -386,7 +414,12 @@ bool PoseSolver::matchObstacleCloud(
                         is_final_level,
                         fine_inlier_count,
                         fine_inlier_cost,
-                        match_params.inlier_dist_thresh
+                        match_params.inlier_dist_thresh,
+                        num_3d_obstacles_,
+                        num_2d_obstacles_,
+                        effective_weight_2d,
+                        is_final_level ? &last_cost_3d_ : nullptr,
+                        is_final_level ? &last_cost_2d_ : nullptr
                     );
                 } else {
                     pose_matched = launchFieldSDFMatcher(

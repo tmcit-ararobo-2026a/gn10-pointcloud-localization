@@ -166,6 +166,13 @@ if(BUILD_TESTING)
   ament_target_dependencies(scan_2d_deskew_test sensor_msgs rclcpp)
   target_compile_options(scan_2d_deskew_test PRIVATE -UNDEBUG)
   add_test(NAME scan_2d_deskew COMMAND scan_2d_deskew_test)
+
+  add_executable(independent_2d_cost_test tests/test_independent_2d_cost.cpp)
+  target_include_directories(independent_2d_cost_test PRIVATE include)
+  target_link_libraries(independent_2d_cost_test gn10_cuda_lib gn10_esdf_lib CUDA::cudart)
+  target_compile_options(independent_2d_cost_test PRIVATE -UNDEBUG)
+  add_test(NAME independent_2d_cost COMMAND independent_2d_cost_test)
+  set_tests_properties(independent_2d_cost PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # 他のノードや環境変数のためにライブラリをエクスポート
