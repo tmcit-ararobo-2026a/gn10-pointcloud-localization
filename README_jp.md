@@ -217,7 +217,7 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 | `realsense.input_topic` | `/realsense/cropped_cloud` | RealSense の入力点群トピック（base_link 変換対応） |
 | `realsense.output_topic` | `/realsense/dynamic_cloud` | ESDF 背景除去後の動的点群出力トピック |
 
-`start_lakibeam_tf`は既定でfalseです。後方LiDARの静的TFが必要な場合にtrueを指定します。
+`start_lakibeam_tf`は既定でtrueです（配置: $x = -0.33\,\text{m}$, $y = 0.0\,\text{m}$, $z = 0.08\,\text{m}$, $\text{yaw} = \pi$ rad）。外部からTFを配信する場合はfalseを指定します。
 
 ---
 
