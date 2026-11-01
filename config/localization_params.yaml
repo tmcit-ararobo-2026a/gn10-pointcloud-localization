@@ -2,6 +2,7 @@
   ros__parameters:
     # Default/localization experiment overrides
     initial_pose:
+      use_for_local_search: false
       x: 0.0
       y: 0.0
       yaw: 0.0

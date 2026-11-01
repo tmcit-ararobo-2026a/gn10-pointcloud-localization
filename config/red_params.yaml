@@ -4,6 +4,7 @@
     global_search:
       range_yaw_diff: 1.0
     initial_pose:
+      use_for_local_search: true
       x: -4.57
       y: -1.9
       yaw: 1.57
