@@ -4,6 +4,7 @@
 #pragma once
 #include <cuda_runtime.h>
 
+#include <cmath>
 #include <vector>
 
 enum ObjectType { CYLINDER, BOX, VISUAL_BOX };
@@ -33,6 +34,75 @@ struct FieldObject {
 struct PoseCandidate {
     float x, y, yaw;
 };
+
+/**
+ * @brief 3D grid definition for GPU pose candidate generation without H2D candidate transfers.
+ */
+struct SearchGrid {
+    float base_x;
+    float base_y;
+    float base_yaw;
+    float step_xy;
+    float step_yaw;
+    int nx;
+    int ny;
+    int nyaw;
+
+    /**
+     * @brief Returns total number of candidate poses in the 3D grid.
+     */
+    __host__ __device__ inline int totalCandidates() const
+    {
+        return nx * ny * nyaw;
+    }
+
+    /**
+     * @brief Reconstructs candidate pose (rx, ry, ryaw) from a 1D linear index.
+     */
+    __host__ __device__ inline PoseCandidate indexToPose(int pose_idx) const
+    {
+        const int iyaw = pose_idx % nyaw;
+        const int temp = pose_idx / nyaw;
+        const int iy   = temp % ny;
+        const int ix   = temp / ny;
+        return PoseCandidate{
+            base_x + static_cast<float>(ix) * step_xy,
+            base_y + static_cast<float>(iy) * step_xy,
+            base_yaw + static_cast<float>(iyaw) * step_yaw
+        };
+    }
+};
+
+/**
+ * @brief Constructs a SearchGrid from a center pose, half-ranges, and step sizes.
+ */
+inline SearchGrid createSearchGrid(
+    const PoseCandidate& base_pose,
+    float range_x,
+    float range_y,
+    float step_xy,
+    float range_yaw,
+    float step_yaw
+)
+{
+    SearchGrid grid{};
+    grid.base_x   = base_pose.x - range_x;
+    grid.base_y   = base_pose.y - range_y;
+    grid.base_yaw = base_pose.yaw - range_yaw;
+    grid.step_xy  = step_xy;
+    grid.step_yaw = step_yaw;
+    if (step_xy > 0.0f && step_yaw > 0.0f && range_x >= 0.0f && range_y >= 0.0f &&
+        range_yaw >= 0.0f) {
+        grid.nx   = static_cast<int>(std::floor((2.0f * range_x + 1e-5f) / step_xy)) + 1;
+        grid.ny   = static_cast<int>(std::floor((2.0f * range_y + 1e-5f) / step_xy)) + 1;
+        grid.nyaw = static_cast<int>(std::floor((2.0f * range_yaw + 1e-5f) / step_yaw)) + 1;
+    } else {
+        grid.nx   = 0;
+        grid.ny   = 0;
+        grid.nyaw = 0;
+    }
+    return grid;
+}
 
 #ifdef __cplusplus
 extern "C" {
