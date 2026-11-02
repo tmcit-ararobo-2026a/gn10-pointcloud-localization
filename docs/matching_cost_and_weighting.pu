@@ -8,56 +8,57 @@ title 3D & 2D LiDAR Independent Residual Matching Cost Process
 
 start
 
-:Receive 3D LiDAR Obstacles ($N_{3D}$) and 2D LiDAR Obstacles ($N_{2D}$);
+:Receive 3D LiDAR obstacles (N_3D points)
+and 2D LiDAR obstacles (N_2D points);
 
 partition "1. Effective 2D Weight Determination" {
-  if ($N_{2D} \ge \text{min\_2d\_points}\ \mathbf{and}\ N_{3D} \ge \text{min\_3d\_points}$) then (Both Available)
+  if (N_2D >= min_2d_points AND N_3D >= min_3d_points) then (Both Available)
     :Calculate Field-of-View Ratio:
-    $fov\_scale = \min\left(1.0, \frac{N_{2D}}{\text{target\_2d\_points}}\right)$;
+    fov_scale = min(1.0, N_2D / target_2d_points);
     :Scale Configured Weight:
-    $w_{2D} = \text{weight\_2d\_lidar} \times fov\_scale$;
-  elseif ($N_{2D} \ge \text{min\_2d\_points}\ \mathbf{and}\ N_{3D} < \text{min\_3d\_points}$) then (3D Occluded / Degraded)
+    w_2D = weight_2d_lidar * fov_scale;
+  elseif (N_2D >= min_2d_points AND N_3D < min_3d_points) then (3D Occluded / Degraded)
     :Fallback Entirely to 2D LiDAR:
-    $w_{2D} = 1.0$;
+    w_2D = 1.0;
   else (2D Not Reliable / Sparse)
     :Disable 2D Weight:
-    $w_{2D} = 0.0$;
+    w_2D = 0.0;
   endif
 }
 
 partition "2. Independent Residual Cost Evaluation" {
   :Compute Normalized 3D Residual Cost:
-  $C_{3D} = \frac{1}{N_{3D}} \sum_{i=1}^{N_{3D}} \min\left( \text{ESDF}(\mathbf{p}_{3D, i}(\mathbf{T})), \text{max\_dist\_thresh} \right)$;
+  C_3D = (1 / N_3D) * Σ min( ESDF( T * p_3D,i ), max_dist_thresh );
 
-  if ($w_{2D} > 0$) then (Evaluate 2D)
+  if (w_2D > 0.0) then (Evaluate 2D)
     :Compute Normalized 2D Residual Cost:
-    $C_{2D} = \frac{1}{N_{2D}} \sum_{j=1}^{N_{2D}} \min\left( \text{ESDF}(\mathbf{p}_{2D, j}(\mathbf{T})), \text{max\_dist\_thresh} \right)$;
+    C_2D = (1 / N_2D) * Σ min( ESDF( T * p_2D,j ), max_dist_thresh );
   else (Skip 2D)
-    :$C_{2D} = 0.0$;
+    :C_2D = 0.0;
   endif
 
   :Synthesize Composite Cost:
-  $C_{total} = (1.0 - w_{2D}) \cdot C_{3D} + w_{2D} \cdot C_{2D}$;
+  C_total = (1.0 - w_2D) * C_3D + w_2D * C_2D;
 }
 
 partition "3. Inlier Verification & Convergence Check" {
   :Count Inliers:
-  $N_{inlier} = \text{count of points with } \text{ESDF}(\mathbf{p}) \le \text{inlier\_dist\_thresh}$;
+  N_inlier = count of points with ESDF( T * p ) <= inlier_dist_thresh;
   :Compute Average Inlier Cost:
-  $C_{inlier} = \frac{1}{N_{inlier}} \sum_{\mathbf{p} \in \text{inliers}} \text{ESDF}(\mathbf{p})$;
+  C_inlier = (1 / N_inlier) * Σ ESDF( T * p );
 
-  if ($C_{total} < \text{cost\_threshold}$) then (Accepted by Composite Cost)
+  if (C_total < cost_threshold) then (Accepted by Composite Cost)
     :Mark Localization Succeeded;
-    :Update Position & Reset Lost Frame Counter;
-  elseif ($N_{inlier} \ge \text{min\_inliers}\ \mathbf{and}\ C_{inlier} < \text{inlier\_cost\_thresh}$) then (Accepted by Inlier Criteria)
+    :Update Position & Reset lost_frame_count = 0;
+  elseif (N_inlier >= min_inliers AND C_inlier < inlier_cost_thresh) then (Accepted by Inlier Criteria)
     :Mark Localization Succeeded;
-    :Update Position & Reset Lost Frame Counter;
+    :Update Position & Reset lost_frame_count = 0;
   else (Rejected)
     :Increment lost_frame_count;
-    if (lost_frame_count \ge lost_count_thresh) then (Lost Limit Exceeded)
-      :Trigger Global Search (Yaw-Constrained);
+    if (lost_frame_count >= lost_count_thresh) then (Lost Limit Exceeded)
+      :Trigger Global Recovery Search (Yaw-Constrained);
     else (Transient Drop)
-      :Dead Reckoning with IMU & Velocity;
+      :Dead Reckoning with IMU & Velocity Extrapolation;
     endif
   endif
 }
