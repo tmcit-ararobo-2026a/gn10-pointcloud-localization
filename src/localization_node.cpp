@@ -82,8 +82,10 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("topics.output_pose", "/platform_constraint");
     this->declare_parameter("topics.output_markers", "/field_map_markers");
     this->declare_parameter("topics.output_esdf_map", "/esdf_map");
+    this->declare_parameter("topics.output_telemetry", "/localization/telemetry");
     this->declare_parameter("topics.fused_prior", "/platform_constraint");
     this->declare_parameter("publish_tf", true);
+    this->declare_parameter("telemetry.enable", true);
     this->declare_parameter("fusion.use_prior", false);
     this->declare_parameter("fusion.prior_max_age_s", 0.25);
 
@@ -306,6 +308,8 @@ void LocalizationNode::declareAndGetParameters()
     );
     lost_threshold_count_ = this->get_parameter("global_search.lost_count_thresh").as_int();
     publish_tf_           = this->get_parameter("publish_tf").as_bool();
+    topic_telemetry_      = this->get_parameter("topics.output_telemetry").as_string();
+    telemetry_enable_     = this->get_parameter("telemetry.enable").as_bool();
     use_fused_prior_      = this->get_parameter("fusion.use_prior").as_bool();
     prior_max_age_s_      = this->get_parameter("fusion.prior_max_age_s").as_double();
 
@@ -640,6 +644,12 @@ void LocalizationNode::setupROSInterfaces()
             topic_esdf_map_, rclcpp::QoS(1).transient_local().reliable()
         );
     }
+    if (telemetry_enable_) {
+        pub_telemetry_ = this->create_publisher<gn10_pointcloud_localization::msg::LocalizationTelemetry>(
+            topic_telemetry_, 10
+        );
+        RCLCPP_INFO(this->get_logger(), "Publishing localization telemetry on: %s", topic_telemetry_.c_str());
+    }
 
     if (use_2d_lidar_) {
         sub_2d_lidar_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
@@ -972,8 +982,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
     PoseCandidate best_pose;
-    float best_cost = std::numeric_limits<float>::infinity();
-    bool matched    = false;
+    float best_cost      = std::numeric_limits<float>::infinity();
+    bool matched         = false;
+    bool global_recovered = false;
 
     // 2D LiDAR (Lakibeam 1) の点群を取得
     std::vector<float> extra_2d_points;
@@ -1157,7 +1168,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             extra_pts_ptr
         );
 
-        const bool global_recovered =
+        global_recovered =
             isPoseMatchAccepted(active_match_params, best_cost, inlier_count, inlier_cost);
 
         if (global_recovered) {
@@ -1286,6 +1297,59 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     }
     if (need_dynamic) {
         publishCloud(pub_dynamic_, out_header, dynamic_pts);
+    }
+
+    if (telemetry_enable_ && pub_telemetry_) {
+        gn10_pointcloud_localization::msg::LocalizationTelemetry telemetry;
+        telemetry.header.stamp    = reference_stamp;
+        telemetry.header.frame_id = map_frame_;
+
+        telemetry.best_cost   = best_cost;
+        telemetry.cost_3d     = solver_->lastCost3D();
+        telemetry.cost_2d     = solver_->lastCost2D();
+        telemetry.weight_2d   = solver_->lastWeight2D();
+        telemetry.inlier_cost = inlier_cost;
+
+        telemetry.inlier_count = inlier_count;
+        const int total_obs    = solver_->obstacleCount();
+        telemetry.inlier_ratio = total_obs > 0
+            ? static_cast<float>(inlier_count) / static_cast<float>(total_obs)
+            : 0.0f;
+        telemetry.obstacle_count_3d    = solver_->obstacleCount3D();
+        telemetry.obstacle_count_2d    = solver_->obstacleCount2D();
+        telemetry.obstacle_count_total = total_obs;
+
+        telemetry.linear_speed    = std::hypot(velocity_x_, velocity_y_);
+        telemetry.velocity_x      = velocity_x_;
+        telemetry.velocity_y      = velocity_y_;
+        telemetry.search_range_xy = active_match_params.range_xy;
+        telemetry.search_range_yaw = active_match_params.range_yaw;
+
+        telemetry.match_accepted   = matched && !is_lost_;
+        telemetry.is_lost          = is_lost_;
+        telemetry.lost_frame_count = lost_frame_count_;
+        telemetry.global_recovered = global_recovered;
+
+        pub_telemetry_->publish(telemetry);
+
+        RCLCPP_INFO_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            1000,
+            "[Telemetry] cost: %.4f (3D: %.4f, 2D: %.4f, w2d: %.2f) | inliers: %d/%d (%.1f%%, cost: %.4f) | v: %.2f m/s (xy_rng: %.2fm, yaw_rng: %.2frad) | status: %s",
+            best_cost,
+            telemetry.cost_3d,
+            telemetry.cost_2d,
+            telemetry.weight_2d,
+            inlier_count,
+            total_obs,
+            telemetry.inlier_ratio * 100.0f,
+            inlier_cost,
+            telemetry.linear_speed,
+            active_match_params.range_xy,
+            active_match_params.range_yaw,
+            is_lost_ ? "LOST" : (matched ? "TRACKING" : "DROPPED")
+        );
     }
 
     auto t_cb_end      = std::chrono::high_resolution_clock::now();
@@ -1829,7 +1893,8 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         "frames.map_frame", "frames.base_frame",
         "topics.input_cloud", "topics.input_imu", "topics.output_dynamic",
         "topics.output_ground", "topics.output_obstacle", "topics.output_localization_success",
-        "topics.output_pose", "topics.output_markers", "topics.output_esdf_map", "topics.fused_prior",
+        "topics.output_pose", "topics.output_markers", "topics.output_esdf_map", "topics.output_telemetry",
+        "topics.fused_prior",
         "topics.output_2d_deskewed",
         "scan_accumulation.window_s", "scan_accumulation.timestamp_field",
         "scan_accumulation.timestamp_scale", "scan_accumulation.timestamp_relative",
@@ -1950,6 +2015,13 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             dynamic_yaw_factor_ = static_cast<float>(param.as_double());
         } else if (name == "matching_params.dynamic_yaw_max_range") {
             dynamic_yaw_max_range_ = static_cast<float>(param.as_double());
+        } else if (name == "telemetry.enable") {
+            telemetry_enable_ = param.as_bool();
+            RCLCPP_INFO(
+                this->get_logger(),
+                "[DynamicReconfigure] 'telemetry.enable' updated to: %s",
+                telemetry_enable_ ? "true" : "false"
+            );
 
         // --- filter_params ---
         } else if (name == "filter_params.max_range") {

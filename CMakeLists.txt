@@ -19,6 +19,12 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 find_package(ament_cmake REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/LocalizationTelemetry.msg"
+  DEPENDENCIES std_msgs
+)
 
 if(BUILD_RUNTIME_NODES)
 if(BUILD_GPU_NODES)
@@ -91,7 +97,10 @@ target_compile_options(gn10_pointcloud_localization_node PRIVATE
   $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>
 )
 
+rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_typesupport_cpp")
+
 target_link_libraries(gn10_pointcloud_localization_node
+  "${cpp_typesupport_target}"
   gn10_cuda_lib
   gn10_esdf_lib
   nlohmann_json::nlohmann_json
@@ -145,6 +154,11 @@ install(TARGETS
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  scripts/plot_telemetry.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 if(BUILD_TESTING)
   enable_testing()
   add_executable(dynamic_filter_test tests/test_dynamic_filter.cu)
@@ -176,6 +190,7 @@ if(BUILD_TESTING)
 endif()
 
 # 他のノードや環境変数のためにライブラリをエクスポート
+ament_export_dependencies(rosidl_default_runtime)
 ament_export_libraries(gn10_cuda_lib gn10_esdf_lib)
 
 endif()

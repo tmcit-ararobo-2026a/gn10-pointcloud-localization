@@ -214,25 +214,28 @@ Shared settings are configured in [`config/common_params.yaml`](config/common_pa
 | `scan_accumulation.timestamp_field` | `timestamp` | Acquisition timestamp field name for each point in PointCloud2. |
 | `scan_accumulation.timestamp_scale` | `1.0e-9` | Scale factor to convert point timestamps to seconds. Matches Livox absolute nanosecond timestamps. |
 | `scan_accumulation.timestamp_relative` | `false` | When true, treats point timestamps as relative time offsets from the header stamp. |
-| `matching_params.search_range_xy` | `0.30` | Search range during local tracking [m] ($\pm 0.30\text{ m}$). |
+| `matching_params.search_range_xy` | `0.30` | Search range during local tracking [m] ($\pm 0.30\text{ m}$). Adaptively expands up to 1.5x during high-speed motion ($\ge 2.0\text{ m/s}$). |
 | `matching_params.search_step_xy` | `0.05` | Grid step size during local tracking [m]. |
-| `matching_params.search_range_yaw` | `0.60` | Rotation search range during local tracking [rad] ($\approx \pm 34^\circ$). |
-| `matching_params.search_step_yaw` | `0.05` | Rotation step size during local tracking [rad] ($\approx 2.8^\circ$). |
+| `matching_params.search_range_yaw` | `0.15` | Rotation search range during local tracking [rad] ($\approx \pm 8.6^\circ$). Prevents false locking in symmetric environments. |
+| `matching_params.search_step_yaw` | `0.03` | Rotation step size during local tracking [rad] ($\approx 1.7^\circ$). |
 | `matching_params.use_map_bounds` | `true` | Evaluates XY bounds from map headers during PCD/ESDF loading. Set to false to manually restrict bounds. |
 | `matching_params.fine_refine` | `true` | Performs an additional 125 candidate micro-searches around the best solution to achieve sub-voxel precision. |
 | `matching_params.fine_refine_levels` | `2` | Number of micro-search iterations. 2 steps refine an XY step of 0.05m down to 0.002m. |
-| `matching_params.cost_threshold` | `0.165` | Average residual cost threshold for matching failure (increments lost count). |
+| `matching_params.cost_threshold` | `0.165` | Average residual cost acceptance threshold [m]. |
 | `matching_params.inlier_dist_thresh` | `0.08` | Classifies points within 8 cm of the map surface as inliers. |
-| `matching_params.min_inliers` | `60` | Minimum required inlier count for a successful match. |
-| `matching_params.weight_2d_lidar` | `0.40` ~ `0.50` | Maximum weight assigned to 2D LiDAR residual cost. |
+| `matching_params.min_inliers` | `60` | Minimum required inlier count for inlier acceptance criteria. |
+| `matching_params.inlier_cost_thresh` | `0.01` | Maximum allowable average inlier distance [m] for inlier acceptance. |
+| `matching_params.min_inlier_ratio` | `0.35` | Minimum ratio of inlier points to total obstacles ($N_{\text{inlier}} / N_{\text{total}}$). Prevents false locking on partial walls. |
+| `matching_params.max_inlier_accept_cost` | `0.22` | Upper total composite cost guard for inlier fallback acceptance. |
+| `matching_params.weight_2d_lidar` | `0.50` | Maximum weight assigned to 2D LiDAR residual cost. |
 | `matching_params.min_2d_points` | `30` | Minimum 2D obstacle points required to include 2D cost. |
 | `matching_params.target_2d_points` | `200` | Target 2D points for 100% field-of-view weighting. |
 | `matching_params.min_3d_points` | `50` | Minimum 3D obstacle point threshold; falls back to 100% 2D if 3D drops below this. |
 | `matching_params.dynamic_yaw_expansion` | `true` | Automatically expands yaw search window when rotating rapidly. |
 | `matching_params.dynamic_yaw_omega_thresh` | `0.50` | Angular velocity threshold [rad/s] triggering dynamic yaw window expansion. |
 | `matching_params.dynamic_yaw_factor` | `0.15` | Proportional factor [s] for dynamic yaw search expansion. |
-| `matching_params.dynamic_yaw_max_range` | `0.35` | Maximum clamped yaw search range [rad]. |
-| `velocity_estimation.enable` | `true` | Enables constant-velocity motion extrapolation between scans. |
+| `matching_params.dynamic_yaw_max_range` | `0.40` | Maximum clamped yaw search range [rad]. |
+| `velocity_estimation.enable` | `true` | Enables constant-velocity motion extrapolation with EMA smoothing ($\alpha = 0.6$). |
 | `velocity_estimation.window_sec` | `0.20` | History window [s] for velocity differentiation. |
 | `velocity_estimation.min_dt_sec` | `0.15` | Minimum delta time [s] for computing linear velocity. |
 | `velocity_estimation.max_dt_sec` | `0.50` | Maximum delta time [s] allowed for velocity extrapolation. |
@@ -242,18 +245,36 @@ Shared settings are configured in [`config/common_params.yaml`](config/common_pa
 | `lidar_2d.topic` | `/lakibeam/scan` | Input LaserScan topic name. |
 | `lidar_2d.frame_id` | `lakibeam_frame` | Fallback TF frame ID for 2D LiDAR. |
 | `lidar_2d.tf_wait_sec` | `0.05` | Timeout [s] for 2D LiDAR TF transform lookup. |
+| `global_search.top_k_candidates` | `4` | Number of distinct local minima extracted via NMS (dist $\ge 1.0\text{ m}$ or yaw $\ge 0.5\text{ rad}$) for refinement. |
 | `global_search.lost_count_thresh` | `10` | Number of consecutive failed frames before triggering a global full-area search. |
+| `topics.output_telemetry` | `"/localization/telemetry"` | Telemetry and metrics output topic (`LocalizationTelemetry`). |
+| `telemetry.enable` | `true` | Enable ~50Hz telemetry publishing for tuning and live monitoring. |
 
 For detailed documentation, architecture diagrams, and tuning guidelines, see:
 - [docs/parameter_tuning_guide.md](docs/parameter_tuning_guide.md)
 - [docs/pipeline_flow_and_parameters.pu](docs/pipeline_flow_and_parameters.pu)
 - [docs/matching_cost_and_weighting.pu](docs/matching_cost_and_weighting.pu)
 
-### Localization Status Topic Settings
+### Localization Status & Telemetry Topics
 
 | Parameter | Default | Purpose |
 | --- | --- | --- |
 | `topics.output_localization_success` | `/robot/operation/localization_success` | Topic name for localization success boolean (`std_msgs/msg/Bool`). |
+| `topics.output_telemetry` | `/localization/telemetry` | Topic name for real-time telemetry (`gn10_pointcloud_localization/msg/LocalizationTelemetry`). |
+
+### Telemetry Visualization & Tuning Tool
+
+The node publishes matching costs, inlier statistics, speeds, and active search windows at ~50Hz on `/localization/telemetry`.
+You can plot these signals in real time using PlotJuggler or the bundled Python tool:
+
+```bash
+# Real-time interactive plotting:
+ros2 run gn10_pointcloud_localization plot_telemetry.py
+
+# Offline CSV recording and plotting:
+ros2 topic echo /localization/telemetry --csv > telemetry.csv
+python3 scripts/plot_telemetry.py --csv telemetry.csv --save analysis.png
+```
 
 ### RealSense Dynamic Extraction Settings
 

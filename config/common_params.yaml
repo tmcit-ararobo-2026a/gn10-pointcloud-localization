@@ -31,7 +31,11 @@
       output_pose: "/platform_constraint"
       output_markers: "/field_map_markers"
       output_esdf_map: "/esdf_map"
+      output_telemetry: "/localization/telemetry"
       fused_prior: "/platform_constraint"
+
+    telemetry:
+      enable: true
 
     publish_tf: true
     fusion:

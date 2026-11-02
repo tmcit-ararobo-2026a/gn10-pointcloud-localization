@@ -28,6 +28,7 @@
 #include "gn10_pointcloud_localization/global_searcher.hpp"
 #include "gn10_pointcloud_localization/laser_scan_deskew.hpp"
 #include "gn10_pointcloud_localization/map_loader.hpp"
+#include "gn10_pointcloud_localization/msg/localization_telemetry.hpp"
 #include "gn10_pointcloud_localization/pose_solver.hpp"
 #include "gn10_pointcloud_localization/scan_accumulator.hpp"
 
@@ -211,9 +212,14 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_platform_pose_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_map_markers_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_esdf_map_;
+    rclcpp::Publisher<gn10_pointcloud_localization::msg::LocalizationTelemetry>::SharedPtr pub_telemetry_;
     rclcpp::TimerBase::SharedPtr map_timer_;
     OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
     std::mutex param_mutex_;
+
+    // Telemetry & Metrics Output
+    bool telemetry_enable_{true};
+    std::string topic_telemetry_{"/localization/telemetry"};
 
     // Benchmark Profiling
     gn10_pointcloud_localization::BenchmarkProfiler profiler_;

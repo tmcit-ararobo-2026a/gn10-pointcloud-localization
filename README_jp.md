@@ -191,25 +191,28 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 | `scan_accumulation.timestamp_field` | `timestamp` | PointCloud2の各点の取得時刻フィールド。 |
 | `scan_accumulation.timestamp_scale` | `1.0e-9` | 各点の取得時刻を秒へ換算する係数。Livoxの絶対ナノ秒時刻に対応。 |
 | `scan_accumulation.timestamp_relative` | `false` | trueの場合、各点の取得時刻を点群ヘッダーからの相対時刻として扱う。 |
-| `matching_params.search_range_xy` | `0.30` | ローカル追従時の探索範囲 [m] (±0.30m)。 |
+| `matching_params.search_range_xy` | `0.30` | ローカル追従時の探索範囲 [m] (±0.30m)。高速移動時（2.0m/s以上）は最大1.5倍まで適応拡大。 |
 | `matching_params.search_step_xy` | `0.05` | ローカル追従時のグリッド刻み幅 [m]。 |
-| `matching_params.search_range_yaw` | `0.60` | ローカル追従時の回転探索幅 [rad] (約 ±34°)。 |
-| `matching_params.search_step_yaw` | `0.05` | ローカル追従時の回転刻み幅 [rad] (約 2.8°)。 |
+| `matching_params.search_range_yaw` | `0.15` | ローカル追従時の回転探索幅 [rad] (約 ±8.6°)。線対称環境での誤収束を防止。 |
+| `matching_params.search_step_yaw` | `0.03` | ローカル追従時の回転刻み幅 [rad] (約 1.7°)。 |
 | `matching_params.use_map_bounds` | `true` | PCD/ESDF読込時に地図ヘッダーのXY範囲を評価範囲に使用。意図的に範囲を制限する場合はfalse。 |
 | `matching_params.fine_refine` | `true` | 最良解の周りでさらに 125 候補の微小探索を行い sub-voxel 精度を向上。 |
 | `matching_params.fine_refine_levels` | `2` | 微小探索の反復回数。XY刻み0.05mなら2段で最終刻み0.002m。 |
-| `matching_params.cost_threshold` | `0.165` | 平均残差がこの値を超えるとマッチング失敗判定 (ロストカウント加算)。 |
+| `matching_params.cost_threshold` | `0.165` | 平均残差がこの値未満であれば合格判定。 |
 | `matching_params.inlier_dist_thresh`| `0.08` | マップ壁面から 8cm 以内の点を Inlier（適合点）と判定。 |
-| `matching_params.min_inliers` | `60` | マッチング成立に必要な最小 Inlier 点数。 |
-| `matching_params.weight_2d_lidar` | `0.40` ~ `0.50` | 2D LiDAR 独立残差項の基本重み係数。 |
+| `matching_params.min_inliers` | `60` | インライア合格判定に必要な最小 Inlier 点数。 |
+| `matching_params.inlier_cost_thresh` | `0.01` | インライア合格判定に必要な平均 Inlier 残差上限 [m]。 |
+| `matching_params.min_inlier_ratio` | `0.35` | 全障害物点に対する最小インライア比率（インライア点数 / 全障害物点数）。部分一致による誤ロックを防止。 |
+| `matching_params.max_inlier_accept_cost` | `0.22` | インライア合格判定時の全体コスト上限ガード。 |
+| `matching_params.weight_2d_lidar` | `0.50` | 2D LiDAR 独立残差項の基本重み係数。 |
 | `matching_params.min_2d_points` | `30` | 2D 残差項を有効化するための最小 2D 障害物点数。 |
 | `matching_params.target_2d_points` | `200` | 100% 視野角重み付けとなる基準 2D 点数。 |
 | `matching_params.min_3d_points` | `50` | 最小 3D 障害物点数。これ未満で 2D が有効な場合は 2D 重み 1.0 にフォールバック。 |
 | `matching_params.dynamic_yaw_expansion` | `true` | 急旋回時に自動で Yaw 探索窓を動的拡大するフラグ。 |
 | `matching_params.dynamic_yaw_omega_thresh` | `0.50` | 動的 Yaw 探索窓拡大を発動する角速度閾値 [rad/s]。 |
 | `matching_params.dynamic_yaw_factor` | `0.15` | 角速度 $|\omega_z|$ に乗じる Yaw 探索拡大係数 [s]。 |
-| `matching_params.dynamic_yaw_max_range` | `0.35` | 動的 Yaw 探索窓の上限クランプ値 [rad]。 |
-| `velocity_estimation.enable` | `true` | スキャン間の等速運動外挿と並進速度推定の有効化。 |
+| `matching_params.dynamic_yaw_max_range` | `0.40` | 動的 Yaw 探索窓の上限クランプ値 [rad]。 |
+| `velocity_estimation.enable` | `true` | スキャン間の等速運動外挿と並進速度推定（EMA 平滑化係数 0.6）の有効化。 |
 | `velocity_estimation.window_sec` | `0.20` | 並進速度の差分計算に用いる履歴保持時間窓 [s]。 |
 | `velocity_estimation.min_dt_sec` | `0.15` | 並進速度計算を行う最小経過時間 [s]。 |
 | `velocity_estimation.max_dt_sec` | `0.50` | 速度外挿を許容する最大経過時間 [s]。 |
@@ -219,7 +222,10 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 | `lidar_2d.topic` | `/lakibeam/scan` | 入力 LaserScan トピック名。 |
 | `lidar_2d.frame_id` | `lakibeam_frame` | 2D LiDAR のフォールバック TF フレーム名。 |
 | `lidar_2d.tf_wait_sec` | `0.05` | 2D LiDAR の TF 変換待機タイムアウト [s]。 |
+| `global_search.top_k_candidates` | `4` | グローバル復帰探索時の NMS 上位極小候補抽出数（近傍抑制: 距離 1.0m 以上または角度 0.5rad 以上）。 |
 | `global_search.lost_count_thresh` | `10` | 連続で失敗判定となった際にグローバル全域探索へ移行するフレーム数。 |
+| `topics.output_telemetry` | `"/localization/telemetry"` | 調整・解析用テレメトリトピック名 (`LocalizationTelemetry`)。 |
+| `telemetry.enable` | `true` | テレメトリ配信の有効化。 |
 
 詳細なパラメータ解説および処理フロー図（PlantUML）は下記を参照してください:
 - [docs/parameter_tuning_guide.md](docs/parameter_tuning_guide.md)
@@ -231,6 +237,21 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 | パラメータ | 既定値 | 用途 |
 | :--- | :--- | :--- |
 | `topics.output_localization_success` | `/robot/operation/localization_success` | 自己位置推定の成否（`std_msgs/msg/Bool`）を出力するトピック名 |
+| `topics.output_telemetry` | `/localization/telemetry` | 調整・解析用テレメトリ（`LocalizationTelemetry`）を出力するトピック名 |
+
+### テレメトリ可視化とパラメータ調整
+
+ノードは各フレーム（約50Hz）で残差コスト、3D/2D寄与度、インライア比率、速度、探索窓を `/localization/telemetry` トピックへ配信します。  
+PlotJuggler や付属のスクリプトでリアルタイムに波形をグラフ化し、パラメータの最適化を行えます。
+
+```bash
+# リアルタイムグラフ表示
+ros2 run gn10_pointcloud_localization plot_telemetry.py
+
+# CSV記録とオフライン解析
+ros2 topic echo /localization/telemetry --csv > telemetry.csv
+python3 scripts/plot_telemetry.py --csv telemetry.csv --save analysis.png
+```
 
 ### RealSense 動的抽出の設定
 
