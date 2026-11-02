@@ -115,6 +115,7 @@ private:
     float global_step_xy_{0.30f};
     float global_step_yaw_{0.2618f};
     int global_downsample_stride_{2};
+    int global_top_k_candidates_{4};
     int lost_threshold_count_{5};
     bool publish_tf_{true};
     bool use_fused_prior_{false};

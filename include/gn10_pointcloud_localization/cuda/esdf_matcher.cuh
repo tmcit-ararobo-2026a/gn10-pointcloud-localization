@@ -45,7 +45,8 @@ bool launchESDFMatcher(
     int num_2d_points        = 0,
     float weight_2d          = 0.0f,
     float* out_cost_3d       = nullptr,
-    float* out_cost_2d       = nullptr
+    float* out_cost_2d       = nullptr,
+    std::vector<float>* out_all_costs = nullptr
 );
 
 // 確定姿勢を用いた動的点群の高速抽出 (Pose探索をスキップ)

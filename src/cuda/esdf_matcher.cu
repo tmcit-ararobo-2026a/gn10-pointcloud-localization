@@ -522,7 +522,8 @@ bool launchESDFMatcher(
     int num_2d_points,
     float weight_2d,
     float* out_cost_3d,
-    float* out_cost_2d
+    float* out_cost_2d,
+    std::vector<float>* out_all_costs
 )
 {
     if (num_points <= 0 || !g_esdf_loaded) return false;
@@ -614,6 +615,16 @@ bool launchESDFMatcher(
         cudaMemcpyDeviceToHost,
         stream
     );
+    if (out_all_costs != nullptr) {
+        out_all_costs->resize(static_cast<size_t>(num_candidates));
+        cudaMemcpyAsync(
+            out_all_costs->data(),
+            d_costs,
+            num_candidates * sizeof(float),
+            cudaMemcpyDeviceToHost,
+            stream
+        );
+    }
 
     cudaStreamSynchronize(stream);
 

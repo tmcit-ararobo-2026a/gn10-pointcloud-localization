@@ -17,6 +17,7 @@ struct GlobalSearchConfig {
     float step_xy{0.30f};
     float step_yaw{0.2618f};
     int downsample_stride{2};
+    int top_k_candidates{4};
 };
 
 class GlobalSearcher
@@ -46,8 +47,9 @@ public:
         float prior_yaw,
         float max_yaw_diff,
         float& out_best_cost,
-        int* out_inlier_count = nullptr,
-        float* out_inlier_cost = nullptr
+        int* out_inlier_count                            = nullptr,
+        float* out_inlier_cost                           = nullptr,
+        const std::vector<float>* extra_base_link_points = nullptr
     );
 
     PoseCandidate search(
@@ -62,8 +64,9 @@ public:
         float prior_yaw,
         float max_yaw_diff,
         float& out_best_cost,
-        int* out_inlier_count = nullptr,
-        float* out_inlier_cost = nullptr
+        int* out_inlier_count                            = nullptr,
+        float* out_inlier_cost                           = nullptr,
+        const std::vector<float>* extra_base_link_points = nullptr
     );
 
 private:
