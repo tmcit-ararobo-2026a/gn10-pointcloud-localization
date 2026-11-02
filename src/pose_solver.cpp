@@ -27,6 +27,7 @@ PoseSolver::PoseSolver(int max_points) : max_points_(max_points)
     cudaMalloc(&d_transform_, 12 * sizeof(float));
 
     cudaMallocHost(&h_in_, max_points_ * 3 * sizeof(float));
+    cudaMallocHost(&h_timed_in_, max_points_ * sizeof(TimedScanPoint));
 }
 
 PoseSolver::~PoseSolver()
@@ -46,6 +47,7 @@ PoseSolver::~PoseSolver()
     cudaFree(d_transform_);
 
     cudaFreeHost(h_in_);
+    cudaFreeHost(h_timed_in_);
 }
 
 void PoseSolver::setMap(const std::vector<FieldObject>& host_map)
@@ -77,7 +79,8 @@ bool PoseSolver::processPointCloud(
     float& out_best_cost,
     int* out_inlier_count,
     float* out_inlier_cost,
-    const std::vector<float>* extra_base_link_points
+    const std::vector<float>* extra_base_link_points,
+    bool extract_dynamic
 )
 {
     int num_points  = static_cast<int>(h_raw_cloud.size() / 3);
@@ -155,7 +158,8 @@ bool PoseSolver::processPointCloud(
         out_best_pose,
         out_best_cost,
         out_inlier_count,
-        out_inlier_cost
+        out_inlier_cost,
+        extract_dynamic
     );
 }
 
@@ -173,7 +177,8 @@ bool PoseSolver::processPointCloud(
     float& out_best_cost,
     int* out_inlier_count,
     float* out_inlier_cost,
-    const std::vector<float>* extra_base_link_points
+    const std::vector<float>* extra_base_link_points,
+    bool extract_dynamic
 )
 {
     int num_points = static_cast<int>(timed_points.size());
@@ -193,9 +198,10 @@ bool PoseSolver::processPointCloud(
     last_metrics_ = ProfileMetrics{};
     auto t_gf_start = std::chrono::high_resolution_clock::now();
 
-    // タイムスタンプ付き点群および静的変換・IMUサンプルのGPU非同期転送
+    // Stage timed scan points into page-locked (pinned) host buffer for true async H2D transfer
+    std::memcpy(h_timed_in_, timed_points.data(), num_points * sizeof(TimedScanPoint));
     cudaMemcpyAsync(
-        d_timed_in_, timed_points.data(), num_points * sizeof(TimedScanPoint), cudaMemcpyHostToDevice, stream_
+        d_timed_in_, h_timed_in_, num_points * sizeof(TimedScanPoint), cudaMemcpyHostToDevice, stream_
     );
     cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
 
@@ -271,7 +277,8 @@ bool PoseSolver::processPointCloud(
         out_best_pose,
         out_best_cost,
         out_inlier_count,
-        out_inlier_cost
+        out_inlier_cost,
+        extract_dynamic
     );
 }
 
@@ -309,9 +316,11 @@ bool PoseSolver::matchObstacleCloud(
     PoseCandidate& out_best_pose,
     float& out_best_cost,
     int* out_inlier_count,
-    float* out_inlier_cost
+    float* out_inlier_cost,
+    bool extract_dynamic
 )
 {
+    out_dynamic_pts.clear();
     bool pose_matched = false;
     auto t_match_start = std::chrono::high_resolution_clock::now();
     if (h_obstacle_count > match_params.min_3d_points) {
@@ -330,7 +339,7 @@ bool PoseSolver::matchObstacleCloud(
         if (!match_params.fine_refine) {
             step_inlier_count = out_inlier_count;
             step_inlier_cost = out_inlier_cost;
-            output_coarse_dynamic = true;
+            output_coarse_dynamic = extract_dynamic;
             coarse_point_stride = 1;
         }
 
@@ -406,6 +415,7 @@ bool PoseSolver::matchObstacleCloud(
                 fine_yaw /= 5.0f;
                 const PoseCandidate center = out_best_pose;
                 const bool is_final_level = (level + 1 == match_params.fine_refine_levels);
+                const bool extract_level_dynamic = is_final_level && extract_dynamic;
 
                 int* fine_inlier_count = nullptr;
                 float* fine_inlier_cost = nullptr;
@@ -434,7 +444,7 @@ bool PoseSolver::matchObstacleCloud(
                         out_best_pose,
                         out_best_cost,
                         out_dynamic_pts,
-                        is_final_level,
+                        extract_level_dynamic,
                         fine_inlier_count,
                         fine_inlier_cost,
                         match_params.inlier_dist_thresh,
@@ -464,7 +474,7 @@ bool PoseSolver::matchObstacleCloud(
                         out_best_pose,
                         out_best_cost,
                         out_dynamic_pts,
-                        is_final_level,
+                        extract_level_dynamic,
                         fine_inlier_count,
                         fine_inlier_cost,
                         match_params.inlier_dist_thresh
@@ -517,8 +527,9 @@ int PoseSolver::prepareObstacleCloud(
     last_metrics_ = ProfileMetrics{};
     auto t_gf_start = std::chrono::high_resolution_clock::now();
 
+    std::memcpy(h_timed_in_, timed_points.data(), num_points * sizeof(TimedScanPoint));
     cudaMemcpyAsync(
-        d_timed_in_, timed_points.data(), num_points * sizeof(TimedScanPoint), cudaMemcpyHostToDevice, stream_
+        d_timed_in_, h_timed_in_, num_points * sizeof(TimedScanPoint), cudaMemcpyHostToDevice, stream_
     );
     cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
 
