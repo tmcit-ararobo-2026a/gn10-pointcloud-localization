@@ -61,7 +61,8 @@ __global__ void evaluateFieldSDFKernel(
     float field_min_x,
     float field_max_x,
     float field_min_y,
-    float field_max_y
+    float field_max_y,
+    int point_stride = 1
 )
 {
     int pose_idx = blockIdx.x;
@@ -85,7 +86,12 @@ __global__ void evaluateFieldSDFKernel(
     const float cos_y = s_pose_params[2];
     const float sin_y = s_pose_params[3];
 
-    for (int i = tid; i < num_points; i += blockDim.x) {
+    int stride = point_stride;
+    if (stride < 1) {
+        stride = 1;
+    }
+
+    for (int i = tid * stride; i < num_points; i += blockDim.x * stride) {
         float lx = cloud[i * 3 + 0];
         float ly = cloud[i * 3 + 1];
         float lz = cloud[i * 3 + 2];
@@ -130,7 +136,12 @@ __global__ void evaluateFieldSDFKernel(
     }
 
     if (tid == 0) {
-        out_costs[pose_idx] = s_cost[0] / static_cast<float>(num_points);
+        const int sampled_points = (num_points + stride - 1) / stride;
+        if (sampled_points > 0) {
+            out_costs[pose_idx] = s_cost[0] / static_cast<float>(sampled_points);
+        } else {
+            out_costs[pose_idx] = max_dist_thresh;
+        }
     }
 }
 
@@ -301,7 +312,8 @@ bool launchFieldSDFMatcher(
     int* out_inlier_count,
     float* out_inlier_cost,
     float inlier_dist_thresh,
-    std::vector<float>* out_all_costs
+    std::vector<float>* out_all_costs,
+    int point_stride
 )
 {
     if (num_points <= 0 || g_num_map_objects <= 0) return false;
@@ -355,7 +367,8 @@ bool launchFieldSDFMatcher(
         field_min_x,
         field_max_x,
         field_min_y,
-        field_max_y
+        field_max_y,
+        point_stride
     );
 
     // Compute minimum cost and its index (ArgMin) on GPU

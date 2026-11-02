@@ -247,4 +247,5 @@ private:
     bool use_esdf_{false};
     ProfileMetrics last_metrics_{};
     float computeEffectiveWeight2D(const MatchingParams& match_params) const;
+    int computeCoarsePointStride() const;
 };

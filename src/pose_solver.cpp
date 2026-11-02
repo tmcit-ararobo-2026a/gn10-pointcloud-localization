@@ -293,6 +293,14 @@ float PoseSolver::computeEffectiveWeight2D(const MatchingParams& match_params) c
     return 0.0f;
 }
 
+int PoseSolver::computeCoarsePointStride() const
+{
+    if (num_3d_obstacles_ > 1500) {
+        return std::max(1, num_3d_obstacles_ / 1200);
+    }
+    return 1;
+}
+
 bool PoseSolver::matchObstacleCloud(
     int h_obstacle_count,
     const MatchingParams& match_params,
@@ -318,10 +326,12 @@ bool PoseSolver::matchObstacleCloud(
         int* step_inlier_count = nullptr;
         float* step_inlier_cost = nullptr;
         bool output_coarse_dynamic = false;
+        int coarse_point_stride = computeCoarsePointStride();
         if (!match_params.fine_refine) {
             step_inlier_count = out_inlier_count;
             step_inlier_cost = out_inlier_cost;
             output_coarse_dynamic = true;
+            coarse_point_stride = 1;
         }
 
         std::vector<float>& target_dynamic_buf = output_coarse_dynamic ? out_dynamic_pts : ignored_dynamic;
@@ -354,7 +364,9 @@ bool PoseSolver::matchObstacleCloud(
                 num_2d_obstacles_,
                 effective_weight_2d,
                 (!match_params.fine_refine) ? &last_cost_3d_ : nullptr,
-                (!match_params.fine_refine) ? &last_cost_2d_ : nullptr
+                (!match_params.fine_refine) ? &last_cost_2d_ : nullptr,
+                nullptr,
+                coarse_point_stride
             );
         } else {
             pose_matched = launchFieldSDFMatcher(
@@ -379,7 +391,9 @@ bool PoseSolver::matchObstacleCloud(
                 output_coarse_dynamic,
                 step_inlier_count,
                 step_inlier_cost,
-                match_params.inlier_dist_thresh
+                match_params.inlier_dist_thresh,
+                nullptr,
+                coarse_point_stride
             );
         }
         out_best_pose = coarse_pose;
@@ -695,6 +709,7 @@ bool PoseSolver::evaluateGlobalSDF(
     float best_cost = std::numeric_limits<float>::max();
 
     const float effective_weight_2d = computeEffectiveWeight2D(match_params);
+    const int coarse_point_stride   = computeCoarsePointStride();
     last_weight_2d_ = effective_weight_2d;
 
     bool ok = false;
@@ -727,7 +742,8 @@ bool PoseSolver::evaluateGlobalSDF(
             effective_weight_2d,
             nullptr,
             nullptr,
-            &all_costs
+            &all_costs,
+            coarse_point_stride
         );
     } else {
         ok = launchFieldSDFMatcher(
@@ -753,7 +769,8 @@ bool PoseSolver::evaluateGlobalSDF(
             nullptr,
             nullptr,
             match_params.inlier_dist_thresh,
-            &all_costs
+            &all_costs,
+            coarse_point_stride
         );
     }
 
@@ -761,12 +778,11 @@ bool PoseSolver::evaluateGlobalSDF(
         return false;
     }
 
-    // Reconstruct grid dimensions matching the coarse search candidate ordering
-    const int nx = static_cast<int>(std::floor((2.0f * range_x + 1e-5f) / step_xy)) + 1;
-    const int ny = static_cast<int>(std::floor((2.0f * range_y + 1e-5f) / step_xy)) + 1;
-    const int nyaw = static_cast<int>(std::floor((2.0f * range_yaw + 1e-5f) / step_yaw)) + 1;
+    const SearchGrid grid = createSearchGrid(
+        base_pose, range_x, range_y, step_xy, range_yaw, step_yaw
+    );
     const int num_candidates = static_cast<int>(all_costs.size());
-    if (nx <= 0 || ny <= 0 || nyaw <= 0 || nx * ny * nyaw != num_candidates) {
+    if (grid.totalCandidates() != num_candidates) {
         out_top_poses.push_back(best_pose);
         return true;
     }
@@ -783,24 +799,12 @@ bool PoseSolver::evaluateGlobalSDF(
     constexpr float NMS_MIN_ANGLE_YAW_RAD = 0.5f;
     out_top_poses.reserve(static_cast<size_t>(top_k));
 
-    const float start_x   = base_pose.x - range_x;
-    const float start_y   = base_pose.y - range_y;
-    const float start_yaw = base_pose.yaw - range_yaw;
-
     for (int candidate_idx : sorted_indices) {
         if (!std::isfinite(all_costs[static_cast<size_t>(candidate_idx)])) {
             continue;
         }
-        const int iyaw = candidate_idx % nyaw;
-        const int temp = candidate_idx / nyaw;
-        const int iy   = temp % ny;
-        const int ix   = temp / ny;
-
-        PoseCandidate cand{
-            start_x + static_cast<float>(ix) * step_xy,
-            start_y + static_cast<float>(iy) * step_xy,
-            normalizeAngle(start_yaw + static_cast<float>(iyaw) * step_yaw)
-        };
+        PoseCandidate cand = grid.indexToPose(candidate_idx);
+        cand.yaw           = normalizeAngle(cand.yaw);
 
         bool suppressed = false;
         for (const auto& selected : out_top_poses) {
@@ -841,6 +845,7 @@ bool PoseSolver::evaluateGlobalSDF(
 {
     std::vector<float> dummy_dynamic;
     const float effective_weight_2d = computeEffectiveWeight2D(match_params);
+    const int coarse_point_stride   = computeCoarsePointStride();
     last_weight_2d_ = effective_weight_2d;
     if (use_esdf_) {
         return launchESDFMatcher(
@@ -868,7 +873,11 @@ bool PoseSolver::evaluateGlobalSDF(
             match_params.inlier_dist_thresh,
             num_3d_obstacles_,
             num_2d_obstacles_,
-            effective_weight_2d
+            effective_weight_2d,
+            nullptr,
+            nullptr,
+            nullptr,
+            coarse_point_stride
         );
     }
 
@@ -891,7 +900,12 @@ bool PoseSolver::evaluateGlobalSDF(
         out_best_pose,
         out_best_cost,
         dummy_dynamic,
-        false
+        false,
+        nullptr,
+        nullptr,
+        match_params.inlier_dist_thresh,
+        nullptr,
+        coarse_point_stride
     );
 }
 
