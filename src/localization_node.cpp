@@ -1098,6 +1098,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     int inlier_count  = -1;
     float inlier_cost = std::numeric_limits<float>::infinity();
+    const bool need_dynamic = pub_dynamic_->get_subscription_count() > 0;
 
     const std::vector<float>* extra_pts_ptr = nullptr;
     if (!extra_2d_points.empty()) {
@@ -1120,7 +1121,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             best_cost,
             &inlier_count,
             &inlier_cost,
-            extra_pts_ptr
+            extra_pts_ptr,
+            need_dynamic
         );
         const bool accepted =
             matched && isPoseMatchAccepted(active_match_params, best_cost, inlier_count, inlier_cost);
@@ -1189,7 +1191,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             best_cost,
             &inlier_count,
             &inlier_cost,
-            extra_pts_ptr
+            extra_pts_ptr,
+            need_dynamic
         );
 
         // Strict match acceptance criteria to prevent partial-wall false locks in symmetric fields:
@@ -1281,7 +1284,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         if (need_ground) publishCloud(pub_ground_, out_header, ground_pts);
         if (need_obstacle) publishCloud(pub_obstacle_, out_header, obstacle_pts);
     }
-    publishCloud(pub_dynamic_, out_header, dynamic_pts);
+    if (need_dynamic) {
+        publishCloud(pub_dynamic_, out_header, dynamic_pts);
+    }
 
     auto t_cb_end      = std::chrono::high_resolution_clock::now();
     double time_pub_ms = std::chrono::duration<double, std::milli>(t_cb_end - t_pub_start).count();

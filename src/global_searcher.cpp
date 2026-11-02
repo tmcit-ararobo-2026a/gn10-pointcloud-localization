@@ -145,7 +145,8 @@ PoseCandidate GlobalSearcher::search(
             cand_pose,
             cand_cost,
             &cand_inliers,
-            &cand_inlier_cost
+            &cand_inlier_cost,
+            false
         );
         if (!matched) {
             continue;
@@ -353,7 +354,8 @@ PoseCandidate GlobalSearcher::search(
             cand_pose,
             cand_cost,
             &cand_inliers,
-            &cand_inlier_cost
+            &cand_inlier_cost,
+            false
         );
         if (!matched) {
             continue;

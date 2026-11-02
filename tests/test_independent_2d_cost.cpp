@@ -178,6 +178,53 @@ void testESDFMatcherWeightedResidual()
     // With independent weighting w=0.40, composite cost is 0.110, which properly weights 2D higher!
     assert(best_cost > 0.105f);
 
+    // Test point_stride > 1 produces consistent normalized composite cost
+    float stride_cost = 0.0f;
+    PoseCandidate stride_pose{};
+    bool ok_stride = launchESDFMatcher(
+        stream,
+        d_cloud,
+        total_pts,
+        base_pose,
+        0.0f, 0.0f, 0.1f,
+        0.0f, 0.1f,
+        0.50f,
+        0.15f,
+        header.min_x, header.min_x + header.size_x * header.resolution,
+        header.min_y, header.min_y + header.size_y * header.resolution,
+        stride_pose,
+        stride_cost,
+        dynamic_pts,
+        false,
+        nullptr,
+        nullptr,
+        0.08f,
+        num_3d,
+        num_2d,
+        weight_2d,
+        nullptr,
+        nullptr,
+        nullptr,
+        2
+    );
+    assert(ok_stride);
+    assert(std::abs(stride_cost - best_cost) < 1e-3f);
+
+    // Test strict inlier acceptance criteria (Task 1)
+    MatchingParams accept_params;
+    accept_params.cost_threshold = 0.165f;
+    accept_params.min_inliers = 60;
+    accept_params.inlier_cost_thresh = 0.05f;
+    accept_params.min_inlier_ratio = 0.35f;
+    accept_params.max_inlier_accept_cost = 0.22f;
+
+    // Rejected when only 60 out of 1000 points are inliers (ratio = 0.06 < 0.35)
+    assert(!accept_params.isMatchAccepted(0.18f, 60, 0.03f, 1000));
+    // Rejected when best_cost >= max_inlier_accept_cost (0.25 >= 0.22)
+    assert(!accept_params.isMatchAccepted(0.25f, 500, 0.03f, 1000));
+    // Accepted when inlier count, inlier cost, inlier ratio (>= 0.35), and max_inlier_accept_cost (< 0.22) all pass
+    assert(accept_params.isMatchAccepted(0.19f, 400, 0.03f, 1000));
+
     cudaFree(d_cloud);
     cudaStreamDestroy(stream);
     freeESDFMapFromGPU();

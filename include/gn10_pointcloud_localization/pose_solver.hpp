@@ -99,7 +99,7 @@ public:
     void setMap(const std::vector<FieldObject>& host_map);
     void setESDFMap(const ESDFMap& esdf_map);
 
-    // 通常追従用（GroundFilter + SDF Matcher + Dynamic Point 抽出）
+    // Normal tracking (GroundFilter + SDF Matcher + optional Dynamic Point extraction)
     bool processPointCloud(
         const std::vector<float>& h_raw_cloud,
         const float h_transform[12],
@@ -111,10 +111,11 @@ public:
         float& out_best_cost,
         int* out_inlier_count                            = nullptr,
         float* out_inlier_cost                           = nullptr,
-        const std::vector<float>* extra_base_link_points = nullptr
+        const std::vector<float>* extra_base_link_points = nullptr,
+        bool extract_dynamic                             = true
     );
 
-    // Deskew 統合通常追従用（GPU Deskew + GroundFilter + SDF Matcher + Dynamic Point 抽出）
+    // Deskew-integrated tracking (GPU Deskew + GroundFilter + SDF Matcher + optional Dynamic Point extraction)
     bool processPointCloud(
         const std::vector<TimedScanPoint>& timed_points,
         const float h_transform[12],
@@ -129,7 +130,8 @@ public:
         float& out_best_cost,
         int* out_inlier_count                            = nullptr,
         float* out_inlier_cost                           = nullptr,
-        const std::vector<float>* extra_base_link_points = nullptr
+        const std::vector<float>* extra_base_link_points = nullptr,
+        bool extract_dynamic                             = true
     );
 
     // 確定姿勢を用いた動的点群の抽出 (Pose探索をスキップ)
@@ -173,7 +175,8 @@ public:
         PoseCandidate& out_best_pose,
         float& out_best_cost,
         int* out_inlier_count  = nullptr,
-        float* out_inlier_cost = nullptr
+        float* out_inlier_cost = nullptr,
+        bool extract_dynamic   = true
     );
 
     // Copy the filtered clouds for RViz only when a subscriber needs them.
@@ -237,6 +240,7 @@ private:
 
     // Host Pinned Memory
     float* h_in_{nullptr};
+    TimedScanPoint* h_timed_in_{nullptr};
     int ground_count_{0};
     int obstacle_count_{0};
     int num_3d_obstacles_{0};
