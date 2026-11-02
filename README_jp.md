@@ -201,7 +201,30 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 | `matching_params.cost_threshold` | `0.165` | 平均残差がこの値を超えるとマッチング失敗判定 (ロストカウント加算)。 |
 | `matching_params.inlier_dist_thresh`| `0.08` | マップ壁面から 8cm 以内の点を Inlier（適合点）と判定。 |
 | `matching_params.min_inliers` | `60` | マッチング成立に必要な最小 Inlier 点数。 |
+| `matching_params.weight_2d_lidar` | `0.40` ~ `0.50` | 2D LiDAR 独立残差項の基本重み係数。 |
+| `matching_params.min_2d_points` | `30` | 2D 残差項を有効化するための最小 2D 障害物点数。 |
+| `matching_params.target_2d_points` | `200` | 100% 視野角重み付けとなる基準 2D 点数。 |
+| `matching_params.min_3d_points` | `50` | 最小 3D 障害物点数。これ未満で 2D が有効な場合は 2D 重み 1.0 にフォールバック。 |
+| `matching_params.dynamic_yaw_expansion` | `true` | 急旋回時に自動で Yaw 探索窓を動的拡大するフラグ。 |
+| `matching_params.dynamic_yaw_omega_thresh` | `0.50` | 動的 Yaw 探索窓拡大を発動する角速度閾値 [rad/s]。 |
+| `matching_params.dynamic_yaw_factor` | `0.15` | 角速度 $|\omega_z|$ に乗じる Yaw 探索拡大係数 [s]。 |
+| `matching_params.dynamic_yaw_max_range` | `0.35` | 動的 Yaw 探索窓の上限クランプ値 [rad]。 |
+| `velocity_estimation.enable` | `true` | スキャン間の等速運動外挿と並進速度推定の有効化。 |
+| `velocity_estimation.window_sec` | `0.20` | 並進速度の差分計算に用いる履歴保持時間窓 [s]。 |
+| `velocity_estimation.min_dt_sec` | `0.15` | 並進速度計算を行う最小経過時間 [s]。 |
+| `velocity_estimation.max_dt_sec` | `0.50` | 速度外挿を許容する最大経過時間 [s]。 |
+| `velocity_estimation.max_linear_velocity` | `4.0` | 推定並進速度の上限クランプ値 [m/s]。 |
+| `lidar_2d.enable` | `true` | Lakibeam 1 2D 平面 LiDAR 統合の有効化。 |
+| `lidar_2d.deskew` | `true` | IMU 積分による 2D レーザースキャンの回転歪み補正。 |
+| `lidar_2d.topic` | `/lakibeam/scan` | 入力 LaserScan トピック名。 |
+| `lidar_2d.frame_id` | `lakibeam_frame` | 2D LiDAR のフォールバック TF フレーム名。 |
+| `lidar_2d.tf_wait_sec` | `0.05` | 2D LiDAR の TF 変換待機タイムアウト [s]。 |
 | `global_search.lost_count_thresh` | `10` | 連続で失敗判定となった際にグローバル全域探索へ移行するフレーム数。 |
+
+詳細なパラメータ解説および処理フロー図（PlantUML）は下記を参照してください:
+- [docs/parameter_tuning_guide.md](docs/parameter_tuning_guide.md)
+- [docs/pipeline_flow_and_parameters.pu](docs/pipeline_flow_and_parameters.pu)
+- [docs/matching_cost_and_weighting.pu](docs/matching_cost_and_weighting.pu)
 
 ### 自己位置状態トピックの設定
 

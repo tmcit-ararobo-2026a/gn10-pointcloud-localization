@@ -286,16 +286,16 @@ bool PoseSolver::matchObstacleCloud(
 {
     bool pose_matched = false;
     auto t_match_start = std::chrono::high_resolution_clock::now();
-    if (h_obstacle_count > 50) {
+    if (h_obstacle_count > match_params.min_3d_points) {
         // 2D LiDAR の有効点数および視野に基づく動的重み付け計算
         float effective_weight_2d = 0.0f;
-        if (num_2d_obstacles_ >= match_params.min_2d_points && num_3d_obstacles_ >= 50) {
+        if (num_2d_obstacles_ >= match_params.min_2d_points && num_3d_obstacles_ >= match_params.min_3d_points) {
             float fov_scale = std::min(
                 1.0f,
                 static_cast<float>(num_2d_obstacles_) / static_cast<float>(match_params.target_2d_points)
             );
             effective_weight_2d = match_params.weight_2d_lidar * fov_scale;
-        } else if (num_2d_obstacles_ >= match_params.min_2d_points && num_3d_obstacles_ < 50) {
+        } else if (num_2d_obstacles_ >= match_params.min_2d_points && num_3d_obstacles_ < match_params.min_3d_points) {
             effective_weight_2d = 1.0f;
         } else {
             effective_weight_2d = 0.0f;

@@ -26,8 +26,10 @@ PoseCandidate GlobalSearcher::search(
 {
     RCLCPP_INFO(logger_, "[GlobalSearch] Starting GPU-Batched Yaw-Constrained Search...");
 
+    GlobalSearchConfig config = getConfig();
+
     const size_t total_points = h_raw_cloud.size() / 3;
-    int stride = config_.downsample_stride;
+    int stride = config.downsample_stride;
     if (stride < 1) {
         stride = 1;
     }
@@ -55,13 +57,14 @@ PoseCandidate GlobalSearcher::search(
         obstacle_count
     );
 
-    if (obstacle_count <= 50) {
+    if (obstacle_count <= match_params.min_3d_points) {
         RCLCPP_WARN(
             logger_,
-            "[GlobalSearch] Too few obstacle points (%d <= 50). Search aborted. "
+            "[GlobalSearch] Too few obstacle points (%d <= %d). Search aborted. "
             "Consider reducing 'filter_params.robot_radius' or 'global_search.downsample_stride', "
             "or check 'ground_z_thresh' / TF alignment.",
-            obstacle_count
+            obstacle_count,
+            match_params.min_3d_points
         );
         out_best_cost = std::numeric_limits<float>::max();
         return PoseCandidate{0.0f, 0.0f, 0.0f};
@@ -69,12 +72,12 @@ PoseCandidate GlobalSearcher::search(
 
     // IMUの事前Yaw角を中心に、指定された許容範囲(max_yaw_diff)のみを探索窓に設定
     PoseCandidate center_pose;
-    center_pose.x   = (config_.range_min_x + config_.range_max_x) * 0.5f;
-    center_pose.y   = (config_.range_min_y + config_.range_max_y) * 0.5f;
+    center_pose.x   = (config.range_min_x + config.range_max_x) * 0.5f;
+    center_pose.y   = (config.range_min_y + config.range_max_y) * 0.5f;
     center_pose.yaw = prior_yaw;
 
-    float range_x   = (config_.range_max_x - config_.range_min_x) * 0.5f;
-    float range_y   = (config_.range_max_y - config_.range_min_y) * 0.5f;
+    float range_x   = (config.range_max_x - config.range_min_x) * 0.5f;
+    float range_y   = (config.range_max_y - config.range_min_y) * 0.5f;
     float range_yaw = max_yaw_diff;
 
     PoseCandidate best_coarse_pose;
@@ -86,9 +89,9 @@ PoseCandidate GlobalSearcher::search(
         center_pose,
         range_x,
         range_y,
-        config_.step_xy,
+        config.step_xy,
         range_yaw,
-        config_.step_yaw,
+        config.step_yaw,
         match_params,
         best_coarse_pose,
         coarse_cost
@@ -117,17 +120,17 @@ PoseCandidate GlobalSearcher::search(
     );
 
     // 範囲外チェック
-    if (refined_pose.x < config_.range_min_x || refined_pose.x > config_.range_max_x ||
-        refined_pose.y < config_.range_min_y || refined_pose.y > config_.range_max_y) {
+    if (refined_pose.x < config.range_min_x || refined_pose.x > config.range_max_x ||
+        refined_pose.y < config.range_min_y || refined_pose.y > config.range_max_y) {
         RCLCPP_WARN(
             logger_,
             "[GlobalSearch] Refined pose (%.2f, %.2f) is outside configured area [%.2f~%.2f, %.2f~%.2f]. Rejecting pose.",
             refined_pose.x,
             refined_pose.y,
-            config_.range_min_x,
-            config_.range_max_x,
-            config_.range_min_y,
-            config_.range_max_y
+            config.range_min_x,
+            config.range_max_x,
+            config.range_min_y,
+            config.range_max_y
         );
         out_best_cost = std::numeric_limits<float>::max();
         return PoseCandidate{0.0f, 0.0f, 0.0f};
@@ -165,12 +168,14 @@ PoseCandidate GlobalSearcher::search(
 {
     RCLCPP_INFO(logger_, "[GlobalSearch] Starting GPU-Batched Yaw-Constrained Search (with GPU Deskew)...");
 
+    GlobalSearchConfig config = getConfig();
+
     const size_t total_points = timed_points.size();
     int base_stride = stride;
     if (base_stride < 1) {
         base_stride = 1;
     }
-    int downsample_factor = config_.downsample_stride;
+    int downsample_factor = config.downsample_stride;
     if (downsample_factor < 1) {
         downsample_factor = 1;
     }
@@ -191,13 +196,14 @@ PoseCandidate GlobalSearcher::search(
         obstacle_count
     );
 
-    if (obstacle_count <= 50) {
+    if (obstacle_count <= match_params.min_3d_points) {
         RCLCPP_WARN(
             logger_,
-            "[GlobalSearch] Too few obstacle points (%d <= 50). Search aborted. "
+            "[GlobalSearch] Too few obstacle points (%d <= %d). Search aborted. "
             "Consider reducing 'filter_params.robot_radius' or 'global_search.downsample_stride', "
             "or check 'ground_z_thresh' / TF alignment.",
-            obstacle_count
+            obstacle_count,
+            match_params.min_3d_points
         );
         out_best_cost = std::numeric_limits<float>::max();
         return PoseCandidate{0.0f, 0.0f, 0.0f};
@@ -205,12 +211,12 @@ PoseCandidate GlobalSearcher::search(
 
     // IMUの事前Yaw角を中心に、指定された許容範囲(max_yaw_diff)のみを探索窓に設定
     PoseCandidate center_pose;
-    center_pose.x   = (config_.range_min_x + config_.range_max_x) * 0.5f;
-    center_pose.y   = (config_.range_min_y + config_.range_max_y) * 0.5f;
+    center_pose.x   = (config.range_min_x + config.range_max_x) * 0.5f;
+    center_pose.y   = (config.range_min_y + config.range_max_y) * 0.5f;
     center_pose.yaw = prior_yaw;
 
-    float range_x   = (config_.range_max_x - config_.range_min_x) * 0.5f;
-    float range_y   = (config_.range_max_y - config_.range_min_y) * 0.5f;
+    float range_x   = (config.range_max_x - config.range_min_x) * 0.5f;
+    float range_y   = (config.range_max_y - config.range_min_y) * 0.5f;
     float range_yaw = max_yaw_diff;
 
     PoseCandidate best_coarse_pose;
@@ -222,9 +228,9 @@ PoseCandidate GlobalSearcher::search(
         center_pose,
         range_x,
         range_y,
-        config_.step_xy,
+        config.step_xy,
         range_yaw,
-        config_.step_yaw,
+        config.step_yaw,
         match_params,
         best_coarse_pose,
         coarse_cost
@@ -256,17 +262,17 @@ PoseCandidate GlobalSearcher::search(
     );
 
     // 範囲外チェック
-    if (refined_pose.x < config_.range_min_x || refined_pose.x > config_.range_max_x ||
-        refined_pose.y < config_.range_min_y || refined_pose.y > config_.range_max_y) {
+    if (refined_pose.x < config.range_min_x || refined_pose.x > config.range_max_x ||
+        refined_pose.y < config.range_min_y || refined_pose.y > config.range_max_y) {
         RCLCPP_WARN(
             logger_,
             "[GlobalSearch] Refined pose (%.2f, %.2f) is outside configured area [%.2f~%.2f, %.2f~%.2f]. Rejecting pose.",
             refined_pose.x,
             refined_pose.y,
-            config_.range_min_x,
-            config_.range_max_x,
-            config_.range_min_y,
-            config_.range_max_y
+            config.range_min_x,
+            config.range_max_x,
+            config.range_min_y,
+            config.range_max_y
         );
         out_best_cost = std::numeric_limits<float>::max();
         return PoseCandidate{0.0f, 0.0f, 0.0f};

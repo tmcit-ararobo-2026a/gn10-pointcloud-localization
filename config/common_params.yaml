@@ -73,12 +73,25 @@
       weight_2d_lidar: 0.50
       min_2d_points: 30
       target_2d_points: 200
+      min_3d_points: 50
+      dynamic_yaw_expansion: true
+      dynamic_yaw_omega_thresh: 0.5
+      dynamic_yaw_factor: 0.15
+      dynamic_yaw_max_range: 0.35
+
+    velocity_estimation:
+      enable: true
+      window_sec: 0.20
+      min_dt_sec: 0.15
+      max_dt_sec: 0.50
+      max_linear_velocity: 4.0
 
     lidar_2d:
       enable: true
       deskew: true
       topic: "/lakibeam/scan"
       frame_id: "lakibeam_frame"
+      tf_wait_sec: 0.05
 
     realsense:
       enable: true                          # RealSense 動的背景除去フィルタの有効化 (実機デフォルト: true)
