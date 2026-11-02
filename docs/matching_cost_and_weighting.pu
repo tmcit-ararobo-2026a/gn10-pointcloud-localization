@@ -1,0 +1,67 @@
+@startuml matching_cost_and_weighting
+!theme plain
+skinparam defaultTextAlignment left
+skinparam ActivityBorderColor #0055BB
+skinparam ActivityBackgroundColor #F0F8FF
+
+title 3D & 2D LiDAR Independent Residual Matching Cost Process
+
+start
+
+:Receive 3D LiDAR Obstacles ($N_{3D}$) and 2D LiDAR Obstacles ($N_{2D}$);
+
+partition "1. Effective 2D Weight Determination" {
+  if ($N_{2D} \ge \text{min\_2d\_points}\ \mathbf{and}\ N_{3D} \ge \text{min\_3d\_points}$) then (Both Available)
+    :Calculate Field-of-View Ratio:
+    $fov\_scale = \min\left(1.0, \frac{N_{2D}}{\text{target\_2d\_points}}\right)$;
+    :Scale Configured Weight:
+    $w_{2D} = \text{weight\_2d\_lidar} \times fov\_scale$;
+  elseif ($N_{2D} \ge \text{min\_2d\_points}\ \mathbf{and}\ N_{3D} < \text{min\_3d\_points}$) then (3D Occluded / Degraded)
+    :Fallback Entirely to 2D LiDAR:
+    $w_{2D} = 1.0$;
+  else (2D Not Reliable / Sparse)
+    :Disable 2D Weight:
+    $w_{2D} = 0.0$;
+  endif
+}
+
+partition "2. Independent Residual Cost Evaluation" {
+  :Compute Normalized 3D Residual Cost:
+  $C_{3D} = \frac{1}{N_{3D}} \sum_{i=1}^{N_{3D}} \min\left( \text{ESDF}(\mathbf{p}_{3D, i}(\mathbf{T})), \text{max\_dist\_thresh} \right)$;
+
+  if ($w_{2D} > 0$) then (Evaluate 2D)
+    :Compute Normalized 2D Residual Cost:
+    $C_{2D} = \frac{1}{N_{2D}} \sum_{j=1}^{N_{2D}} \min\left( \text{ESDF}(\mathbf{p}_{2D, j}(\mathbf{T})), \text{max\_dist\_thresh} \right)$;
+  else (Skip 2D)
+    :$C_{2D} = 0.0$;
+  endif
+
+  :Synthesize Composite Cost:
+  $C_{total} = (1.0 - w_{2D}) \cdot C_{3D} + w_{2D} \cdot C_{2D}$;
+}
+
+partition "3. Inlier Verification & Convergence Check" {
+  :Count Inliers:
+  $N_{inlier} = \text{count of points with } \text{ESDF}(\mathbf{p}) \le \text{inlier\_dist\_thresh}$;
+  :Compute Average Inlier Cost:
+  $C_{inlier} = \frac{1}{N_{inlier}} \sum_{\mathbf{p} \in \text{inliers}} \text{ESDF}(\mathbf{p})$;
+
+  if ($C_{total} < \text{cost\_threshold}$) then (Accepted by Composite Cost)
+    :Mark Localization Succeeded;
+    :Update Position & Reset Lost Frame Counter;
+  elseif ($N_{inlier} \ge \text{min\_inliers}\ \mathbf{and}\ C_{inlier} < \text{inlier\_cost\_thresh}$) then (Accepted by Inlier Criteria)
+    :Mark Localization Succeeded;
+    :Update Position & Reset Lost Frame Counter;
+  else (Rejected)
+    :Increment lost_frame_count;
+    if (lost_frame_count \ge lost_count_thresh) then (Lost Limit Exceeded)
+      :Trigger Global Search (Yaw-Constrained);
+    else (Transient Drop)
+      :Dead Reckoning with IMU & Velocity;
+    endif
+  endif
+}
+
+stop
+
+@enduml

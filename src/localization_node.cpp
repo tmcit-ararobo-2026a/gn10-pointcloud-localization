@@ -128,11 +128,23 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.weight_2d_lidar", 0.40);
     this->declare_parameter("matching_params.min_2d_points", 30);
     this->declare_parameter("matching_params.target_2d_points", 200);
+    this->declare_parameter("matching_params.min_3d_points", 50);
+    this->declare_parameter("matching_params.dynamic_yaw_expansion", true);
+    this->declare_parameter("matching_params.dynamic_yaw_omega_thresh", 0.5);
+    this->declare_parameter("matching_params.dynamic_yaw_factor", 0.15);
+    this->declare_parameter("matching_params.dynamic_yaw_max_range", 0.35);
+
+    this->declare_parameter("velocity_estimation.enable", true);
+    this->declare_parameter("velocity_estimation.window_sec", 0.20);
+    this->declare_parameter("velocity_estimation.min_dt_sec", 0.15);
+    this->declare_parameter("velocity_estimation.max_dt_sec", 0.50);
+    this->declare_parameter("velocity_estimation.max_linear_velocity", 4.0);
 
     this->declare_parameter("lidar_2d.enable", false);
     this->declare_parameter("lidar_2d.deskew", true);
     this->declare_parameter("lidar_2d.topic", "/lakibeam/scan");
     this->declare_parameter("lidar_2d.frame_id", "lakibeam_frame");
+    this->declare_parameter("lidar_2d.tf_wait_sec", 0.05);
     this->declare_parameter("topics.output_2d_deskewed", "/lakibeam/deskewed_cloud");
 
     this->declare_parameter("realsense.enable", false);
@@ -222,12 +234,24 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("matching_params.weight_2d_lidar").as_double());
     match_params_.min_2d_points = this->get_parameter("matching_params.min_2d_points").as_int();
     match_params_.target_2d_points = this->get_parameter("matching_params.target_2d_points").as_int();
+    match_params_.min_3d_points = this->get_parameter("matching_params.min_3d_points").as_int();
+    dynamic_yaw_expansion_ = this->get_parameter("matching_params.dynamic_yaw_expansion").as_bool();
+    dynamic_yaw_omega_thresh_ = static_cast<float>(this->get_parameter("matching_params.dynamic_yaw_omega_thresh").as_double());
+    dynamic_yaw_factor_ = static_cast<float>(this->get_parameter("matching_params.dynamic_yaw_factor").as_double());
+    dynamic_yaw_max_range_ = static_cast<float>(this->get_parameter("matching_params.dynamic_yaw_max_range").as_double());
 
-    use_2d_lidar_        = this->get_parameter("lidar_2d.enable").as_bool();
-    use_2d_lidar_deskew_ = this->get_parameter("lidar_2d.deskew").as_bool();
-    topic_2d_lidar_      = this->get_parameter("lidar_2d.topic").as_string();
-    topic_2d_deskewed_   = this->get_parameter("topics.output_2d_deskewed").as_string();
-    lidar_2d_frame_      = this->get_parameter("lidar_2d.frame_id").as_string();
+    velocity_estimation_enable_ = this->get_parameter("velocity_estimation.enable").as_bool();
+    velocity_window_sec_ = this->get_parameter("velocity_estimation.window_sec").as_double();
+    velocity_min_dt_sec_ = this->get_parameter("velocity_estimation.min_dt_sec").as_double();
+    velocity_max_dt_sec_ = this->get_parameter("velocity_estimation.max_dt_sec").as_double();
+    velocity_max_linear_ = static_cast<float>(this->get_parameter("velocity_estimation.max_linear_velocity").as_double());
+
+    use_2d_lidar_         = this->get_parameter("lidar_2d.enable").as_bool();
+    use_2d_lidar_deskew_  = this->get_parameter("lidar_2d.deskew").as_bool();
+    topic_2d_lidar_       = this->get_parameter("lidar_2d.topic").as_string();
+    topic_2d_deskewed_    = this->get_parameter("topics.output_2d_deskewed").as_string();
+    lidar_2d_frame_       = this->get_parameter("lidar_2d.frame_id").as_string();
+    lidar_2d_tf_wait_sec_ = this->get_parameter("lidar_2d.tf_wait_sec").as_double();
 
     use_realsense_           = this->get_parameter("realsense.enable").as_bool();
     topic_realsense_cloud_   = this->get_parameter("realsense.input_topic").as_string();
@@ -323,6 +347,20 @@ void LocalizationNode::declareAndGetParameters()
             benchmark_csv_path_.c_str()
         );
     }
+
+    RCLCPP_INFO(
+        this->get_logger(),
+        "Parameters initialized: 3D matching (xy_range=%.2fm, yaw_range=%.2frad, cost_thresh=%.3f, min_3d_pts=%d), "
+        "2D LiDAR (enable=%s, deskew=%s, weight=%.2f, min_2d_pts=%d, tf_wait=%.3fs), "
+        "Dynamic yaw expansion (enable=%s, omega_thresh=%.2frad/s, factor=%.2fs, max=%.2frad), "
+        "Velocity estimation (enable=%s, window=%.2fs, min_dt=%.2fs, max_dt=%.2fs, max_v=%.1fm/s), "
+        "Global search (step_xy=%.2fm, step_yaw=%.2frad, downsample=%d, lost_thresh=%d)",
+        match_params_.range_xy, match_params_.range_yaw, match_params_.cost_threshold, match_params_.min_3d_points,
+        use_2d_lidar_ ? "true" : "false", use_2d_lidar_deskew_ ? "true" : "false", match_params_.weight_2d_lidar, match_params_.min_2d_points, lidar_2d_tf_wait_sec_,
+        dynamic_yaw_expansion_ ? "true" : "false", dynamic_yaw_omega_thresh_, dynamic_yaw_factor_, dynamic_yaw_max_range_,
+        velocity_estimation_enable_ ? "true" : "false", velocity_window_sec_, velocity_min_dt_sec_, velocity_max_dt_sec_, velocity_max_linear_,
+        global_step_xy_, global_step_yaw_, global_downsample_stride_, lost_threshold_count_
+    );
 }
 
 void LocalizationNode::setupMapData()
@@ -651,18 +689,19 @@ void LocalizationNode::setupROSInterfaces()
 
 void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
 {
+    const std::string frame_id = !msg->header.frame_id.empty() ? msg->header.frame_id : lidar_2d_frame_;
     geometry_msgs::msg::TransformStamped tf_stamped;
     try {
         tf_stamped = tf_buffer_->lookupTransform(
             base_frame_,
-            msg->header.frame_id,
+            frame_id,
             msg->header.stamp,
-            rclcpp::Duration::from_seconds(0.05)
+            rclcpp::Duration::from_seconds(lidar_2d_tf_wait_sec_)
         );
     } catch (const tf2::TransformException&) {
         try {
             tf_stamped =
-                tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, tf2::TimePointZero);
+                tf_buffer_->lookupTransform(base_frame_, frame_id, tf2::TimePointZero);
         } catch (const tf2::TransformException& ex) {
             RCLCPP_WARN_THROTTLE(
                 this->get_logger(),
@@ -670,7 +709,7 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
                 2000,
                 "[2D LiDAR] TF lookup failed from '%s' to '%s': %s",
                 base_frame_.c_str(),
-                msg->header.frame_id.c_str(),
+                frame_id.c_str(),
                 ex.what()
             );
             return;
@@ -955,9 +994,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         predicted_pose_      = search_base_pose;
         current_omega_z      = latest_omega_z_;
 
-        if (has_velocity_ && !is_lost_) {
+        if (velocity_estimation_enable_ && has_velocity_ && !is_lost_) {
             const double dt = (reference_stamp - last_match_stamp_).seconds();
-            if (dt > 0.0 && dt < 0.5) {
+            if (dt > 0.0 && dt < velocity_max_dt_sec_) {
                 search_base_pose.x = last_known_pose_.x + velocity_x_ * static_cast<float>(dt);
                 search_base_pose.y = last_known_pose_.y + velocity_y_ * static_cast<float>(dt);
             }
@@ -1020,9 +1059,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         active_filter_params = filter_params_;
     }
     const float abs_omega              = std::abs(current_omega_z);
-    if (abs_omega > 0.5f) {
+    if (dynamic_yaw_expansion_ && abs_omega > dynamic_yaw_omega_thresh_) {
         active_match_params.range_yaw =
-            std::min(0.35f, std::max(active_match_params.range_yaw, abs_omega * 0.15f));
+            std::min(dynamic_yaw_max_range_, std::max(active_match_params.range_yaw, abs_omega * dynamic_yaw_factor_));
     }
 
     int inlier_count  = -1;
@@ -1139,22 +1178,24 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
             // Estimate translation over a fixed time interval rather than
             // differentiating alternating 50 ms scan noise into fake velocity.
-            velocity_history_.push_back({reference_stamp, best_pose});
-            while (velocity_history_.size() > 2 &&
-                   (reference_stamp - velocity_history_[1].stamp).seconds() > 0.20) {
-                velocity_history_.pop_front();
-            }
-            const auto& oldest = velocity_history_.front();
-            const double dt    = (reference_stamp - oldest.stamp).seconds();
-            if (dt >= 0.15 && dt < 0.5) {
-                const float vx = (best_pose.x - oldest.pose.x) / float(dt);
-                const float vy = (best_pose.y - oldest.pose.y) / float(dt);
-                if (std::hypot(vx, vy) < 4.0f) {
-                    velocity_x_   = vx;
-                    velocity_y_   = vy;
-                    has_velocity_ = true;
-                } else {
-                    has_velocity_ = false;
+            if (velocity_estimation_enable_) {
+                velocity_history_.push_back({reference_stamp, best_pose});
+                while (velocity_history_.size() > 2 &&
+                       (reference_stamp - velocity_history_[1].stamp).seconds() > velocity_window_sec_) {
+                    velocity_history_.pop_front();
+                }
+                const auto& oldest = velocity_history_.front();
+                const double dt    = (reference_stamp - oldest.stamp).seconds();
+                if (dt >= velocity_min_dt_sec_ && dt < velocity_max_dt_sec_) {
+                    const float vx = (best_pose.x - oldest.pose.x) / float(dt);
+                    const float vy = (best_pose.y - oldest.pose.y) / float(dt);
+                    if (std::hypot(vx, vy) < velocity_max_linear_) {
+                        velocity_x_   = vx;
+                        velocity_y_   = vy;
+                        has_velocity_ = true;
+                    } else {
+                        has_velocity_ = false;
+                    }
                 }
             }
             last_match_stamp_ = reference_stamp;
@@ -1727,8 +1768,15 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         "topics.input_cloud", "topics.input_imu", "topics.output_dynamic",
         "topics.output_ground", "topics.output_obstacle", "topics.output_localization_success",
         "topics.output_pose", "topics.output_markers", "topics.output_esdf_map", "topics.fused_prior",
+        "topics.output_2d_deskewed",
         "scan_accumulation.window_s", "scan_accumulation.timestamp_field",
-        "scan_accumulation.timestamp_scale", "scan_accumulation.timestamp_relative"
+        "scan_accumulation.timestamp_scale", "scan_accumulation.timestamp_relative",
+        "matching_params.use_map_bounds",
+        "lidar_2d.topic",
+        "realsense.input_topic", "realsense.output_topic", "realsense.status_topic",
+        "realsense.prediction_topic", "realsense.poll_sec", "realsense.queue_size",
+        "benchmark.enable", "benchmark.csv_output_path",
+        "initial_pose.x", "initial_pose.y", "initial_pose.yaw", "initial_pose.use_for_local_search"
     };
 
     // 1. パラメータ値の妥当性検証
@@ -1747,10 +1795,19 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
                 result.reason = "matching_params.fine_refine_levels must be in [1, 3]";
                 return result;
             }
-        } else if (name == "global_search.downsample_stride" || name == "global_search.lost_count_thresh") {
+        } else if (name == "global_search.downsample_stride" || name == "global_search.lost_count_thresh" ||
+                   name == "matching_params.min_3d_points" || name == "matching_params.min_2d_points" ||
+                   name == "matching_params.target_2d_points" || name == "matching_params.min_inliers") {
             if (param.as_int() < 1) {
                 result.successful = false;
                 result.reason = name + " must be >= 1";
+                return result;
+            }
+        } else if (name == "velocity_estimation.min_dt_sec" || name == "velocity_estimation.max_dt_sec" ||
+                   name == "velocity_estimation.window_sec" || name == "lidar_2d.tf_wait_sec") {
+            if (param.as_double() <= 0.0) {
+                result.successful = false;
+                result.reason = name + " must be > 0";
                 return result;
             }
         }
@@ -1758,6 +1815,8 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
 
     // 2. スレッドセーフに更新を適用
     std::lock_guard<std::mutex> lock(param_mutex_);
+    bool update_global_search_cfg = false;
+
     for (const auto& param : parameters) {
         const auto& name = param.get_name();
 
@@ -1786,6 +1845,30 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             match_params_.min_inliers = static_cast<int>(param.as_int());
         } else if (name == "matching_params.inlier_cost_thresh") {
             match_params_.inlier_cost_thresh = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.field_min_x") {
+            match_params_.field_min_x = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.field_max_x") {
+            match_params_.field_max_x = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.field_min_y") {
+            match_params_.field_min_y = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.field_max_y") {
+            match_params_.field_max_y = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.weight_2d_lidar") {
+            match_params_.weight_2d_lidar = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.min_2d_points") {
+            match_params_.min_2d_points = static_cast<int>(param.as_int());
+        } else if (name == "matching_params.target_2d_points") {
+            match_params_.target_2d_points = static_cast<int>(param.as_int());
+        } else if (name == "matching_params.min_3d_points") {
+            match_params_.min_3d_points = static_cast<int>(param.as_int());
+        } else if (name == "matching_params.dynamic_yaw_expansion") {
+            dynamic_yaw_expansion_ = param.as_bool();
+        } else if (name == "matching_params.dynamic_yaw_omega_thresh") {
+            dynamic_yaw_omega_thresh_ = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.dynamic_yaw_factor") {
+            dynamic_yaw_factor_ = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.dynamic_yaw_max_range") {
+            dynamic_yaw_max_range_ = static_cast<float>(param.as_double());
 
         // --- filter_params ---
         } else if (name == "filter_params.max_range") {
@@ -1824,31 +1907,82 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             realsense_pose_max_age_sec_ = param.as_double();
 
         // --- global_search ---
+        } else if (name == "global_search.range_min_x") {
+            global_range_min_x_ = static_cast<float>(param.as_double());
+            update_global_search_cfg = true;
+        } else if (name == "global_search.range_max_x") {
+            global_range_max_x_ = static_cast<float>(param.as_double());
+            update_global_search_cfg = true;
+        } else if (name == "global_search.range_min_y") {
+            global_range_min_y_ = static_cast<float>(param.as_double());
+            update_global_search_cfg = true;
+        } else if (name == "global_search.range_max_y") {
+            global_range_max_y_ = static_cast<float>(param.as_double());
+            update_global_search_cfg = true;
         } else if (name == "global_search.range_yaw_diff") {
             global_range_yaw_diff_ = static_cast<float>(param.as_double());
         } else if (name == "global_search.step_xy") {
             global_step_xy_ = static_cast<float>(param.as_double());
+            update_global_search_cfg = true;
         } else if (name == "global_search.step_yaw") {
             global_step_yaw_ = static_cast<float>(param.as_double());
+            update_global_search_cfg = true;
         } else if (name == "global_search.downsample_stride") {
             global_downsample_stride_ = static_cast<int>(param.as_int());
+            update_global_search_cfg = true;
         } else if (name == "global_search.lost_count_thresh") {
             lost_threshold_count_ = static_cast<int>(param.as_int());
+
+        // --- velocity_estimation ---
+        } else if (name == "velocity_estimation.enable") {
+            velocity_estimation_enable_ = param.as_bool();
+        } else if (name == "velocity_estimation.window_sec") {
+            velocity_window_sec_ = param.as_double();
+        } else if (name == "velocity_estimation.min_dt_sec") {
+            velocity_min_dt_sec_ = param.as_double();
+        } else if (name == "velocity_estimation.max_dt_sec") {
+            velocity_max_dt_sec_ = param.as_double();
+        } else if (name == "velocity_estimation.max_linear_velocity") {
+            velocity_max_linear_ = static_cast<float>(param.as_double());
 
         // --- lidar_2d ---
         } else if (name == "lidar_2d.enable") {
             use_2d_lidar_ = param.as_bool();
         } else if (name == "lidar_2d.deskew") {
             use_2d_lidar_deskew_ = param.as_bool();
-        } else if (name == "matching_params.weight_2d_lidar") {
-            match_params_.weight_2d_lidar = static_cast<float>(param.as_double());
-        } else if (name == "matching_params.min_2d_points") {
-            match_params_.min_2d_points = static_cast<int>(param.as_int());
-        } else if (name == "matching_params.target_2d_points") {
-            match_params_.target_2d_points = static_cast<int>(param.as_int());
+        } else if (name == "lidar_2d.frame_id") {
+            lidar_2d_frame_ = param.as_string();
+        } else if (name == "lidar_2d.tf_wait_sec") {
+            lidar_2d_tf_wait_sec_ = param.as_double();
+
+        // --- general / fusion ---
+        } else if (name == "publish_tf") {
+            publish_tf_ = param.as_bool();
+        } else if (name == "fusion.use_prior") {
+            use_fused_prior_ = param.as_bool();
+        } else if (name == "fusion.prior_max_age_s") {
+            prior_max_age_s_ = param.as_double();
         }
 
-        RCLCPP_INFO(this->get_logger(), "[DynamicReconfigure] Successfully updated parameter '%s'", name.c_str());
+        RCLCPP_INFO(
+            this->get_logger(),
+            "[DynamicReconfigure] '%s' updated to: %s",
+            name.c_str(),
+            param.value_to_string().c_str()
+        );
+    }
+
+    if (update_global_search_cfg && global_searcher_) {
+        GlobalSearchConfig cfg = global_searcher_->getConfig();
+        cfg.range_min_x = global_range_min_x_;
+        cfg.range_max_x = global_range_max_x_;
+        cfg.range_min_y = global_range_min_y_;
+        cfg.range_max_y = global_range_max_y_;
+        cfg.step_xy = global_step_xy_;
+        cfg.step_yaw = global_step_yaw_;
+        cfg.downsample_stride = global_downsample_stride_;
+        global_searcher_->setConfig(cfg);
+        RCLCPP_INFO(this->get_logger(), "[DynamicReconfigure] GlobalSearcher config synchronized.");
     }
 
     return result;

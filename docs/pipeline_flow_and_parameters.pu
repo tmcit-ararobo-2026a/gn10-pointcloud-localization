@@ -1,0 +1,109 @@
+@startuml pipeline_flow_and_parameters
+!theme plain
+skinparam defaultTextAlignment left
+skinparam BoxPadding 10
+skinparam ParticipantPadding 10
+skinparam NoteBackgroundColor #FEFECE
+skinparam NoteBorderColor #A80036
+
+title GN10 Point Cloud Localization Pipeline & Parameter Mapping
+
+actor "Sensors / ROS 2 Topics" as Sensors
+participant "Input & Accumulation" as Stage1
+participant "Preprocessing & Deskew" as Stage2
+participant "Motion Prediction & Search Area" as Stage3
+participant "ESDF Matching & Cost Synthesis" as Stage4
+participant "Global Recovery Search" as Stage5
+participant "Outputs & TF" as Stage6
+
+== 1. Sensor Ingestion & Accumulation ==
+Sensors -> Stage1: PointCloud2 (/livox/lidar)\nIMU (/livox/imu)\nLaserScan (/lakibeam/scan)
+note over Stage1
+  **scan_accumulation.window_s** (0.10s)
+  **scan_accumulation.timestamp_field** ("timestamp")
+  **scan_accumulation.timestamp_scale** (1e-9)
+  **scan_accumulation.timestamp_relative** (false)
+  Accumulates multi-frame Livox packets over window_s
+  and indexes IMU angular velocity in YawHistory.
+end note
+
+== 2. Preprocessing & Deskew ==
+Stage1 -> Stage2: Raw accumulated cloud + IMU samples
+note over Stage2
+  **filter_params.ground_z_thresh** (0.04m ~ 0.08m): Ground plane rejection
+  **filter_params.robot_radius** (0.80m): Self-chassis / bumper filter
+  **filter_params.robot_height_min/max** (0.0m ~ 1.2m): Vertical bounds
+  **filter_params.max_range** (12.0m): Outlier max distance filter
+  **filter_params.max_points** (200000): Capacity limit for GPU allocation
+  -- 2D LiDAR --
+  **lidar_2d.enable** (true/false)
+  **lidar_2d.deskew** (true/false): Angular beam deskew using IMU integration
+  **lidar_2d.tf_wait_sec** (0.05s): Transform lookup timeout
+  **lidar_2d.frame_id** ("lakibeam_frame"): Fallback sensor frame
+end note
+
+== 3. Motion Prediction & Dynamic Search Bounds ==
+Stage2 -> Stage3: Deskewed obstacle points + IMU yaw
+note over Stage3
+  **velocity_estimation.enable** (true/false)
+  **velocity_estimation.window_sec** (0.20s): Stride window for linear velocity
+  **velocity_estimation.min_dt_sec** (0.15s): Minimum delta time for dt division
+  **velocity_estimation.max_dt_sec** (0.50s): Maximum allowable dt for extrapolation
+  **velocity_estimation.max_linear_velocity** (4.0 m/s): Velocity clamp threshold
+  Extrapolates: base_x = last_x + vx * dt, base_y = last_y + vy * dt
+  -- Dynamic Yaw Window Expansion --
+  **matching_params.dynamic_yaw_expansion** (true/false)
+  **matching_params.dynamic_yaw_omega_thresh** (0.50 rad/s): Threshold to trigger
+  **matching_params.dynamic_yaw_factor** (0.15s): Dynamic scaling (omega * factor)
+  **matching_params.dynamic_yaw_max_range** (0.35 rad): Upper bound of yaw search
+  -- Static Search Windows --
+  **matching_params.search_range_xy** (0.30m), **search_step_xy** (0.03m~0.05m)
+  **matching_params.search_range_yaw** (0.15rad~0.60rad), **search_step_yaw** (0.02rad~0.05rad)
+end note
+
+== 4. ESDF Matching & Independent Residual Weighting ==
+Stage3 -> Stage4: Search window grid & Obstacle points (3D + 2D)
+note over Stage4
+  **matching_params.min_3d_points** (50): Minimum 3D points required
+  **matching_params.min_2d_points** (30): Minimum 2D points to activate 2D residual
+  **matching_params.target_2d_points** (200): Target 2D points for 100% FoV weight
+  **matching_params.weight_2d_lidar** (0.40 ~ 0.50): Maximum baseline 2D weight
+  **matching_params.max_dist_thresh** (0.20m ~ 0.25m): ESDF truncation distance
+  -- Convergence & Inlier Criteria --
+  **matching_params.cost_threshold** (0.165): Threshold on composite cost
+  **matching_params.inlier_dist_thresh** (0.08m): Voxel boundary for inliers
+  **matching_params.min_inliers** (60): Inlier count fallback
+  **matching_params.inlier_cost_thresh** (0.05m): Inlier cost fallback
+  **matching_params.fine_refine** (true), **matching_params.fine_refine_levels** (2)
+end note
+
+alt Match Succeeded (cost < cost_thresh OR inliers >= min_inliers)
+  Stage4 -> Stage6: Publish best pose
+else Match Failed (lost_count < lost_threshold_count)
+  Stage4 -> Stage3: Keep dead reckoning via IMU & velocity
+else Match Lost (lost_count >= lost_threshold_count)
+  == 5. Global Recovery Search ==
+  Stage4 -> Stage5: Trigger full field GPU coarse-to-fine search
+  note over Stage5
+    **global_search.range_min_x / max_x** (-5.25m ~ 5.25m)
+    **global_search.range_min_y / max_y** (-5.70m ~ 5.70m)
+    **global_search.range_yaw_diff** (0.785rad ~ 3.1415rad): Constrained by IMU prior
+    **global_search.step_xy** (0.30m): GPU batched coarse grid resolution
+    **global_search.step_yaw** (0.26rad ~ 0.30rad): Coarse angular resolution
+    **global_search.downsample_stride** (2): Point cloud stride for fast search
+    **global_search.lost_count_thresh** (5 ~ 10): Failed frames before global search
+  end note
+  Stage5 -> Stage6: Recovered pose or retry
+end
+
+== 6. Output Generation & Publishing ==
+note over Stage6
+  **publish_tf** (true/false): Broadcasts map -> base_link TF
+  **topics.output_pose** (/platform_constraint): PoseWithCovarianceStamped
+  **topics.output_localization_success** (/robot/operation/localization_success): Bool
+  **topics.output_obstacle** (/obstacle_cloud): PointCloud2 (Obstacles)
+  **topics.output_dynamic** (/dynamic_cloud): PointCloud2 (Dynamic clutter)
+  **topics.output_2d_deskewed** (/lakibeam/deskewed_cloud): PointCloud2
+end note
+
+@enduml

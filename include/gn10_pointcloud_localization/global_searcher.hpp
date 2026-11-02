@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <vector>
 
@@ -23,6 +24,18 @@ class GlobalSearcher
 public:
     GlobalSearcher(const GlobalSearchConfig& config, rclcpp::Logger logger);
     ~GlobalSearcher() = default;
+
+    void setConfig(const GlobalSearchConfig& config)
+    {
+        std::lock_guard<std::mutex> lock(config_mutex_);
+        config_ = config;
+    }
+
+    GlobalSearchConfig getConfig() const
+    {
+        std::lock_guard<std::mutex> lock(config_mutex_);
+        return config_;
+    }
 
     PoseCandidate search(
         PoseSolver& solver,
@@ -54,6 +67,7 @@ public:
     );
 
 private:
+    mutable std::mutex config_mutex_;
     GlobalSearchConfig config_;
     rclcpp::Logger logger_;
 };

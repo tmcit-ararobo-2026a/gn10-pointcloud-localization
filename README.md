@@ -224,7 +224,30 @@ Shared settings are configured in [`config/common_params.yaml`](config/common_pa
 | `matching_params.cost_threshold` | `0.165` | Average residual cost threshold for matching failure (increments lost count). |
 | `matching_params.inlier_dist_thresh` | `0.08` | Classifies points within 8 cm of the map surface as inliers. |
 | `matching_params.min_inliers` | `60` | Minimum required inlier count for a successful match. |
+| `matching_params.weight_2d_lidar` | `0.40` ~ `0.50` | Maximum weight assigned to 2D LiDAR residual cost. |
+| `matching_params.min_2d_points` | `30` | Minimum 2D obstacle points required to include 2D cost. |
+| `matching_params.target_2d_points` | `200` | Target 2D points for 100% field-of-view weighting. |
+| `matching_params.min_3d_points` | `50` | Minimum 3D obstacle point threshold; falls back to 100% 2D if 3D drops below this. |
+| `matching_params.dynamic_yaw_expansion` | `true` | Automatically expands yaw search window when rotating rapidly. |
+| `matching_params.dynamic_yaw_omega_thresh` | `0.50` | Angular velocity threshold [rad/s] triggering dynamic yaw window expansion. |
+| `matching_params.dynamic_yaw_factor` | `0.15` | Proportional factor [s] for dynamic yaw search expansion. |
+| `matching_params.dynamic_yaw_max_range` | `0.35` | Maximum clamped yaw search range [rad]. |
+| `velocity_estimation.enable` | `true` | Enables constant-velocity motion extrapolation between scans. |
+| `velocity_estimation.window_sec` | `0.20` | History window [s] for velocity differentiation. |
+| `velocity_estimation.min_dt_sec` | `0.15` | Minimum delta time [s] for computing linear velocity. |
+| `velocity_estimation.max_dt_sec` | `0.50` | Maximum delta time [s] allowed for velocity extrapolation. |
+| `velocity_estimation.max_linear_velocity` | `4.0` | Maximum clamp threshold [m/s] for estimated linear velocity. |
+| `lidar_2d.enable` | `true` | Enables Lakibeam 1 2D planar LiDAR integration. |
+| `lidar_2d.deskew` | `true` | Compensates for rotational distortion per beam using IMU integration. |
+| `lidar_2d.topic` | `/lakibeam/scan` | Input LaserScan topic name. |
+| `lidar_2d.frame_id` | `lakibeam_frame` | Fallback TF frame ID for 2D LiDAR. |
+| `lidar_2d.tf_wait_sec` | `0.05` | Timeout [s] for 2D LiDAR TF transform lookup. |
 | `global_search.lost_count_thresh` | `10` | Number of consecutive failed frames before triggering a global full-area search. |
+
+For detailed documentation, architecture diagrams, and tuning guidelines, see:
+- [docs/parameter_tuning_guide.md](docs/parameter_tuning_guide.md)
+- [docs/pipeline_flow_and_parameters.pu](docs/pipeline_flow_and_parameters.pu)
+- [docs/matching_cost_and_weighting.pu](docs/matching_cost_and_weighting.pu)
 
 ### Localization Status Topic Settings
 

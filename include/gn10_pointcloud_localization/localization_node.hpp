@@ -97,6 +97,12 @@ private:
     GroundFilterParams filter_params_;
     MatchingParams match_params_;
 
+    // Dynamic Yaw Search Expansion
+    bool dynamic_yaw_expansion_{true};
+    float dynamic_yaw_omega_thresh_{0.5f};
+    float dynamic_yaw_factor_{0.15f};
+    float dynamic_yaw_max_range_{0.35f};
+
     // Global Search Area & Step Parameters
     float global_range_min_x_{-5.25f};
     float global_range_max_x_{5.25f};
@@ -125,6 +131,11 @@ private:
     float latest_omega_z_{0.0f};
 
     // Velocity & Motion Prediction
+    bool velocity_estimation_enable_{true};
+    double velocity_window_sec_{0.20};
+    double velocity_min_dt_sec_{0.15};
+    double velocity_max_dt_sec_{0.50};
+    float velocity_max_linear_{4.0f};
     float velocity_x_{0.0f};
     float velocity_y_{0.0f};
     bool has_velocity_{false};
@@ -146,6 +157,7 @@ private:
     std::string topic_2d_lidar_{"/lakibeam/scan"};
     std::string topic_2d_deskewed_{"/lakibeam/deskewed_cloud"};
     std::string lidar_2d_frame_{"lakibeam_frame"};
+    double lidar_2d_tf_wait_sec_{0.05};
     std::mutex lidar_2d_mutex_;
     std::vector<float> latest_2d_points_;
     rclcpp::Time latest_2d_stamp_;

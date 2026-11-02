@@ -53,6 +53,7 @@ struct MatchingParams {
     float weight_2d_lidar{0.40f};
     int min_2d_points{30};
     int target_2d_points{200};
+    int min_3d_points{50};
 
     void useESDFBounds(const ESDFHeader& header)
     {
