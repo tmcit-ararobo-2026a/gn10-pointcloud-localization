@@ -50,10 +50,36 @@ struct MatchingParams {
     float inlier_dist_thresh{0.08f};
     int min_inliers{60};
     float inlier_cost_thresh{0.05f};
+    float min_inlier_ratio{0.35f};
+    float max_inlier_accept_cost{0.22f};
     float weight_2d_lidar{0.40f};
     int min_2d_points{30};
     int target_2d_points{200};
     int min_3d_points{50};
+
+    /**
+     * @brief Evaluates whether a match satisfies the overall cost threshold or strict inlier criteria.
+     */
+    bool isMatchAccepted(
+        float best_cost, int inlier_count, float inlier_cost, int total_obstacle_count
+    ) const
+    {
+        if (!std::isfinite(best_cost)) {
+            return false;
+        }
+        if (best_cost < cost_threshold) {
+            return true;
+        }
+        if (total_obstacle_count <= 0) {
+            return false;
+        }
+        const float inlier_ratio =
+            static_cast<float>(inlier_count) / static_cast<float>(total_obstacle_count);
+        return (inlier_count >= min_inliers) &&
+               (inlier_cost < inlier_cost_thresh) &&
+               (inlier_ratio >= min_inlier_ratio) &&
+               (best_cost < max_inlier_accept_cost);
+    }
 
     void useESDFBounds(const ESDFHeader& header)
     {

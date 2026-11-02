@@ -125,6 +125,8 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.inlier_dist_thresh", 0.08);
     this->declare_parameter("matching_params.min_inliers", 60);
     this->declare_parameter("matching_params.inlier_cost_thresh", 0.05);
+    this->declare_parameter("matching_params.min_inlier_ratio", 0.35);
+    this->declare_parameter("matching_params.max_inlier_accept_cost", 0.22);
     this->declare_parameter("matching_params.weight_2d_lidar", 0.40);
     this->declare_parameter("matching_params.min_2d_points", 30);
     this->declare_parameter("matching_params.target_2d_points", 200);
@@ -230,6 +232,11 @@ void LocalizationNode::declareAndGetParameters()
     match_params_.min_inliers = this->get_parameter("matching_params.min_inliers").as_int();
     match_params_.inlier_cost_thresh =
         static_cast<float>(this->get_parameter("matching_params.inlier_cost_thresh").as_double());
+    match_params_.min_inlier_ratio =
+        static_cast<float>(this->get_parameter("matching_params.min_inlier_ratio").as_double());
+    match_params_.max_inlier_accept_cost = static_cast<float>(
+        this->get_parameter("matching_params.max_inlier_accept_cost").as_double()
+    );
     match_params_.weight_2d_lidar =
         static_cast<float>(this->get_parameter("matching_params.weight_2d_lidar").as_double());
     match_params_.min_2d_points = this->get_parameter("matching_params.min_2d_points").as_int();
@@ -1090,10 +1097,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             &inlier_cost,
             extra_pts_ptr
         );
-        const bool accepted = matched && std::isfinite(best_cost) &&
-                              ((best_cost < active_match_params.cost_threshold) ||
-                               (inlier_count >= active_match_params.min_inliers &&
-                                inlier_cost < active_match_params.inlier_cost_thresh));
+        const bool accepted =
+            matched && isPoseMatchAccepted(active_match_params, best_cost, inlier_count, inlier_cost);
         if (accepted) {
             is_lost_          = false;
             lost_frame_count_ = 0;
@@ -1124,10 +1129,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             &inlier_cost
         );
 
-        const bool global_recovered = std::isfinite(best_cost) &&
-                                      ((best_cost < active_match_params.cost_threshold) ||
-                                       (inlier_count >= active_match_params.min_inliers &&
-                                        inlier_cost < active_match_params.inlier_cost_thresh));
+        const bool global_recovered =
+            isPoseMatchAccepted(active_match_params, best_cost, inlier_count, inlier_cost);
 
         if (global_recovered) {
             is_lost_          = false;
@@ -1163,13 +1166,11 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             extra_pts_ptr
         );
 
-        // 動的障害物に対するロバスト合否判定:
-        // 通常の全点平均コストが閾値未満、または
-        // 静止壁/オブジェクトの Inlier 点が十分多く、かつその平均残差が極小であれば合格
-        const bool match_accepted = matched && std::isfinite(best_cost) &&
-                                    ((best_cost < active_match_params.cost_threshold) ||
-                                     (inlier_count >= active_match_params.min_inliers &&
-                                      inlier_cost < active_match_params.inlier_cost_thresh));
+        // Strict match acceptance criteria to prevent partial-wall false locks in symmetric fields:
+        // Accept when total cost is below cost_threshold, OR when inlier count, inlier cost,
+        // inlier ratio against total obstacles, and upper total cost guard are all satisfied.
+        const bool match_accepted =
+            matched && isPoseMatchAccepted(active_match_params, best_cost, inlier_count, inlier_cost);
 
         if (match_accepted) {
             matched           = true;
@@ -1543,6 +1544,27 @@ std::vector<TimedScanPoint> LocalizationNode::extractTimedBasePoints(
     return result;
 }
 
+/**
+ * @brief Evaluates whether a pose match is accepted using total cost or strict inlier conditions.
+ */
+bool LocalizationNode::isPoseMatchAccepted(
+    const MatchingParams& params, float best_cost, int inlier_count, float inlier_cost
+) const
+{
+    if (!std::isfinite(best_cost) || !solver_) {
+        return false;
+    }
+    const int obstacle_count = solver_->obstacleCount();
+    const bool inlier_accepted =
+        (obstacle_count > 0) &&
+        (inlier_count >= params.min_inliers) &&
+        (inlier_cost < params.inlier_cost_thresh) &&
+        (static_cast<float>(inlier_count) / static_cast<float>(obstacle_count) >=
+         params.min_inlier_ratio) &&
+        (best_cost < params.max_inlier_accept_cost);
+    return (best_cost < params.cost_threshold) || inlier_accepted;
+}
+
 void LocalizationNode::updateLostState(bool matched, float best_cost)
 {
     if (!matched || std::isnan(best_cost) || best_cost > match_params_.cost_threshold) {
@@ -1803,6 +1825,20 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
                 result.reason = name + " must be >= 1";
                 return result;
             }
+        } else if (name == "matching_params.min_inlier_ratio") {
+            const double ratio = param.as_double();
+            if (!std::isfinite(ratio) || ratio < 0.0 || ratio > 1.0) {
+                result.successful = false;
+                result.reason = "matching_params.min_inlier_ratio must be in [0.0, 1.0]";
+                return result;
+            }
+        } else if (name == "matching_params.max_inlier_accept_cost") {
+            const double max_cost = param.as_double();
+            if (!std::isfinite(max_cost) || max_cost <= 0.0) {
+                result.successful = false;
+                result.reason = "matching_params.max_inlier_accept_cost must be > 0";
+                return result;
+            }
         } else if (name == "velocity_estimation.min_dt_sec" || name == "velocity_estimation.max_dt_sec" ||
                    name == "velocity_estimation.window_sec" || name == "lidar_2d.tf_wait_sec") {
             if (param.as_double() <= 0.0) {
@@ -1845,6 +1881,10 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             match_params_.min_inliers = static_cast<int>(param.as_int());
         } else if (name == "matching_params.inlier_cost_thresh") {
             match_params_.inlier_cost_thresh = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.min_inlier_ratio") {
+            match_params_.min_inlier_ratio = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.max_inlier_accept_cost") {
+            match_params_.max_inlier_accept_cost = static_cast<float>(param.as_double());
         } else if (name == "matching_params.field_min_x") {
             match_params_.field_min_x = static_cast<float>(param.as_double());
         } else if (name == "matching_params.field_max_x") {
