@@ -4,7 +4,7 @@ skinparam defaultTextAlignment left
 skinparam ActivityBorderColor #0055BB
 skinparam ActivityBackgroundColor #F0F8FF
 
-title 3D & 2D LiDAR Independent Residual Matching Cost Process
+title 3D & 2D LiDAR Independent Residual Matching Cost and Convergence Verification
 
 start
 
@@ -26,9 +26,22 @@ partition "1. Effective 2D Weight Determination" {
   endif
 }
 
-partition "2. Independent Residual Cost Evaluation" {
+partition "2. GPU Parallel Matching Architecture" {
+  :Generate SearchGrid Directly on GPU:
+  rx, ry, ryaw computed inside kernel from blockIdx.x
+  (Zero CPU candidate vector allocation and zero H2D candidate transfer);
+
+  if (Coarse Search Phase) then (Coarse Search)
+    :Adaptive Point Cloud Decimation:
+    point_stride = max(1, N_3D / 1200);
+    :Evaluate ESDF with Point Stride & Normalized Denominator;
+  else (Fine Refinement Phase)
+    :Sub-voxel Hierarchical Search (Levels = 2):
+    point_stride = 1 (Full Point Evaluation);
+  endif
+
   :Compute Normalized 3D Residual Cost:
-  C_3D = (1 / N_3D) * Σ min( ESDF( T * p_3D,i ), max_dist_thresh );
+  C_3D = (1 / sampled_N_3D) * Σ min( ESDF( T * p_3D,i ), max_dist_thresh );
 
   if (w_2D > 0.0) then (Evaluate 2D)
     :Compute Normalized 2D Residual Cost:
@@ -41,22 +54,34 @@ partition "2. Independent Residual Cost Evaluation" {
   C_total = (1.0 - w_2D) * C_3D + w_2D * C_2D;
 }
 
-partition "3. Inlier Verification & Convergence Check" {
+partition "3. Inlier Verification & Strict Acceptance Check" {
   :Count Inliers:
   N_inlier = count of points with ESDF( T * p ) <= inlier_dist_thresh;
   :Compute Average Inlier Cost:
   C_inlier = (1 / N_inlier) * Σ ESDF( T * p );
+  :Compute Inlier Ratio:
+  R_inlier = N_inlier / N_total_obstacles;
 
-  if (C_total < cost_threshold) then (Accepted by Composite Cost)
+  if (C_total < cost_threshold) then (Accepted by Low Composite Cost)
     :Mark Localization Succeeded;
-    :Update Position & Reset lost_frame_count = 0;
-  elseif (N_inlier >= min_inliers AND C_inlier < inlier_cost_thresh) then (Accepted by Inlier Criteria)
+    :Update Position & Velocity EMA;
+    :Reset lost_frame_count = 0;
+  elseif (N_inlier >= min_inliers AND \n C_inlier < inlier_cost_thresh AND \n R_inlier >= min_inlier_ratio AND \n C_total < max_inlier_accept_cost) then (Accepted by Strict Inlier Criteria)
     :Mark Localization Succeeded;
-    :Update Position & Reset lost_frame_count = 0;
+    :Update Position & Velocity EMA;
+    :Reset lost_frame_count = 0;
   else (Rejected)
     :Increment lost_frame_count;
     if (lost_frame_count >= lost_count_thresh) then (Lost Limit Exceeded)
-      :Trigger Global Recovery Search (Yaw-Constrained);
+      :Trigger Top-K Global Recovery Search;
+      partition "Top-K Global Search (3D + 2D Integrated)" {
+        :Evaluate Full Field Coarse Grid (3D + 2D Composite Cost);
+        :Copy Coarse Cost Buffer to Host;
+        :Extract Top-K Candidates (K=4) via NMS;
+        :(Distance >= 1.0m OR Angle >= 0.5rad);
+        :Execute Local Fine Refinement on Each Candidate;
+        :Select Best Candidate Meeting Strict Acceptance Gate;
+      }
     else (Transient Drop)
       :Dead Reckoning with IMU & Velocity Extrapolation;
     endif
