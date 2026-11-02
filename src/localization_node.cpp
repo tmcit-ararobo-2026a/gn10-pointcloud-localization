@@ -112,7 +112,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.search_range_xy", 0.30);
     this->declare_parameter("matching_params.search_step_xy", 0.03);
     this->declare_parameter("matching_params.search_range_yaw", 0.15);
-    this->declare_parameter("matching_params.search_step_yaw", 0.02);
+    this->declare_parameter("matching_params.search_step_yaw", 0.03);
     this->declare_parameter("matching_params.fine_refine", true);
     this->declare_parameter("matching_params.fine_refine_levels", 2);
     this->declare_parameter("matching_params.max_dist_thresh", 0.20);
@@ -135,7 +135,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.dynamic_yaw_expansion", true);
     this->declare_parameter("matching_params.dynamic_yaw_omega_thresh", 0.5);
     this->declare_parameter("matching_params.dynamic_yaw_factor", 0.15);
-    this->declare_parameter("matching_params.dynamic_yaw_max_range", 0.35);
+    this->declare_parameter("matching_params.dynamic_yaw_max_range", 0.40);
 
     this->declare_parameter("velocity_estimation.enable", true);
     this->declare_parameter("velocity_estimation.window_sec", 0.20);
@@ -1070,10 +1070,30 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         active_match_params  = match_params_;
         active_filter_params = filter_params_;
     }
-    const float abs_omega              = std::abs(current_omega_z);
+    const float abs_omega = std::abs(current_omega_z);
     if (dynamic_yaw_expansion_ && abs_omega > dynamic_yaw_omega_thresh_) {
-        active_match_params.range_yaw =
-            std::min(dynamic_yaw_max_range_, std::max(active_match_params.range_yaw, abs_omega * dynamic_yaw_factor_));
+        const float max_yaw_range =
+            std::max(active_match_params.range_yaw, dynamic_yaw_max_range_);
+        active_match_params.range_yaw = std::min(
+            max_yaw_range,
+            std::max(active_match_params.range_yaw, abs_omega * dynamic_yaw_factor_)
+        );
+    }
+
+    // Adaptively expand translational search window up to 1.5x during high-speed movement (>= 2.0 m/s)
+    if (velocity_estimation_enable_ && has_velocity_ && !is_lost_) {
+        constexpr float HIGH_SPEED_THRESHOLD_MPS = 2.0f;
+        constexpr float MAX_XY_EXPANSION_FACTOR  = 1.5f;
+        const float current_speed = std::hypot(velocity_x_, velocity_y_);
+        if (current_speed >= HIGH_SPEED_THRESHOLD_MPS) {
+            const float speed_span =
+                std::max(0.1f, velocity_max_linear_ - HIGH_SPEED_THRESHOLD_MPS);
+            const float speed_ratio =
+                std::min(1.0f, (current_speed - HIGH_SPEED_THRESHOLD_MPS) / speed_span);
+            const float scale_xy =
+                std::min(MAX_XY_EXPANSION_FACTOR, 1.0f + 0.5f * speed_ratio);
+            active_match_params.range_xy *= scale_xy;
+        }
     }
 
     int inlier_count  = -1;
@@ -1197,9 +1217,18 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                     const float vx = (best_pose.x - oldest.pose.x) / float(dt);
                     const float vy = (best_pose.y - oldest.pose.y) / float(dt);
                     if (std::hypot(vx, vy) < velocity_max_linear_) {
-                        velocity_x_   = vx;
-                        velocity_y_   = vy;
-                        has_velocity_ = true;
+                        // Apply exponential moving average (EMA) to suppress single-frame velocity spikes
+                        constexpr float VELOCITY_EMA_ALPHA = 0.6f;
+                        if (has_velocity_) {
+                            velocity_x_ = VELOCITY_EMA_ALPHA * vx +
+                                          (1.0f - VELOCITY_EMA_ALPHA) * velocity_x_;
+                            velocity_y_ = VELOCITY_EMA_ALPHA * vy +
+                                          (1.0f - VELOCITY_EMA_ALPHA) * velocity_y_;
+                        } else {
+                            velocity_x_   = vx;
+                            velocity_y_   = vy;
+                            has_velocity_ = true;
+                        }
                     } else {
                         has_velocity_ = false;
                     }
