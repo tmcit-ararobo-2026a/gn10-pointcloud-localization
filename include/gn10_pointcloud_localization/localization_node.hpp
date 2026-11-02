@@ -104,7 +104,7 @@ private:
     bool dynamic_yaw_expansion_{true};
     float dynamic_yaw_omega_thresh_{0.5f};
     float dynamic_yaw_factor_{0.15f};
-    float dynamic_yaw_max_range_{0.35f};
+    float dynamic_yaw_max_range_{0.40f};
 
     // Global Search Area & Step Parameters
     float global_range_min_x_{-5.25f};

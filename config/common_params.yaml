@@ -55,8 +55,8 @@
     matching_params:
       search_range_xy: 0.30
       search_step_xy: 0.05
-      search_range_yaw: 0.6
-      search_step_yaw: 0.05
+      search_range_yaw: 0.15
+      search_step_yaw: 0.03
       fine_refine: true
       fine_refine_levels: 2
       max_dist_thresh: 0.25
@@ -79,7 +79,7 @@
       dynamic_yaw_expansion: true
       dynamic_yaw_omega_thresh: 0.5
       dynamic_yaw_factor: 0.15
-      dynamic_yaw_max_range: 0.35
+      dynamic_yaw_max_range: 0.40
 
     velocity_estimation:
       enable: true
