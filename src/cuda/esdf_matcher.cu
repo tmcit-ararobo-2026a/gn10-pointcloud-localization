@@ -19,10 +19,9 @@ static cudaTextureObject_t g_esdf_tex = 0;
 __constant__ ESDFHeader c_esdf_header;
 static bool g_esdf_loaded = false;
 
-// マッチング用バッファ
-static PoseCandidate* d_candidates = nullptr;
-static float* d_costs              = nullptr;
-static int g_max_candidates        = 0;
+// Matching buffers
+static float* d_costs       = nullptr;
+static int g_max_candidates = 0;
 
 static uint8_t* d_is_dynamic = nullptr;
 static int g_max_dynamic_pts = 0;
@@ -69,8 +68,9 @@ __device__ inline float queryESDF(
     return tex3D<float>(tex, u, v, w);
 }
 
-// 全姿勢候補の残差計算カーネル (3D Texture 版: O(1) 参照)
-// 3D 点群 (MID-360) と 2D 点群 (Lakibeam) で正規化平均コストを別々に計算し、重み付け合成
+// Residual evaluation kernel across all candidate poses using 3D Texture Memory (O(1) lookup).
+// Computes candidate pose directly from blockIdx.x via SearchGrid and broadcasts trigonometry
+// across the block to avoid redundant per-thread cosf/sinf evaluations.
 __global__ void evaluateESDFKernel(
     cudaTextureObject_t tex,
     const float* __restrict__ cloud,
@@ -78,7 +78,7 @@ __global__ void evaluateESDFKernel(
     int num_3d_points,
     int num_2d_points,
     float weight_2d,
-    const PoseCandidate* __restrict__ candidates,
+    SearchGrid grid,
     float* __restrict__ out_costs,
     float max_dist_thresh,
     float field_min_x,
@@ -90,17 +90,25 @@ __global__ void evaluateESDFKernel(
     int pose_idx = blockIdx.x;
     int tid      = threadIdx.x;
 
-    float rx   = candidates[pose_idx].x;
-    float ry   = candidates[pose_idx].y;
-    float ryaw = candidates[pose_idx].yaw;
-
-    float cos_y = cosf(ryaw);
-    float sin_y = sinf(ryaw);
-
+    __shared__ float s_pose_params[4];
     __shared__ float s_cost_3d[256];
     __shared__ float s_cost_2d[256];
+
+    if (tid == 0) {
+        const PoseCandidate cand = grid.indexToPose(pose_idx);
+        s_pose_params[0]         = cand.x;
+        s_pose_params[1]         = cand.y;
+        s_pose_params[2]         = cosf(cand.yaw);
+        s_pose_params[3]         = sinf(cand.yaw);
+    }
     s_cost_3d[tid] = 0.0f;
     s_cost_2d[tid] = 0.0f;
+    __syncthreads();
+
+    const float rx    = s_pose_params[0];
+    const float ry    = s_pose_params[1];
+    const float cos_y = s_pose_params[2];
+    const float sin_y = s_pose_params[3];
 
     for (int i = tid; i < num_points; i += blockDim.x) {
         float lx = cloud[i * 3 + 0];
@@ -417,10 +425,6 @@ void freeESDFMapFromGPU()
         cudaFree(d_cost_2d_sum);
         d_cost_2d_sum = nullptr;
     }
-    if (d_candidates) {
-        cudaFree(d_candidates);
-        d_candidates = nullptr;
-    }
     if (d_costs) {
         cudaFree(d_costs);
         d_costs = nullptr;
@@ -528,32 +532,23 @@ bool launchESDFMatcher(
 {
     if (num_points <= 0 || !g_esdf_loaded) return false;
 
-    const int actual_3d   = (num_3d_points >= 0) ? num_3d_points : num_points;
-    const int actual_2d   = (num_3d_points >= 0) ? num_2d_points : 0;
+    const int actual_3d    = (num_3d_points >= 0) ? num_3d_points : num_points;
+    const int actual_2d    = (num_3d_points >= 0) ? num_2d_points : 0;
     const float actual_w2d = (num_3d_points >= 0) ? weight_2d : 0.0f;
 
-    // 姿勢候補の生成 (Host)
-    std::vector<PoseCandidate> h_candidates;
-    for (float dx = -range_x; dx <= range_x + 1e-5f; dx += step_xy) {
-        for (float dy = -range_y; dy <= range_y + 1e-5f; dy += step_xy) {
-            for (float dyaw = -range_yaw; dyaw <= range_yaw + 1e-5f; dyaw += step_yaw) {
-                h_candidates.push_back({base_pose.x + dx, base_pose.y + dy, base_pose.yaw + dyaw});
-            }
-        }
-    }
+    const SearchGrid grid  = createSearchGrid(
+        base_pose, range_x, range_y, step_xy, range_yaw, step_yaw
+    );
+    const int num_candidates = grid.totalCandidates();
+    if (num_candidates <= 0) return false;
 
-    int num_candidates = static_cast<int>(h_candidates.size());
-    if (num_candidates == 0) return false;
-
-    // バッファ確保
+    // Allocate device buffers on demand
     if (num_candidates > g_max_candidates) {
-        if (d_candidates) cudaFree(d_candidates);
         if (d_costs) cudaFree(d_costs);
         if (d_out_argmin) cudaFree(d_out_argmin);
         if (d_temp_storage) cudaFree(d_temp_storage);
 
         g_max_candidates = num_candidates * 2;
-        cudaMalloc(&d_candidates, g_max_candidates * sizeof(PoseCandidate));
         cudaMalloc(&d_costs, g_max_candidates * sizeof(float));
         cudaMalloc(&d_out_argmin, sizeof(cub::KeyValuePair<int, float>));
 
@@ -574,16 +569,7 @@ bool launchESDFMatcher(
         cudaMalloc(&d_cost_2d_sum, sizeof(float));
     }
 
-    // H2D
-    cudaMemcpyAsync(
-        d_candidates,
-        h_candidates.data(),
-        num_candidates * sizeof(PoseCandidate),
-        cudaMemcpyHostToDevice,
-        stream
-    );
-
-    // ESDF 評価カーネル (3D Texture O(1)) - 3D/2D 独立残差項 & 重み付け合成
+    // Launch ESDF evaluation kernel using SearchGrid value argument (zero H2D candidate transfer)
     int sdf_threads = 256;
     int sdf_blocks  = num_candidates;
     evaluateESDFKernel<<<sdf_blocks, sdf_threads, 0, stream>>>(
@@ -593,7 +579,7 @@ bool launchESDFMatcher(
         actual_3d,
         actual_2d,
         actual_w2d,
-        d_candidates,
+        grid,
         d_costs,
         max_dist_thresh,
         field_min_x,
@@ -630,7 +616,7 @@ bool launchESDFMatcher(
 
     int best_idx  = h_argmin.key;
     out_best_cost = h_argmin.value;
-    out_best_pose = h_candidates[best_idx];
+    out_best_pose = grid.indexToPose(best_idx);
 
     // Inlier & Component Cost メトリクスの計算
     if (out_inlier_count || out_inlier_cost || out_cost_3d || out_cost_2d) {
