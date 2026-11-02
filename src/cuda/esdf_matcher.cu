@@ -84,7 +84,8 @@ __global__ void evaluateESDFKernel(
     float field_min_x,
     float field_max_x,
     float field_min_y,
-    float field_max_y
+    float field_max_y,
+    int point_stride = 1
 )
 {
     int pose_idx = blockIdx.x;
@@ -110,7 +111,12 @@ __global__ void evaluateESDFKernel(
     const float cos_y = s_pose_params[2];
     const float sin_y = s_pose_params[3];
 
-    for (int i = tid; i < num_points; i += blockDim.x) {
+    int stride = point_stride;
+    if (stride < 1) {
+        stride = 1;
+    }
+
+    for (int i = tid * stride; i < num_points; i += blockDim.x * stride) {
         float lx = cloud[i * 3 + 0];
         float ly = cloud[i * 3 + 1];
         float lz = cloud[i * 3 + 2];
@@ -144,12 +150,22 @@ __global__ void evaluateESDFKernel(
     }
 
     if (tid == 0) {
-        float mean_3d = (num_3d_points > 0) ? (s_cost_3d[0] / static_cast<float>(num_3d_points)) : max_dist_thresh;
-        float mean_2d = (num_2d_points > 0) ? (s_cost_2d[0] / static_cast<float>(num_2d_points)) : max_dist_thresh;
+        const int sampled_total = (num_points + stride - 1) / stride;
+        const int sampled_3d    = (num_3d_points + stride - 1) / stride;
+        const int sampled_2d    = sampled_total - sampled_3d;
 
-        if (num_2d_points > 0 && num_3d_points > 0) {
+        float mean_3d = max_dist_thresh;
+        if (sampled_3d > 0) {
+            mean_3d = s_cost_3d[0] / static_cast<float>(sampled_3d);
+        }
+        float mean_2d = max_dist_thresh;
+        if (sampled_2d > 0) {
+            mean_2d = s_cost_2d[0] / static_cast<float>(sampled_2d);
+        }
+
+        if (sampled_2d > 0 && sampled_3d > 0) {
             out_costs[pose_idx] = (1.0f - weight_2d) * mean_3d + weight_2d * mean_2d;
-        } else if (num_2d_points > 0) {
+        } else if (sampled_2d > 0) {
             out_costs[pose_idx] = mean_2d;
         } else {
             out_costs[pose_idx] = mean_3d;
@@ -527,7 +543,8 @@ bool launchESDFMatcher(
     float weight_2d,
     float* out_cost_3d,
     float* out_cost_2d,
-    std::vector<float>* out_all_costs
+    std::vector<float>* out_all_costs,
+    int point_stride
 )
 {
     if (num_points <= 0 || !g_esdf_loaded) return false;
@@ -585,7 +602,8 @@ bool launchESDFMatcher(
         field_min_x,
         field_max_x,
         field_min_y,
-        field_max_y
+        field_max_y,
+        point_stride
     );
 
     // CUB ArgMin

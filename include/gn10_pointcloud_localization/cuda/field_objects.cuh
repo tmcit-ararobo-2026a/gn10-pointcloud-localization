@@ -133,7 +133,8 @@ bool launchFieldSDFMatcher(
     int* out_inlier_count    = nullptr,
     float* out_inlier_cost   = nullptr,
     float inlier_dist_thresh = 0.08f,
-    std::vector<float>* out_all_costs = nullptr
+    std::vector<float>* out_all_costs = nullptr,
+    int point_stride         = 1
 );
 
 #ifdef __cplusplus
