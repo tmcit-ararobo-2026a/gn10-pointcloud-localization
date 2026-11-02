@@ -62,7 +62,8 @@ bool launchFieldSDFMatcher(
     bool extract_dynamic     = true,  // false の場合は動的点群抽出カーネルとD2H転送を一切実行しない
     int* out_inlier_count    = nullptr,
     float* out_inlier_cost   = nullptr,
-    float inlier_dist_thresh = 0.08f
+    float inlier_dist_thresh = 0.08f,
+    std::vector<float>* out_all_costs = nullptr
 );
 
 #ifdef __cplusplus

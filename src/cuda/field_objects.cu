@@ -291,7 +291,8 @@ bool launchFieldSDFMatcher(
     bool extract_dynamic,
     int* out_inlier_count,
     float* out_inlier_cost,
-    float inlier_dist_thresh
+    float inlier_dist_thresh,
+    std::vector<float>* out_all_costs
 )
 {
     if (num_points <= 0 || g_num_map_objects <= 0) return false;
@@ -371,7 +372,7 @@ bool launchFieldSDFMatcher(
         d_temp_storage, temp_storage_bytes, d_costs, d_out_argmin, num_candidates, stream
     );
 
-    // 最小結果をホストへ転送
+    // Copy minimum result (and optionally the full cost array for Top-K NMS) to host
     cub::KeyValuePair<int, float> h_argmin;
     cudaMemcpyAsync(
         &h_argmin,
@@ -380,8 +381,18 @@ bool launchFieldSDFMatcher(
         cudaMemcpyDeviceToHost,
         stream
     );
+    if (out_all_costs != nullptr) {
+        out_all_costs->resize(static_cast<size_t>(num_candidates));
+        cudaMemcpyAsync(
+            out_all_costs->data(),
+            d_costs,
+            num_candidates * sizeof(float),
+            cudaMemcpyDeviceToHost,
+            stream
+        );
+    }
 
-    // D2H転送完了を待機
+    // Wait for D2H transfer completion
     cudaStreamSynchronize(stream);
 
     int best_idx  = h_argmin.key;

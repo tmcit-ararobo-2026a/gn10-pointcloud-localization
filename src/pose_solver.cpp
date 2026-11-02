@@ -3,10 +3,12 @@
 
 #include "gn10_pointcloud_localization/pose_solver.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 
 #include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
@@ -273,6 +275,24 @@ bool PoseSolver::processPointCloud(
     );
 }
 
+float PoseSolver::computeEffectiveWeight2D(const MatchingParams& match_params) const
+{
+    if (num_2d_obstacles_ >= match_params.min_2d_points &&
+        num_3d_obstacles_ >= match_params.min_3d_points) {
+        const float fov_scale = std::min(
+            1.0f,
+            static_cast<float>(num_2d_obstacles_) /
+                static_cast<float>(match_params.target_2d_points)
+        );
+        return match_params.weight_2d_lidar * fov_scale;
+    }
+    if (num_2d_obstacles_ >= match_params.min_2d_points &&
+        num_3d_obstacles_ < match_params.min_3d_points) {
+        return 1.0f;
+    }
+    return 0.0f;
+}
+
 bool PoseSolver::matchObstacleCloud(
     int h_obstacle_count,
     const MatchingParams& match_params,
@@ -287,19 +307,8 @@ bool PoseSolver::matchObstacleCloud(
     bool pose_matched = false;
     auto t_match_start = std::chrono::high_resolution_clock::now();
     if (h_obstacle_count > match_params.min_3d_points) {
-        // 2D LiDAR の有効点数および視野に基づく動的重み付け計算
-        float effective_weight_2d = 0.0f;
-        if (num_2d_obstacles_ >= match_params.min_2d_points && num_3d_obstacles_ >= match_params.min_3d_points) {
-            float fov_scale = std::min(
-                1.0f,
-                static_cast<float>(num_2d_obstacles_) / static_cast<float>(match_params.target_2d_points)
-            );
-            effective_weight_2d = match_params.weight_2d_lidar * fov_scale;
-        } else if (num_2d_obstacles_ >= match_params.min_2d_points && num_3d_obstacles_ < match_params.min_3d_points) {
-            effective_weight_2d = 1.0f;
-        } else {
-            effective_weight_2d = 0.0f;
-        }
+        // Compute dynamic 2D LiDAR weighting based on active point count and FoV coverage
+        const float effective_weight_2d = computeEffectiveWeight2D(match_params);
         last_weight_2d_ = effective_weight_2d;
 
         PoseCandidate coarse_pose{};
@@ -478,12 +487,15 @@ int PoseSolver::prepareObstacleCloud(
     const DeskewParams& deskew_params,
     const std::vector<IMUSample>& imu_samples,
     int stride,
-    const GroundFilterParams& filter_params
+    const GroundFilterParams& filter_params,
+    const std::vector<float>* extra_base_link_points
 )
 {
     int num_points = static_cast<int>(timed_points.size());
-    ground_count_   = 0;
-    obstacle_count_ = 0;
+    ground_count_     = 0;
+    obstacle_count_   = 0;
+    num_3d_obstacles_ = 0;
+    num_2d_obstacles_ = 0;
     if (num_points == 0 || num_points > max_points_) {
         return 0;
     }
@@ -535,6 +547,27 @@ int PoseSolver::prepareObstacleCloud(
     auto t_gf_end = std::chrono::high_resolution_clock::now();
     last_metrics_.time_ground_filter_ms =
         std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();
+
+    num_3d_obstacles_ = h_obstacle_count;
+    num_2d_obstacles_ = 0;
+
+    // Append 2D LiDAR points in base_link frame into the obstacle buffer on GPU
+    if (extra_base_link_points != nullptr && !extra_base_link_points->empty()) {
+        const int extra_points = static_cast<int>(extra_base_link_points->size() / 3);
+        if (h_obstacle_count + extra_points <= max_points_) {
+            cudaMemcpyAsync(
+                d_obstacle_ + h_obstacle_count * 3,
+                extra_base_link_points->data(),
+                extra_points * 3 * sizeof(float),
+                cudaMemcpyHostToDevice,
+                stream_
+            );
+            num_2d_obstacles_ = extra_points;
+            h_obstacle_count += extra_points;
+            cudaStreamSynchronize(stream_);
+        }
+    }
+
     ground_count_   = h_ground_count;
     obstacle_count_ = h_obstacle_count;
     return h_obstacle_count;
@@ -543,12 +576,15 @@ int PoseSolver::prepareObstacleCloud(
 int PoseSolver::prepareObstacleCloud(
     const std::vector<float>& h_raw_cloud,
     const float h_transform[12],
-    const GroundFilterParams& filter_params
+    const GroundFilterParams& filter_params,
+    const std::vector<float>* extra_base_link_points
 )
 {
     int num_points  = static_cast<int>(h_raw_cloud.size() / 3);
-    ground_count_   = 0;
-    obstacle_count_ = 0;
+    ground_count_     = 0;
+    obstacle_count_   = 0;
+    num_3d_obstacles_ = 0;
+    num_2d_obstacles_ = 0;
     if (num_points == 0 || num_points > max_points_) {
         return 0;
     }
@@ -586,6 +622,27 @@ int PoseSolver::prepareObstacleCloud(
     auto t_gf_end = std::chrono::high_resolution_clock::now();
     last_metrics_.time_ground_filter_ms =
         std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();
+
+    num_3d_obstacles_ = h_obstacle_count;
+    num_2d_obstacles_ = 0;
+
+    // Append 2D LiDAR points in base_link frame into the obstacle buffer on GPU
+    if (extra_base_link_points != nullptr && !extra_base_link_points->empty()) {
+        const int extra_points = static_cast<int>(extra_base_link_points->size() / 3);
+        if (h_obstacle_count + extra_points <= max_points_) {
+            cudaMemcpyAsync(
+                d_obstacle_ + h_obstacle_count * 3,
+                extra_base_link_points->data(),
+                extra_points * 3 * sizeof(float),
+                cudaMemcpyHostToDevice,
+                stream_
+            );
+            num_2d_obstacles_ = extra_points;
+            h_obstacle_count += extra_points;
+            cudaStreamSynchronize(stream_);
+        }
+    }
+
     ground_count_   = h_ground_count;
     obstacle_count_ = h_obstacle_count;
     return h_obstacle_count;
@@ -623,11 +680,168 @@ bool PoseSolver::evaluateGlobalSDF(
     float range_yaw,
     float step_yaw,
     const MatchingParams& match_params,
+    std::vector<PoseCandidate>& out_top_poses,
+    int top_k
+)
+{
+    out_top_poses.clear();
+    if (top_k < 1) {
+        top_k = 1;
+    }
+
+    std::vector<float> dummy_dynamic;
+    std::vector<float> all_costs;
+    PoseCandidate best_pose{};
+    float best_cost = std::numeric_limits<float>::max();
+
+    const float effective_weight_2d = computeEffectiveWeight2D(match_params);
+    last_weight_2d_ = effective_weight_2d;
+
+    bool ok = false;
+    if (use_esdf_) {
+        ok = launchESDFMatcher(
+            stream_,
+            d_obstacle_,
+            obstacle_count,
+            base_pose,
+            range_x,
+            range_y,
+            step_xy,
+            range_yaw,
+            step_yaw,
+            match_params.max_dist_thresh,
+            match_params.dynamic_dist_thresh,
+            match_params.field_min_x,
+            match_params.field_max_x,
+            match_params.field_min_y,
+            match_params.field_max_y,
+            best_pose,
+            best_cost,
+            dummy_dynamic,
+            false,
+            nullptr,
+            nullptr,
+            match_params.inlier_dist_thresh,
+            num_3d_obstacles_,
+            num_2d_obstacles_,
+            effective_weight_2d,
+            nullptr,
+            nullptr,
+            &all_costs
+        );
+    } else {
+        ok = launchFieldSDFMatcher(
+            stream_,
+            d_obstacle_,
+            obstacle_count,
+            base_pose,
+            range_x,
+            range_y,
+            step_xy,
+            range_yaw,
+            step_yaw,
+            match_params.max_dist_thresh,
+            match_params.dynamic_dist_thresh,
+            match_params.field_min_x,
+            match_params.field_max_x,
+            match_params.field_min_y,
+            match_params.field_max_y,
+            best_pose,
+            best_cost,
+            dummy_dynamic,
+            false,
+            nullptr,
+            nullptr,
+            match_params.inlier_dist_thresh,
+            &all_costs
+        );
+    }
+
+    if (!ok || all_costs.empty()) {
+        return false;
+    }
+
+    // Reconstruct grid dimensions matching the coarse search candidate ordering
+    const int nx = static_cast<int>(std::floor((2.0f * range_x + 1e-5f) / step_xy)) + 1;
+    const int ny = static_cast<int>(std::floor((2.0f * range_y + 1e-5f) / step_xy)) + 1;
+    const int nyaw = static_cast<int>(std::floor((2.0f * range_yaw + 1e-5f) / step_yaw)) + 1;
+    const int num_candidates = static_cast<int>(all_costs.size());
+    if (nx <= 0 || ny <= 0 || nyaw <= 0 || nx * ny * nyaw != num_candidates) {
+        out_top_poses.push_back(best_pose);
+        return true;
+    }
+
+    // Sort candidate indices in ascending order of cost
+    std::vector<int> sorted_indices(static_cast<size_t>(num_candidates));
+    std::iota(sorted_indices.begin(), sorted_indices.end(), 0);
+    std::sort(sorted_indices.begin(), sorted_indices.end(), [&all_costs](int lhs, int rhs) {
+        return all_costs[static_cast<size_t>(lhs)] < all_costs[static_cast<size_t>(rhs)];
+    });
+
+    // Apply Non-Maximum Suppression (NMS) to select top K spatially/angularly distinct poses
+    constexpr float NMS_MIN_DIST_XY_M     = 1.0f;
+    constexpr float NMS_MIN_ANGLE_YAW_RAD = 0.5f;
+    out_top_poses.reserve(static_cast<size_t>(top_k));
+
+    const float start_x   = base_pose.x - range_x;
+    const float start_y   = base_pose.y - range_y;
+    const float start_yaw = base_pose.yaw - range_yaw;
+
+    for (int candidate_idx : sorted_indices) {
+        if (!std::isfinite(all_costs[static_cast<size_t>(candidate_idx)])) {
+            continue;
+        }
+        const int iyaw = candidate_idx % nyaw;
+        const int temp = candidate_idx / nyaw;
+        const int iy   = temp % ny;
+        const int ix   = temp / ny;
+
+        PoseCandidate cand{
+            start_x + static_cast<float>(ix) * step_xy,
+            start_y + static_cast<float>(iy) * step_xy,
+            normalizeAngle(start_yaw + static_cast<float>(iyaw) * step_yaw)
+        };
+
+        bool suppressed = false;
+        for (const auto& selected : out_top_poses) {
+            const float dist_xy  = std::hypot(cand.x - selected.x, cand.y - selected.y);
+            const float diff_yaw = std::abs(normalizeAngle(cand.yaw - selected.yaw));
+            if (dist_xy < NMS_MIN_DIST_XY_M && diff_yaw < NMS_MIN_ANGLE_YAW_RAD) {
+                suppressed = true;
+                break;
+            }
+        }
+
+        if (!suppressed) {
+            out_top_poses.push_back(cand);
+            if (static_cast<int>(out_top_poses.size()) >= top_k) {
+                break;
+            }
+        }
+    }
+
+    if (out_top_poses.empty()) {
+        out_top_poses.push_back(best_pose);
+    }
+    return true;
+}
+
+bool PoseSolver::evaluateGlobalSDF(
+    int obstacle_count,
+    const PoseCandidate& base_pose,
+    float range_x,
+    float range_y,
+    float step_xy,
+    float range_yaw,
+    float step_yaw,
+    const MatchingParams& match_params,
     PoseCandidate& out_best_pose,
     float& out_best_cost
 )
 {
     std::vector<float> dummy_dynamic;
+    const float effective_weight_2d = computeEffectiveWeight2D(match_params);
+    last_weight_2d_ = effective_weight_2d;
     if (use_esdf_) {
         return launchESDFMatcher(
             stream_,
@@ -648,7 +862,13 @@ bool PoseSolver::evaluateGlobalSDF(
             out_best_pose,
             out_best_cost,
             dummy_dynamic,
-            false
+            false,
+            nullptr,
+            nullptr,
+            match_params.inlier_dist_thresh,
+            num_3d_obstacles_,
+            num_2d_obstacles_,
+            effective_weight_2d
         );
     }
 

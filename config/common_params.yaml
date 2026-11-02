@@ -123,6 +123,7 @@
       step_xy: 0.30
       step_yaw: 0.3
       downsample_stride: 2
+      top_k_candidates: 4
       lost_count_thresh: 10
 
     initial_pose:

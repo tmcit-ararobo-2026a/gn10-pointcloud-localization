@@ -37,6 +37,7 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
     search_config.step_xy           = global_step_xy_;
     search_config.step_yaw          = global_step_yaw_;
     search_config.downsample_stride = global_downsample_stride_;
+    search_config.top_k_candidates  = global_top_k_candidates_;
 
     global_searcher_ = std::make_unique<GlobalSearcher>(search_config, this->get_logger());
 
@@ -175,6 +176,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("global_search.step_xy", 0.30);
     this->declare_parameter("global_search.step_yaw", 0.2618);
     this->declare_parameter("global_search.downsample_stride", 2);
+    this->declare_parameter("global_search.top_k_candidates", 4);
     this->declare_parameter("global_search.lost_count_thresh", 5);
 
     this->declare_parameter("initial_pose.x", -4.0);
@@ -298,6 +300,9 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("global_search.step_yaw").as_double());
     global_downsample_stride_ = std::max(
         1, static_cast<int>(this->get_parameter("global_search.downsample_stride").as_int())
+    );
+    global_top_k_candidates_ = std::max(
+        1, static_cast<int>(this->get_parameter("global_search.top_k_candidates").as_int())
     );
     lost_threshold_count_ = this->get_parameter("global_search.lost_count_thresh").as_int();
     publish_tf_           = this->get_parameter("publish_tf").as_bool();
@@ -1126,7 +1131,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             global_range_yaw_diff_,
             best_cost,
             &inlier_count,
-            &inlier_cost
+            &inlier_cost,
+            extra_pts_ptr
         );
 
         const bool global_recovered =
@@ -1818,6 +1824,7 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
                 return result;
             }
         } else if (name == "global_search.downsample_stride" || name == "global_search.lost_count_thresh" ||
+                   name == "global_search.top_k_candidates" ||
                    name == "matching_params.min_3d_points" || name == "matching_params.min_2d_points" ||
                    name == "matching_params.target_2d_points" || name == "matching_params.min_inliers") {
             if (param.as_int() < 1) {
@@ -1970,6 +1977,9 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         } else if (name == "global_search.downsample_stride") {
             global_downsample_stride_ = static_cast<int>(param.as_int());
             update_global_search_cfg = true;
+        } else if (name == "global_search.top_k_candidates") {
+            global_top_k_candidates_ = static_cast<int>(param.as_int());
+            update_global_search_cfg = true;
         } else if (name == "global_search.lost_count_thresh") {
             lost_threshold_count_ = static_cast<int>(param.as_int());
 
@@ -2021,6 +2031,7 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         cfg.step_xy = global_step_xy_;
         cfg.step_yaw = global_step_yaw_;
         cfg.downsample_stride = global_downsample_stride_;
+        cfg.top_k_candidates = global_top_k_candidates_;
         global_searcher_->setConfig(cfg);
         RCLCPP_INFO(this->get_logger(), "[DynamicReconfigure] GlobalSearcher config synchronized.");
     }

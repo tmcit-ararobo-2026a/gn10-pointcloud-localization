@@ -145,27 +145,55 @@ public:
         const float* tracking_sphere = nullptr
     );
 
-    // 点群の前処理（GroundFilter）のみを実行し GPU 上の d_obstacle_ に保持する
+    // Preprocess point cloud (GroundFilter) and keep obstacles in d_obstacle_ on GPU
     int prepareObstacleCloud(
         const std::vector<float>& h_raw_cloud,
         const float h_transform[12],
-        const GroundFilterParams& filter_params
+        const GroundFilterParams& filter_params,
+        const std::vector<float>* extra_base_link_points = nullptr
     );
 
-    // 点群の前処理（GPU Deskew + GroundFilter）を実行し GPU 上の d_obstacle_ に保持する
+    // Preprocess point cloud (GPU Deskew + GroundFilter) and keep obstacles in d_obstacle_ on GPU
     int prepareObstacleCloud(
         const std::vector<TimedScanPoint>& timed_points,
         const float h_transform[12],
         const DeskewParams& deskew_params,
         const std::vector<IMUSample>& imu_samples,
         int stride,
-        const GroundFilterParams& filter_params
+        const GroundFilterParams& filter_params,
+        const std::vector<float>* extra_base_link_points = nullptr
+    );
+
+    // Run local multi-resolution SDF matching on obstacles already prepared in d_obstacle_
+    bool matchObstacleCloud(
+        int h_obstacle_count,
+        const MatchingParams& match_params,
+        const PoseCandidate& search_base_pose,
+        std::vector<float>& out_dynamic_pts,
+        PoseCandidate& out_best_pose,
+        float& out_best_cost,
+        int* out_inlier_count  = nullptr,
+        float* out_inlier_cost = nullptr
     );
 
     // Copy the filtered clouds for RViz only when a subscriber needs them.
     void copyFilteredClouds(std::vector<float>* ground, std::vector<float>* obstacle);
 
-    // 既に d_obstacle_ に保持されている点群に対して、全域候補の SDF Matcher を一括起動する
+    // Evaluate global SDF candidates on d_obstacle_ and extract Top-K spatially/angularly separated poses
+    bool evaluateGlobalSDF(
+        int obstacle_count,
+        const PoseCandidate& base_pose,
+        float range_x,
+        float range_y,
+        float step_xy,
+        float range_yaw,
+        float step_yaw,
+        const MatchingParams& match_params,
+        std::vector<PoseCandidate>& out_top_poses,
+        int top_k = 4
+    );
+
+    // Single best candidate overload for backward compatibility
     bool evaluateGlobalSDF(
         int obstacle_count,
         const PoseCandidate& base_pose,
@@ -218,14 +246,5 @@ private:
     float last_weight_2d_{0.0f};
     bool use_esdf_{false};
     ProfileMetrics last_metrics_{};
-    bool matchObstacleCloud(
-        int h_obstacle_count,
-        const MatchingParams& match_params,
-        const PoseCandidate& search_base_pose,
-        std::vector<float>& out_dynamic_pts,
-        PoseCandidate& out_best_pose,
-        float& out_best_cost,
-        int* out_inlier_count,
-        float* out_inlier_cost
-    );
+    float computeEffectiveWeight2D(const MatchingParams& match_params) const;
 };
