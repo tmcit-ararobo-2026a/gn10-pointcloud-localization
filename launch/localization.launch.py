@@ -16,11 +16,14 @@ def _create_localization_node(context):
     use_sim_time_str = LaunchConfiguration('use_sim_time').perform(context).lower()
     use_sim_time = use_sim_time_str in ('true', '1')
 
-    params_file = LaunchConfiguration('params_file').perform(context)
+    params_file = LaunchConfiguration('localization_params_file').perform(context)
     default_param_file = os.path.join(pkg_dir, 'config', 'localization_params.yaml')
 
     if not params_file:
-        params_file = default_param_file
+        if 'params_file' in context.launch_configurations:
+            params_file = LaunchConfiguration('params_file').perform(context)
+        else:
+            params_file = default_param_file
     elif not os.path.isabs(params_file) and not os.path.exists(params_file):
         candidate = os.path.join(pkg_dir, 'config', params_file)
         if os.path.exists(candidate):
@@ -109,7 +112,7 @@ def generate_launch_description():
     )
 
     declare_params_file = DeclareLaunchArgument(
-        'params_file',
+        'localization_params_file',
         default_value=default_param_file,
         description='Full path or filename in config/ of profile YAML to overlay on common_params.yaml'
     )

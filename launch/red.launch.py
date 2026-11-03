@@ -24,7 +24,7 @@ def generate_launch_description():
     )
 
     declare_params_file = DeclareLaunchArgument(
-        'params_file',
+        'localization_params_file',
         default_value=default_param_file,
         description='Full path to the ROS2 parameters file to use'
     )
@@ -37,7 +37,7 @@ def generate_launch_description():
         output='screen',
         parameters=[
             common_param_file,
-            LaunchConfiguration('params_file'),
+            LaunchConfiguration('localization_params_file'),
             {'use_sim_time': LaunchConfiguration('use_sim_time')}
         ],
         # 必要に応じてトピックのリマップを追加
