@@ -18,10 +18,24 @@ Usage:
 
 import argparse
 import csv
+import os
 import sys
 import threading
+import time
 from collections import deque
 import numpy as np
+
+# Prevent OpenGL crashes on systems without dedicated GPU or DRI driver
+os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+
+# Use non-interactive Agg backend if running in a headless / no-display environment
+IS_HEADLESS = ("DISPLAY" not in os.environ and "WAYLAND_DISPLAY" not in os.environ)
+if IS_HEADLESS:
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+    except Exception:
+        pass
 
 try:
     import matplotlib
@@ -96,6 +110,8 @@ def plot_static(records, save_path=None, title="Localization Telemetry Analysis"
     if save_path:
         plt.savefig(save_path, dpi=150)
         print(f"Plot saved successfully to: {save_path}")
+    elif IS_HEADLESS:
+        print("Warning: Running in a headless environment without GUI. Specify --save <file.png> to save the plot.")
     else:
         plt.show()
 
@@ -147,8 +163,11 @@ def run_live_node(topic, buffer_len=500, save_path=None, window_sec=15.0):
         import rclpy
         from rclpy.node import Node
         from gn10_pointcloud_localization.msg import LocalizationTelemetry
-    except ImportError:
-        print("ROS 2 Python packages not available. Source your ROS 2 environment first.", file=sys.stderr)
+    except ImportError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        print("ROS 2 Python packages not available. In GPU-less environments, build the CPU monitor with:", file=sys.stderr)
+        print("    colcon build --packages-select gn10_pointcloud_localization", file=sys.stderr)
+        print("    source install/setup.bash", file=sys.stderr)
         sys.exit(1)
 
     rclpy.init()
@@ -311,7 +330,14 @@ def run_live_node(topic, buffer_len=500, save_path=None, window_sec=15.0):
     ani = FuncAnimation(fig, update_plot, interval=100, blit=False, cache_frame_data=False)
 
     try:
-        plt.show()
+        backend = matplotlib.get_backend().lower()
+        if "agg" in backend and not ("tkagg" in backend or "qtagg" in backend):
+            print(f"Running in headless/no-GUI mode (backend: {backend}).")
+            print(f"Streaming telemetry from {topic}. Press Ctrl+C to stop and process plot...")
+            while rclpy.ok():
+                time.sleep(0.2)
+        else:
+            plt.show()
     except KeyboardInterrupt:
         pass
     finally:

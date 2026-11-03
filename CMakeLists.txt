@@ -3,8 +3,17 @@
 
 cmake_minimum_required(VERSION 3.18)
 project(gn10_pointcloud_localization LANGUAGES C CXX)
+
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+  set(DEFAULT_BUILD_GPU_NODES ON)
+else()
+  set(DEFAULT_BUILD_GPU_NODES OFF)
+endif()
+
 option(BUILD_RUNTIME_NODES "Build localization runtime nodes" ON)
-option(BUILD_GPU_NODES "Build CUDA matcher (CPU monitor can be built separately)" ON)
+option(BUILD_GPU_NODES "Build CUDA matcher (CPU monitor can be built separately)" ${DEFAULT_BUILD_GPU_NODES})
 
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 72 86 87 89)
@@ -154,11 +163,6 @@ install(TARGETS
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
-install(PROGRAMS
-  scripts/plot_telemetry.py
-  DESTINATION lib/${PROJECT_NAME}
-)
-
 if(BUILD_TESTING)
   enable_testing()
   add_executable(dynamic_filter_test tests/test_dynamic_filter.cu)
@@ -190,11 +194,17 @@ if(BUILD_TESTING)
 endif()
 
 # 他のノードや環境変数のためにライブラリをエクスポート
-ament_export_dependencies(rosidl_default_runtime)
 ament_export_libraries(gn10_cuda_lib gn10_esdf_lib)
 
 endif()
 endif()
+
+ament_export_dependencies(rosidl_default_runtime)
+
+install(PROGRAMS
+  scripts/plot_telemetry.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 install(DIRECTORY launch config rviz map
   DESTINATION share/${PROJECT_NAME}
