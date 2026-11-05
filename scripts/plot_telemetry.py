@@ -46,49 +46,80 @@ except ImportError:
     sys.exit(1)
 
 
+def sanitize_metric(values, default=0.0, max_limit=None, min_limit=0.0):
+    """Sanitizes non-finite or extreme values to prevent Matplotlib GUI crashes."""
+    arr = np.array(values, dtype=float)
+    non_finite = ~np.isfinite(arr)
+    arr[non_finite] = default
+    if min_limit is not None or max_limit is not None:
+        arr = np.clip(arr, min_limit, max_limit)
+    return arr
+
+
 def plot_static(records, save_path=None, title="Localization Telemetry Analysis"):
     if not records or len(records["timestamp"]) == 0:
         print("No telemetry data to plot.")
         return
 
-    t = np.array(records["timestamp"])
+    t = np.array(records["timestamp"], dtype=float)
     t = t - t[0]  # Relative seconds
+
+    # Sanitize metrics to guarantee finite bounds for plotting
+    b_cost = sanitize_metric(records["best_cost"], default=np.nan, max_limit=5.0)
+    c_3d = sanitize_metric(records["cost_3d"], default=np.nan, max_limit=5.0)
+    c_2d = sanitize_metric(records["cost_2d"], default=np.nan, max_limit=5.0)
+    i_ratio = sanitize_metric(records["inlier_ratio"], default=0.0, min_limit=0.0, max_limit=1.0) * 100.0
+    i_cost = sanitize_metric(records["inlier_cost"], default=np.nan, max_limit=2.0)
+    spd = sanitize_metric(records["linear_speed"], default=0.0, min_limit=0.0, max_limit=20.0)
+    r_xy = sanitize_metric(records["search_range_xy"], default=0.0, min_limit=0.0, max_limit=10.0)
+    r_yaw = sanitize_metric(records["search_range_yaw"], default=0.0, min_limit=0.0, max_limit=10.0)
+    o_tot = sanitize_metric(records["obstacle_count_total"], default=0.0, min_limit=0.0)
+    o_3d = sanitize_metric(records["obstacle_count_3d"], default=0.0, min_limit=0.0)
+    o_2d = sanitize_metric(records["obstacle_count_2d"], default=0.0, min_limit=0.0)
+    i_cnt = sanitize_metric(records["inlier_count"], default=0.0, min_limit=0.0)
 
     fig, axes = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
     fig.suptitle(title, fontsize=14, fontweight="bold")
 
     # 1. Matching Costs
     ax0 = axes[0]
-    ax0.plot(t, records["best_cost"], label="Total Cost (best_cost)", color="tab:blue", linewidth=1.5)
-    ax0.plot(t, records["cost_3d"], label="3D Cost", color="tab:cyan", linestyle="--", alpha=0.8)
-    ax0.plot(t, records["cost_2d"], label="2D Cost", color="tab:orange", linestyle="--", alpha=0.8)
+    ax0.plot(t, b_cost, label="Total Cost (best_cost)", color="tab:blue", linewidth=1.5)
+    ax0.plot(t, c_3d, label="3D Cost", color="tab:cyan", linestyle="--", alpha=0.8)
+    ax0.plot(t, c_2d, label="2D Cost", color="tab:orange", linestyle="--", alpha=0.8)
     ax0.axhline(0.165, color="tab:red", linestyle=":", label="cost_threshold (0.165)")
     ax0.axhline(0.220, color="tab:purple", linestyle=":", label="max_inlier_accept_cost (0.220)")
     ax0.set_ylabel("Cost [m]")
     ax0.set_title("Matching Cost Components & Thresholds")
     ax0.grid(True, linestyle="--", alpha=0.6)
     ax0.legend(loc="upper right", ncol=3, fontsize=9)
+    valid_costs = b_cost[np.isfinite(b_cost)]
+    max_c = max(0.40, min(5.0, float(np.max(valid_costs)) * 1.15)) if len(valid_costs) > 0 else 0.40
+    ax0.set_ylim(0.0, max_c)
 
     # 2. Inlier Metrics
     ax1 = axes[1]
     ax1_twin = ax1.twinx()
-    l1 = ax1.plot(t, np.array(records["inlier_ratio"]) * 100.0, label="Inlier Ratio (%)", color="tab:green", linewidth=1.5)
+    l1 = ax1.plot(t, i_ratio, label="Inlier Ratio (%)", color="tab:green", linewidth=1.5)
     ax1.axhline(35.0, color="darkgreen", linestyle=":", label="min_inlier_ratio (35%)")
-    l2 = ax1_twin.plot(t, records["inlier_cost"], label="Inlier Cost [m]", color="tab:olive", linestyle="-.", alpha=0.9)
+    l2 = ax1_twin.plot(t, i_cost, label="Inlier Cost [m]", color="tab:olive", linestyle="-.", alpha=0.9)
     ax1_twin.axhline(0.010, color="gray", linestyle=":", label="inlier_cost_thresh (0.01m)")
     ax1.set_ylabel("Inlier Ratio [%]")
     ax1_twin.set_ylabel("Inlier Cost [m]")
     ax1.set_title("Inlier Ratio & Inlier Cost")
     ax1.grid(True, linestyle="--", alpha=0.6)
+    ax1.set_ylim(0.0, 100.0)
+    valid_ic = i_cost[np.isfinite(i_cost)]
+    max_ic = max(0.08, min(1.0, float(np.max(valid_ic)) * 1.15)) if len(valid_ic) > 0 else 0.08
+    ax1_twin.set_ylim(0.0, max_ic)
     lines = l1 + l2
     labels = [l.get_label() for l in lines] + ["min_inlier_ratio (35%)", "inlier_cost_thresh (0.01m)"]
     ax1.legend(lines + [ax1.get_lines()[-1], ax1_twin.get_lines()[-1]], labels, loc="upper right", ncol=2, fontsize=9)
 
     # 3. Kinematics & Search Windows
     ax2 = axes[2]
-    ax2.plot(t, records["linear_speed"], label="Speed (m/s)", color="tab:red", linewidth=1.5)
-    ax2.plot(t, records["search_range_xy"], label="Search Range XY [m]", color="tab:blue", linestyle="-.")
-    ax2.plot(t, records["search_range_yaw"], label="Search Range Yaw [rad]", color="tab:orange", linestyle="--")
+    ax2.plot(t, spd, label="Speed (m/s)", color="tab:red", linewidth=1.5)
+    ax2.plot(t, r_xy, label="Search Range XY [m]", color="tab:blue", linestyle="-.")
+    ax2.plot(t, r_yaw, label="Search Range Yaw [rad]", color="tab:orange", linestyle="--")
     ax2.set_ylabel("Kinematics / Bounds")
     ax2.set_title("Robot Linear Speed & Adaptive Search Windows")
     ax2.grid(True, linestyle="--", alpha=0.6)
@@ -96,15 +127,17 @@ def plot_static(records, save_path=None, title="Localization Telemetry Analysis"
 
     # 4. Point Counts
     ax3 = axes[3]
-    ax3.plot(t, records["obstacle_count_total"], label="Total Obstacles", color="black", linewidth=1.2)
-    ax3.plot(t, records["obstacle_count_3d"], label="3D Obstacles", color="tab:cyan", linestyle="--", alpha=0.7)
-    ax3.plot(t, records["obstacle_count_2d"], label="2D Obstacles", color="tab:orange", linestyle="--", alpha=0.7)
-    ax3.plot(t, records["inlier_count"], label="Inliers", color="tab:green", linewidth=1.2)
+    ax3.plot(t, o_tot, label="Total Obstacles", color="black", linewidth=1.2)
+    ax3.plot(t, o_3d, label="3D Obstacles", color="tab:cyan", linestyle="--", alpha=0.7)
+    ax3.plot(t, o_2d, label="2D Obstacles", color="tab:orange", linestyle="--", alpha=0.7)
+    ax3.plot(t, i_cnt, label="Inliers", color="tab:green", linewidth=1.2)
     ax3.set_xlabel("Time [s]")
     ax3.set_ylabel("Points")
     ax3.set_title("Obstacle & Inlier Point Counts")
     ax3.grid(True, linestyle="--", alpha=0.6)
     ax3.legend(loc="upper right", ncol=4, fontsize=9)
+    max_pts = max(50.0, float(np.max(o_tot)) * 1.15) if len(o_tot) > 0 else 100.0
+    ax3.set_ylim(0.0, max_pts)
 
     plt.tight_layout()
     if save_path:
@@ -275,56 +308,89 @@ def run_live_node(topic, buffer_len=500, save_path=None, window_sec=15.0):
     plt.tight_layout()
 
     def update_plot(_frame):
-        with lock:
-            if len(buffer["timestamp"]) < 2:
-                return line_best,
-            t_arr = np.array(buffer["timestamp"])
-            b_cost = np.array(buffer["best_cost"])
-            c_3d = np.array(buffer["cost_3d"])
-            c_2d = np.array(buffer["cost_2d"])
-            i_cost = np.array(buffer["inlier_cost"])
-            i_cnt = np.array(buffer["inlier_count"])
-            i_ratio = np.array(buffer["inlier_ratio"]) * 100.0
-            o_3d = np.array(buffer["obstacle_count_3d"])
-            o_2d = np.array(buffer["obstacle_count_2d"])
-            o_tot = np.array(buffer["obstacle_count_total"])
-            spd = np.array(buffer["linear_speed"])
-            r_xy = np.array(buffer["search_range_xy"])
-            r_yaw = np.array(buffer["search_range_yaw"])
+        artists = (
+            line_best, line_3d, line_2d, line_inlier_ratio, line_inlier_cost,
+            line_speed, line_range_xy, line_range_yaw, line_obs_tot,
+            line_obs_3d, line_obs_2d, line_inliers
+        )
+        try:
+            with lock:
+                if len(buffer["timestamp"]) < 2:
+                    return artists
+                t_arr = np.array(buffer["timestamp"], dtype=float)
+                b_cost = np.array(buffer["best_cost"], dtype=float)
+                c_3d = np.array(buffer["cost_3d"], dtype=float)
+                c_2d = np.array(buffer["cost_2d"], dtype=float)
+                i_cost = np.array(buffer["inlier_cost"], dtype=float)
+                i_cnt = np.array(buffer["inlier_count"], dtype=float)
+                i_ratio = np.array(buffer["inlier_ratio"], dtype=float) * 100.0
+                o_3d = np.array(buffer["obstacle_count_3d"], dtype=float)
+                o_2d = np.array(buffer["obstacle_count_2d"], dtype=float)
+                o_tot = np.array(buffer["obstacle_count_total"], dtype=float)
+                spd = np.array(buffer["linear_speed"], dtype=float)
+                r_xy = np.array(buffer["search_range_xy"], dtype=float)
+                r_yaw = np.array(buffer["search_range_yaw"], dtype=float)
 
-        # Scrolling relative time: display up to window_sec
-        t_latest = t_arr[-1]
-        mask = (t_arr >= (t_latest - window_sec))
-        if not np.any(mask):
-            return line_best,
+            # Scrolling relative time: display up to window_sec
+            t_latest = t_arr[-1]
+            mask = (t_arr >= (t_latest - window_sec))
+            if not np.any(mask):
+                return artists
 
-        t_sub = t_arr[mask] - t_latest  # Negative to 0s
+            t_sub = t_arr[mask] - t_latest  # Negative to 0s
 
-        line_best.set_data(t_sub, b_cost[mask])
-        line_3d.set_data(t_sub, c_3d[mask])
-        line_2d.set_data(t_sub, c_2d[mask])
+            # Sanitize metrics to prevent Tkinter/GUI backend overflow crashes on spikes
+            b_sub = np.clip(np.where(np.isfinite(b_cost[mask]), b_cost[mask], np.nan), 0.0, 5.0)
+            c3_sub = np.clip(np.where(np.isfinite(c_3d[mask]), c_3d[mask], np.nan), 0.0, 5.0)
+            c2_sub = np.clip(np.where(np.isfinite(c_2d[mask]), c_2d[mask], np.nan), 0.0, 5.0)
+            ic_sub = np.clip(np.where(np.isfinite(i_cost[mask]), i_cost[mask], np.nan), 0.0, 2.0)
+            ir_sub = np.clip(np.where(np.isfinite(i_ratio[mask]), i_ratio[mask], 0.0), 0.0, 100.0)
+            ot_sub = np.clip(np.where(np.isfinite(o_tot[mask]), o_tot[mask], 0.0), 0.0, 1e6)
+            o3_sub = np.clip(np.where(np.isfinite(o_3d[mask]), o_3d[mask], 0.0), 0.0, 1e6)
+            o2_sub = np.clip(np.where(np.isfinite(o_2d[mask]), o_2d[mask], 0.0), 0.0, 1e6)
+            icnt_sub = np.clip(np.where(np.isfinite(i_cnt[mask]), i_cnt[mask], 0.0), 0.0, 1e6)
+            spd_sub = np.clip(np.where(np.isfinite(spd[mask]), spd[mask], 0.0), 0.0, 20.0)
+            rxy_sub = np.clip(np.where(np.isfinite(r_xy[mask]), r_xy[mask], 0.0), 0.0, 10.0)
+            ryaw_sub = np.clip(np.where(np.isfinite(r_yaw[mask]), r_yaw[mask], 0.0), 0.0, 10.0)
 
-        line_inlier_ratio.set_data(t_sub, i_ratio[mask])
-        line_inlier_cost.set_data(t_sub, i_cost[mask])
+            line_best.set_data(t_sub, b_sub)
+            line_3d.set_data(t_sub, c3_sub)
+            line_2d.set_data(t_sub, c2_sub)
 
-        line_speed.set_data(t_sub, spd[mask])
-        line_range_xy.set_data(t_sub, r_xy[mask])
-        line_range_yaw.set_data(t_sub, r_yaw[mask])
+            line_inlier_ratio.set_data(t_sub, ir_sub)
+            line_inlier_cost.set_data(t_sub, ic_sub)
 
-        line_obs_tot.set_data(t_sub, o_tot[mask])
-        line_obs_3d.set_data(t_sub, o_3d[mask])
-        line_obs_2d.set_data(t_sub, o_2d[mask])
-        line_inliers.set_data(t_sub, i_cnt[mask])
+            line_speed.set_data(t_sub, spd_sub)
+            line_range_xy.set_data(t_sub, rxy_sub)
+            line_range_yaw.set_data(t_sub, ryaw_sub)
 
-        # Adjust X bounds to scrolling window [-window_sec, 0]
-        x_min = min(-window_sec, t_sub[0])
-        ax3.set_xlim(x_min, 0.5)
+            line_obs_tot.set_data(t_sub, ot_sub)
+            line_obs_3d.set_data(t_sub, o3_sub)
+            line_obs_2d.set_data(t_sub, o2_sub)
+            line_inliers.set_data(t_sub, icnt_sub)
 
-        # Autoscale Y for obstacle counts
-        max_pts = max(50, np.max(o_tot[mask]) * 1.15) if len(o_tot[mask]) > 0 else 100
-        ax3.set_ylim(0, max_pts)
+            # Adjust X bounds to scrolling window [-window_sec, 0]
+            x_min = min(-window_sec, float(t_sub[0]))
+            ax3.set_xlim(x_min, 0.5)
 
-        return line_best, line_3d, line_2d, line_inlier_ratio, line_inlier_cost, line_speed, line_range_xy, line_range_yaw, line_obs_tot, line_obs_3d, line_obs_2d, line_inliers
+            # Adaptive autoscale Y for cost (ax0) with a safe ceiling so spikes are visible without crashing
+            finite_b = b_sub[np.isfinite(b_sub)]
+            max_cost = max(0.40, min(5.0, float(np.max(finite_b)) * 1.15)) if len(finite_b) > 0 else 0.40
+            ax0.set_ylim(0.0, max_cost)
+
+            # Adaptive autoscale Y for inlier cost (ax1_twin)
+            finite_ic = ic_sub[np.isfinite(ic_sub)]
+            max_ic = max(0.08, min(1.0, float(np.max(finite_ic)) * 1.15)) if len(finite_ic) > 0 else 0.08
+            ax1_twin.set_ylim(0.0, max_ic)
+
+            # Autoscale Y for obstacle counts
+            max_pts = max(50.0, float(np.max(ot_sub)) * 1.15) if len(ot_sub) > 0 else 100.0
+            ax3.set_ylim(0.0, max_pts)
+        except Exception as e:
+            # Prevent unhandled exceptions from terminating FuncAnimation
+            print(f"[TelemetryViewer Warning] update_plot exception caught: {e}", file=sys.stderr)
+
+        return artists
 
     # Animate at 10 Hz (interval=100ms)
     ani = FuncAnimation(fig, update_plot, interval=100, blit=False, cache_frame_data=False)
