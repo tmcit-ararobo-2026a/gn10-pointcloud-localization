@@ -327,7 +327,7 @@ static void extractDynamicPointsGPU(
     if (!d_compact_dynamic_pts || !d_is_dynamic || num_points > g_max_dynamic_pts) {
         if (d_is_dynamic) cudaFree(d_is_dynamic);
         if (d_compact_dynamic_pts) cudaFree(d_compact_dynamic_pts);
-        g_max_dynamic_pts = num_points * 2;
+        g_max_dynamic_pts = std::max(num_points * 2, 65536);
         checkDynamicCuda(cudaMalloc(&d_is_dynamic, g_max_dynamic_pts * sizeof(uint8_t)));
         checkDynamicCuda(cudaMalloc(&d_compact_dynamic_pts, g_max_dynamic_pts * sizeof(Point3D)));
     }

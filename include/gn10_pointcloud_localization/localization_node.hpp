@@ -176,8 +176,11 @@ private:
         std::chrono::steady_clock::time_point received;
     };
     std::deque<PendingRealSense> realsense_queue_;
+    std::mutex realsense_queue_mutex_;
+    std::mutex realsense_processing_mutex_;
     bool realsense_tracking_protection_{false};
     std::deque<visualization_msgs::msg::Marker::SharedPtr> realsense_predictions_;
+    std::mutex realsense_predictions_mutex_;
     rclcpp::Subscription<visualization_msgs::msg::Marker>::SharedPtr sub_realsense_prediction_;
     double realsense_wait_sec_{0.15}, realsense_max_age_sec_{0.25};
     double realsense_pose_max_age_sec_{0.25}, realsense_poll_sec_{0.02};
@@ -190,6 +193,11 @@ private:
     int64_t realsense_last_stamp_ns_{-1};
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_realsense_status_;
     rclcpp::TimerBase::SharedPtr realsense_timer_;
+
+    // Callback Groups for Thread Isolation
+    rclcpp::CallbackGroup::SharedPtr cb_group_localization_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_realsense_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_timers_;
 
     // ROS 2 Interfaces
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
