@@ -6,6 +6,7 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <mutex>
 #include <vector>
 
 #include "gn10_pointcloud_localization/cuda/field_objects.cuh"
@@ -227,6 +228,7 @@ public:
 private:
     int max_points_;
     cudaStream_t stream_{nullptr};
+    mutable std::recursive_mutex solver_mutex_;
 
     // Device Memory
     float* d_in_{nullptr};

@@ -594,8 +594,15 @@ void LocalizationNode::setupROSInterfaces()
     tf_listener_    = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
+    cb_group_localization_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_realsense_    = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_timers_       = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    rclcpp::SubscriptionOptions loc_sub_opts;
+    loc_sub_opts.callback_group = cb_group_localization_;
+
     std::string topic_cloud = this->get_parameter("topics.input_cloud").as_string();
-    sub_cloud_filter_.subscribe(this, topic_cloud, rmw_qos_profile_sensor_data);
+    sub_cloud_filter_.subscribe(this, topic_cloud, rmw_qos_profile_sensor_data, loc_sub_opts);
     tf_filter_ = std::make_shared<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>>(
         sub_cloud_filter_,
         *tf_buffer_,
@@ -611,13 +618,15 @@ void LocalizationNode::setupROSInterfaces()
     sub_imu_              = this->create_subscription<sensor_msgs::msg::Imu>(
         topic_imu,
         rclcpp::SensorDataQoS().keep_last(200),
-        std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1)
+        std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1),
+        loc_sub_opts
     );
     if (use_fused_prior_) {
         sub_fused_prior_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
             this->get_parameter("topics.fused_prior").as_string(),
             20,
-            std::bind(&LocalizationNode::fusedPriorCallback, this, std::placeholders::_1)
+            std::bind(&LocalizationNode::fusedPriorCallback, this, std::placeholders::_1),
+            loc_sub_opts
         );
     }
 
@@ -655,7 +664,8 @@ void LocalizationNode::setupROSInterfaces()
         sub_2d_lidar_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
             topic_2d_lidar_,
             rclcpp::SensorDataQoS(),
-            std::bind(&LocalizationNode::scan2dCallback, this, std::placeholders::_1)
+            std::bind(&LocalizationNode::scan2dCallback, this, std::placeholders::_1),
+            loc_sub_opts
         );
         pub_2d_deskewed_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             topic_2d_deskewed_, 10
@@ -670,27 +680,36 @@ void LocalizationNode::setupROSInterfaces()
     }
 
     if (use_realsense_) {
+        rclcpp::SubscriptionOptions rs_sub_opts;
+        rs_sub_opts.callback_group = cb_group_realsense_;
+
         sub_realsense_cloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             topic_realsense_cloud_,
-            rclcpp::SensorDataQoS(),
-            std::bind(&LocalizationNode::realsenseCloudCallback, this, std::placeholders::_1)
+            rclcpp::SensorDataQoS().keep_last(1),
+            std::bind(&LocalizationNode::realsenseCloudCallback, this, std::placeholders::_1),
+            rs_sub_opts
         );
         pub_realsense_dynamic_ =
-            this->create_publisher<sensor_msgs::msg::PointCloud2>(topic_realsense_dynamic_, 10);
+            this->create_publisher<sensor_msgs::msg::PointCloud2>(topic_realsense_dynamic_, rclcpp::SensorDataQoS().keep_last(1));
         pub_realsense_status_ = create_publisher<std_msgs::msg::String>(
             get_parameter("realsense.status_topic").as_string(), rclcpp::QoS(1).transient_local());
         if (realsense_tracking_protection_) {
-            sub_realsense_prediction_=create_subscription<visualization_msgs::msg::Marker>(
-                get_parameter("realsense.prediction_topic").as_string(),10,
+            sub_realsense_prediction_ = create_subscription<visualization_msgs::msg::Marker>(
+                get_parameter("realsense.prediction_topic").as_string(), 10,
                 [this](visualization_msgs::msg::Marker::SharedPtr marker) {
+                    std::lock_guard<std::mutex> lock(realsense_predictions_mutex_);
                     realsense_predictions_.push_back(marker);
-                    while (realsense_predictions_.size()>static_cast<size_t>(realsense_queue_size_)*2)
+                    while (realsense_predictions_.size() > static_cast<size_t>(realsense_queue_size_) * 2)
                         realsense_predictions_.pop_front();
-                });
+                },
+                rs_sub_opts
+            );
         }
-        // Same mutually-exclusive callback group as LiDAR: PoseSolver/CUDA state is never concurrent.
-        realsense_timer_ = create_wall_timer(std::chrono::duration<double>(realsense_poll_sec_),
-            std::bind(&LocalizationNode::processRealSenseDynamic, this));
+        realsense_timer_ = create_wall_timer(
+            std::chrono::duration<double>(realsense_poll_sec_),
+            std::bind(&LocalizationNode::processRealSenseDynamic, this),
+            cb_group_realsense_
+        );
         publishRealSenseStatus("WAITING_FOR_CLOUD");
         RCLCPP_INFO(
             this->get_logger(),
@@ -702,7 +721,7 @@ void LocalizationNode::setupROSInterfaces()
 
     using namespace std::chrono_literals;
     map_timer_ =
-        this->create_wall_timer(1s, std::bind(&LocalizationNode::publishFieldMapMarkers, this));
+        this->create_wall_timer(1s, std::bind(&LocalizationNode::publishFieldMapMarkers, this), cb_group_timers_);
 
     param_callback_handle_ = this->add_on_set_parameters_callback(
         std::bind(&LocalizationNode::onParametersChange, this, std::placeholders::_1)
@@ -796,32 +815,63 @@ void LocalizationNode::publishRealSenseStatus(const std::string& status) {
 
 void LocalizationNode::realsenseCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     const auto stamp = rclcpp::Time(msg->header.stamp, get_clock()->get_clock_type());
-    if (stamp.nanoseconds() == realsense_last_stamp_ns_) return;
-    if (stamp.nanoseconds() < realsense_last_stamp_ns_) {
-        // A simulation/bag clock rewind must not mix old queued frames into the new run.
-        realsense_queue_.clear();
+    {
+        std::lock_guard<std::mutex> q_lock(realsense_queue_mutex_);
+        if (stamp.nanoseconds() == realsense_last_stamp_ns_) return;
+        if (stamp.nanoseconds() < realsense_last_stamp_ns_) {
+            // A simulation/bag clock rewind must not mix old queued frames into the new run.
+            realsense_queue_.clear();
+        }
+        realsense_last_stamp_ns_ = stamp.nanoseconds();
+        if (realsense_queue_.size() >= static_cast<size_t>(realsense_queue_size_)) {
+            realsense_queue_.pop_front();
+            publishRealSenseStatus("QUEUE_OVERFLOW");
+        }
+        realsense_queue_.push_back({msg, std::chrono::steady_clock::now()});
     }
-    realsense_last_stamp_ns_ = stamp.nanoseconds();
-    if (realsense_queue_.size() >= static_cast<size_t>(realsense_queue_size_)) {
-        realsense_queue_.pop_front(); publishRealSenseStatus("QUEUE_OVERFLOW");
-    }
-    realsense_queue_.push_back({msg, std::chrono::steady_clock::now()});
     processRealSenseDynamic();
 }
 
 void LocalizationNode::processRealSenseDynamic() {
-    if (!use_realsense_ || realsense_queue_.empty()) return;
-    const auto& pending = realsense_queue_.front();
+    if (!use_realsense_) return;
+
+    // Prevent concurrent execution of RealSense dynamic filtering across timer and callback
+    std::unique_lock<std::mutex> proc_lock(realsense_processing_mutex_, std::try_to_lock);
+    if (!proc_lock.owns_lock()) return;
+
+    PendingRealSense pending;
+    {
+        std::lock_guard<std::mutex> q_lock(realsense_queue_mutex_);
+        if (realsense_queue_.empty()) return;
+        pending = realsense_queue_.front();
+    }
+
+    auto pop_queue = [this]() {
+        std::lock_guard<std::mutex> q_lock(realsense_queue_mutex_);
+        if (!realsense_queue_.empty()) realsense_queue_.pop_front();
+    };
+
     const auto msg = pending.cloud;
     const rclcpp::Time stamp(msg->header.stamp, get_clock()->get_clock_type());
     const double age = (now() - stamp).seconds();
     if (std::abs(age) > realsense_max_age_sec_) {
-        realsense_queue_.pop_front(); publishRealSenseStatus("IMAGE_TIME_INVALID"); return;
+        pop_queue();
+        publishRealSenseStatus("IMAGE_TIME_INVALID");
+        return;
     }
-    if (is_lost_ || std::abs((stamp - last_match_stamp_).seconds()) > realsense_pose_max_age_sec_) {
+
+    bool is_lost_val = false;
+    rclcpp::Time match_stamp;
+    {
+        std::lock_guard<std::mutex> p_lock(pose_mutex_);
+        is_lost_val = is_lost_;
+        match_stamp = last_match_stamp_;
+    }
+    if (is_lost_val || std::abs((stamp - match_stamp).seconds()) > realsense_pose_max_age_sec_) {
         if (std::chrono::duration<double>(std::chrono::steady_clock::now() - pending.received).count() >= realsense_wait_sec_)
-            realsense_queue_.pop_front();
-        publishRealSenseStatus("WAITING_FOR_LOCALIZATION"); return;
+            pop_queue();
+        publishRealSenseStatus("WAITING_FOR_LOCALIZATION");
+        return;
     }
     // Transform lookup: try exact acquisition time first; fallback to latest pose if cloud is slightly ahead
     geometry_msgs::msg::TransformStamped pose_tf;
@@ -833,8 +883,9 @@ void LocalizationNode::processRealSenseDynamic() {
         }
     } catch (const tf2::TransformException&) {
         if (std::chrono::duration<double>(std::chrono::steady_clock::now() - pending.received).count() >= realsense_wait_sec_)
-            realsense_queue_.pop_front();
-        publishRealSenseStatus("WAITING_FOR_TF"); return;
+            pop_queue();
+        publishRealSenseStatus("WAITING_FOR_TF");
+        return;
     }
 
     Eigen::Affine3d transform = Eigen::Affine3d::Identity();
@@ -849,13 +900,15 @@ void LocalizationNode::processRealSenseDynamic() {
             transform = tf2::transformToEigen(cloud_tf);
         } catch (const tf2::TransformException&) {
             if (std::chrono::duration<double>(std::chrono::steady_clock::now() - pending.received).count() >= realsense_wait_sec_)
-                realsense_queue_.pop_front();
-            publishRealSenseStatus("WAITING_FOR_TF"); return;
+                pop_queue();
+            publishRealSenseStatus("WAITING_FOR_TF");
+            return;
         }
     }
 
     visualization_msgs::msg::Marker::SharedPtr prediction;
     if (realsense_tracking_protection_) {
+        std::lock_guard<std::mutex> pred_lock(realsense_predictions_mutex_);
         for (const auto& item : realsense_predictions_) {
             if (std::abs((rclcpp::Time(item->header.stamp, get_clock()->get_clock_type()) - stamp).seconds()) < realsense_prediction_tolerance_sec_) {
                 prediction = item;
@@ -937,9 +990,11 @@ void LocalizationNode::processRealSenseDynamic() {
         std_msgs::msg::Header header=msg->header; header.frame_id=base_frame_;
         // Empty observations are meaningful; always publish them for tracker loss handling.
         publishCloud(pub_realsense_dynamic_,header,dynamic);
-        realsense_queue_.pop_front(); publishRealSenseStatus("READY");
+        pop_queue();
+        publishRealSenseStatus("READY");
     } catch (const std::exception& error) {
-        realsense_queue_.pop_front(); publishRealSenseStatus("FILTER_ERROR");
+        pop_queue();
+        publishRealSenseStatus("FILTER_ERROR");
         RCLCPP_ERROR_THROTTLE(get_logger(),*get_clock(),1000,"RealSense filter: %s",error.what());
     }
 }

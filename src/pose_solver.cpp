@@ -83,6 +83,7 @@ bool PoseSolver::processPointCloud(
     bool extract_dynamic
 )
 {
+    std::lock_guard<std::recursive_mutex> lock(solver_mutex_);
     int num_points  = static_cast<int>(h_raw_cloud.size() / 3);
     ground_count_   = 0;
     obstacle_count_ = 0;
@@ -181,6 +182,7 @@ bool PoseSolver::processPointCloud(
     bool extract_dynamic
 )
 {
+    std::lock_guard<std::recursive_mutex> lock(solver_mutex_);
     int num_points = static_cast<int>(timed_points.size());
     ground_count_   = 0;
     obstacle_count_ = 0;
@@ -320,6 +322,7 @@ bool PoseSolver::matchObstacleCloud(
     bool extract_dynamic
 )
 {
+    std::lock_guard<std::recursive_mutex> lock(solver_mutex_);
     out_dynamic_pts.clear();
     bool pose_matched = false;
     auto t_match_start = std::chrono::high_resolution_clock::now();
@@ -515,6 +518,7 @@ int PoseSolver::prepareObstacleCloud(
     const std::vector<float>* extra_base_link_points
 )
 {
+    std::lock_guard<std::recursive_mutex> lock(solver_mutex_);
     int num_points = static_cast<int>(timed_points.size());
     ground_count_     = 0;
     obstacle_count_   = 0;
@@ -605,6 +609,7 @@ int PoseSolver::prepareObstacleCloud(
     const std::vector<float>* extra_base_link_points
 )
 {
+    std::lock_guard<std::recursive_mutex> lock(solver_mutex_);
     int num_points  = static_cast<int>(h_raw_cloud.size() / 3);
     ground_count_     = 0;
     obstacle_count_   = 0;
@@ -675,6 +680,7 @@ int PoseSolver::prepareObstacleCloud(
 
 void PoseSolver::copyFilteredClouds(std::vector<float>* ground, std::vector<float>* obstacle)
 {
+    std::lock_guard<std::recursive_mutex> lock(solver_mutex_);
     if (ground) {
         ground->resize(static_cast<size_t>(ground_count_) * 3);
         if (ground_count_ > 0) {
@@ -709,6 +715,7 @@ bool PoseSolver::evaluateGlobalSDF(
     int top_k
 )
 {
+    std::lock_guard<std::recursive_mutex> lock(solver_mutex_);
     out_top_poses.clear();
     if (top_k < 1) {
         top_k = 1;
@@ -932,6 +939,7 @@ bool PoseSolver::extractDynamicPointsOnly(
     const float* tracking_sphere
 )
 {
+    std::lock_guard<std::recursive_mutex> lock(solver_mutex_);
     int num_points = static_cast<int>(h_raw_cloud.size() / 3);
     if (num_points <= 0 || !use_esdf_) return false;
 
