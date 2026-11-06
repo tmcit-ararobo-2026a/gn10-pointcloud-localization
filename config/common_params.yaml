@@ -100,7 +100,7 @@
       tf_wait_sec: 0.05
 
     realsense:
-      enable: true                          # RealSense 動的背景除去フィルタの有効化 (実機デフォルト: true)
+      enable: false                           # RealSense 動的背景除去フィルタの有効化
       input_topic: "/realsense/cropped_cloud" # トラッカーからのROIクロップ点群
       output_topic: "/realsense/dynamic_cloud" # 静的マップ差分後の動的点群
       status_topic: "/realsense/filter_status" # フィルター状態通知 (READY, WAITING_FOR_TF等)
