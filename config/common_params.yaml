@@ -64,7 +64,7 @@
       fine_refine: true
       fine_refine_levels: 2
       max_dist_thresh: 0.25
-      cost_threshold: 0.165
+      cost_threshold: 0.185
       dynamic_dist_thresh: 0.15
       field_min_x: -5.5
       field_max_x: 5.5
@@ -72,9 +72,9 @@
       field_max_y: 6.0
       use_map_bounds: true
       inlier_dist_thresh: 0.08
-      min_inliers: 60
-      inlier_cost_thresh: 0.01
-      min_inlier_ratio: 0.35
+      min_inliers: 400
+      inlier_cost_thresh: 0.035
+      min_inlier_ratio: 0.28
       max_inlier_accept_cost: 0.22
       weight_2d_lidar: 0.50
       min_2d_points: 30
