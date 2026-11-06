@@ -20,6 +20,11 @@
 
 LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
 {
+    last_match_stamp_ = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    latest_2d_stamp_  = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    prior_stamp_      = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    last_imu_stamp_   = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+
     declareAndGetParameters();
 
     solver_ =
@@ -792,11 +797,14 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     const rclcpp::Time reference_stamp(reference_ns, this->get_clock()->get_clock_type());
     if (scan_accumulator_.backwards(reference_ns)) {
         scan_accumulator_.clear();
-        yaw_history_.clear();
         velocity_history_.clear();
-        imu_initialized_ = false;
-        has_velocity_    = false;
-        is_lost_         = true;
+        {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            yaw_history_.clear();
+            imu_initialized_ = false;
+            has_velocity_    = false;
+            is_lost_         = true;
+        }
     }
     if (!scan_accumulator_.append(timed_points, reference_ns)) {
         publishLocalizationSuccess(false);
@@ -819,9 +827,10 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     std::vector<float> extra_2d_points;
     if (use_2d_lidar_) {
         std::lock_guard<std::mutex> lock(lidar_2d_mutex_);
-        if (!latest_2d_points_.empty()) {
-            const double age = (reference_stamp - latest_2d_stamp_).seconds();
-            if (std::abs(age) < 0.20) {
+        if (!latest_2d_points_.empty() && latest_2d_stamp_.nanoseconds() > 0) {
+            const double age =
+                std::abs((reference_stamp.nanoseconds() - latest_2d_stamp_.nanoseconds()) * 1e-9);
+            if (age < 0.20) {
                 extra_2d_points = latest_2d_points_;
             }
         }
@@ -831,38 +840,44 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     PoseCandidate search_base_pose;
     bool has_fresh_prior  = false;
     float current_omega_z = 0.0f;
+    YawHistory imu_snapshot;
     {
         std::lock_guard<std::mutex> lock(pose_mutex_);
         search_base_pose = last_known_pose_;
+        imu_snapshot     = yaw_history_;
         double rotation  = 0;
         if (imu_initialized_ && last_match_stamp_.nanoseconds() > 0) {
-            const double dt = (reference_stamp - last_match_stamp_).seconds();
+            const double dt =
+                (reference_stamp.nanoseconds() - last_match_stamp_.nanoseconds()) * 1e-9;
             if (dt > 0.0 && dt < 1.0 &&
-                yaw_history_.delta(last_match_stamp_.nanoseconds(), reference_ns, rotation)) {
+                imu_snapshot.delta(last_match_stamp_.nanoseconds(), reference_ns, rotation)) {
                 search_base_pose.yaw += float(rotation);
             }
         }
         search_base_pose.yaw = normalizeAngle(search_base_pose.yaw);
         predicted_pose_      = search_base_pose;
-        current_omega_z      = latest_omega_z_;
+        current_omega_z      = latest_omega_z_.load();
 
-        if (velocity_estimation_enable_ && has_velocity_ && !is_lost_) {
-            const double dt = (reference_stamp - last_match_stamp_).seconds();
+        if (velocity_estimation_enable_ && has_velocity_ && !is_lost_ &&
+            last_match_stamp_.nanoseconds() > 0) {
+            const double dt =
+                (reference_stamp.nanoseconds() - last_match_stamp_.nanoseconds()) * 1e-9;
             if (dt > 0.0 && dt < velocity_max_dt_sec_) {
                 search_base_pose.x = last_known_pose_.x + velocity_x_ * static_cast<float>(dt);
                 search_base_pose.y = last_known_pose_.y + velocity_y_ * static_cast<float>(dt);
             }
         }
-        if (use_fused_prior_ && prior_received_) {
-            const double age = (reference_stamp - prior_stamp_).seconds();
-            if (std::abs(age) <= prior_max_age_s_) {
+        if (use_fused_prior_ && prior_received_ && prior_stamp_.nanoseconds() > 0) {
+            const double age =
+                std::abs((reference_stamp.nanoseconds() - prior_stamp_.nanoseconds()) * 1e-9);
+            if (age <= prior_max_age_s_) {
                 search_base_pose = fused_prior_;
                 has_fresh_prior  = true;
             }
         }
     }
 
-    bool fully_deskewed = scan_accumulator_.is_fully_covered(reference_ns, yaw_history_);
+    bool fully_deskewed = scan_accumulator_.is_fully_covered(reference_ns, imu_snapshot);
     if (!fully_deskewed) {
         RCLCPP_WARN_THROTTLE(
             this->get_logger(),
@@ -890,11 +905,11 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         deskew_params.vy_world = 0.0f;
     }
     double ref_angle = 0.0;
-    yaw_history_.get_angle_at(reference_ns, ref_angle);
+    imu_snapshot.get_angle_at(reference_ns, ref_angle);
     deskew_params.ref_imu_angle = static_cast<float>(ref_angle);
 
     std::vector<IMUSample> imu_samples;
-    yaw_history_.get_imu_samples(imu_samples);
+    imu_snapshot.get_imu_samples(imu_samples);
 
     size_t max_points_param =
         static_cast<size_t>(this->get_parameter("filter_params.max_points").as_int());
@@ -1052,12 +1067,14 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             if (velocity_estimation_enable_) {
                 velocity_history_.push_back({reference_stamp, best_pose});
                 while (velocity_history_.size() > 2 &&
-                       (reference_stamp - velocity_history_[1].stamp).seconds() >
+                       (reference_stamp.nanoseconds() - velocity_history_[1].stamp.nanoseconds()) *
+                               1e-9 >
                            velocity_window_sec_) {
                     velocity_history_.pop_front();
                 }
                 const auto& oldest = velocity_history_.front();
-                const double dt    = (reference_stamp - oldest.stamp).seconds();
+                const double dt =
+                    (reference_stamp.nanoseconds() - oldest.stamp.nanoseconds()) * 1e-9;
                 if (dt >= velocity_min_dt_sec_ && dt < velocity_max_dt_sec_) {
                     const float vx = (best_pose.x - oldest.pose.x) / float(dt);
                     const float vy = (best_pose.y - oldest.pose.y) / float(dt);
@@ -1120,10 +1137,13 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     } else {
         // is_lost_ 時でも、IMUが健全かつ直前のマッチから短時間（0.5秒未満）であれば
         // IMU予測姿勢でTFを継続配信し、TF途絶による下流のフリーズやタイムスタンプ不整合を防止する
-        const double time_since_last_match = (reference_stamp - last_match_stamp_).seconds();
-        if (imu_initialized_ && time_since_last_match > 0.0 && time_since_last_match < 0.5) {
-            publishPoseAndTransform(reference_stamp, search_base_pose, true);
-            tf_published = true;
+        if (imu_initialized_ && last_match_stamp_.nanoseconds() > 0) {
+            const double time_since_last_match =
+                (reference_stamp.nanoseconds() - last_match_stamp_.nanoseconds()) * 1e-9;
+            if (time_since_last_match > 0.0 && time_since_last_match < 0.5) {
+                publishPoseAndTransform(reference_stamp, search_base_pose, true);
+                tf_published = true;
+            }
         }
     }
     publishLocalizationSuccess(matched && !is_lost_);
@@ -1233,16 +1253,13 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
     std::lock_guard<std::mutex> lock(pose_mutex_);
 
-    static Eigen::Matrix3d R_base_imu = Eigen::Matrix3d::Identity();
-    static bool tf_initialized        = false;
-
-    if (!tf_initialized) {
+    if (!imu_tf_initialized_) {
         try {
             geometry_msgs::msg::TransformStamped transform_stamped =
                 tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, tf2::TimePointZero);
             const Eigen::Affine3d eigen_tf = tf2::transformToEigen(transform_stamped);
-            R_base_imu                     = eigen_tf.rotation();
-            tf_initialized                 = true;
+            R_base_imu_                    = eigen_tf.rotation();
+            imu_tf_initialized_            = true;
         } catch (const tf2::TransformException&) {
             return;
         }
@@ -1251,18 +1268,17 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
     const Eigen::Vector3d omega_imu(
         msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z
     );
-    const Eigen::Vector3d omega_base = R_base_imu * omega_imu;
+    const Eigen::Vector3d omega_base = R_base_imu_ * omega_imu;
     const rclcpp::Time stamp(msg->header.stamp);
-    if (imu_initialized_ && stamp < last_imu_stamp_) {
+    if (imu_initialized_ && last_imu_stamp_.nanoseconds() > 0 && stamp < last_imu_stamp_) {
         yaw_history_.clear();
-        scan_accumulator_.clear();
-        velocity_history_.clear();
-        has_velocity_ = false;
-        is_lost_      = true;
+        has_velocity_    = false;
+        is_lost_         = true;
+        imu_initialized_ = false;
     }
     latest_omega_z_ = static_cast<float>(omega_base.z());
-    if (imu_initialized_ && !is_lost_) {
-        const double dt = (stamp - last_imu_stamp_).seconds();
+    if (imu_initialized_ && !is_lost_ && last_imu_stamp_.nanoseconds() > 0) {
+        const double dt = (stamp.nanoseconds() - last_imu_stamp_.nanoseconds()) * 1e-9;
         if (dt > 0.0 && dt < 0.1) {
             predicted_pose_.yaw =
                 normalizeAngle(predicted_pose_.yaw + static_cast<float>(omega_base.z() * dt));

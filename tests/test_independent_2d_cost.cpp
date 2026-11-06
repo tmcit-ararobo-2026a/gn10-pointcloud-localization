@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iostream>
 #include <vector>
+#include <rclcpp/rclcpp.hpp>
 
 #include "gn10_pointcloud_localization/cuda/esdf_matcher.cuh"
 #include "gn10_pointcloud_localization/esdf_map.hpp"
@@ -247,8 +248,34 @@ void testESDFMatcherWeightedResidual()
     std::cout << "[Test] testESDFMatcherWeightedResidual PASSED!" << std::endl;
 }
 
+void testTimeSourceSafety()
+{
+    std::cout << "[Test] testTimeSourceSafety starting..." << std::endl;
+
+    // Simulate RCL_ROS_TIME (source 1) vs RCL_SYSTEM_TIME (source 2)
+    rclcpp::Time ros_time(1000000000LL, RCL_ROS_TIME);
+    rclcpp::Time sys_time_uninit(0LL, RCL_SYSTEM_TIME);
+
+    // Standard ROS 2 time subtraction throws runtime_error across different time sources
+    bool threw_exception = false;
+    try {
+        [[maybe_unused]] auto dt = (ros_time - sys_time_uninit).seconds();
+    } catch (const std::runtime_error&) {
+        threw_exception = true;
+    }
+    assert(threw_exception);
+
+    // Guarding with nanoseconds() > 0 and computing with nanoseconds arithmetic never throws
+    assert(sys_time_uninit.nanoseconds() == 0);
+    double safe_dt = (ros_time.nanoseconds() - sys_time_uninit.nanoseconds()) * 1e-9;
+    assert(std::abs(safe_dt - 1.0) < 1e-6);
+
+    std::cout << "[Test] testTimeSourceSafety PASSED!" << std::endl;
+}
+
 int main()
 {
+    testTimeSourceSafety();
     testFoVWeightingLogic();
 
     int devices = 0;
