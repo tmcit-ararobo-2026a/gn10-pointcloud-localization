@@ -276,14 +276,6 @@ ros2 topic echo /localization/telemetry --csv > telemetry.csv
 python3 scripts/plot_telemetry.py --csv telemetry.csv --save analysis.png
 ```
 
-### RealSense Dynamic Extraction Settings
-
-| Parameter | Default | Purpose |
-| --- | --- | --- |
-| `realsense.enable` | `false` | Enable ESDF dynamic obstacle extraction for RealSense point cloud. |
-| `realsense.input_topic` | `/realsense/cropped_cloud` | Input point cloud topic from RealSense. |
-| `realsense.output_topic` | `/realsense/dynamic_cloud` | Output topic for extracted dynamic points after ESDF background removal. |
-
 `start_lakibeam_tf` defaults to true (mounting at $x = -0.33\,\text{m}$, $y = 0.0\,\text{m}$, $z = 0.08\,\text{m}$, $\text{yaw} = \pi$ rad); set to false if published elsewhere.
 
 ---

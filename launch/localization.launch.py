@@ -73,7 +73,6 @@ def _create_localization_node(context):
     # 3. Sensor integrations
     _override_bool('lidar_2d', 'lidar_2d.enable')
     _override_bool('lidar_2d_deskew', 'lidar_2d.deskew')
-    _override_bool('realsense', 'realsense.enable')
 
     # 4. Initial pose overrides
     _override_bool('initial_local_search', 'initial_pose.use_for_local_search')
@@ -150,12 +149,6 @@ def generate_launch_description():
     )
 
     # --- Sensor switches ---
-    declare_realsense = DeclareLaunchArgument(
-        'realsense',
-        default_value='true',
-        description='Enable RealSense ESDF dynamic background filter (default: true)'
-    )
-
     declare_lidar_2d = DeclareLaunchArgument(
         'lidar_2d',
         default_value='',
@@ -261,7 +254,6 @@ def generate_launch_description():
         declare_max_dist_thresh,
         declare_cost_threshold,
         declare_dynamic_dist_thresh,
-        declare_realsense,
         declare_lidar_2d,
         declare_lidar_2d_deskew,
         declare_weight_2d_lidar,

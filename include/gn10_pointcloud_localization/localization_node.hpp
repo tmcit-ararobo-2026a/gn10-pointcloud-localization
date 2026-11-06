@@ -53,13 +53,9 @@ private:
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
     void scan2dCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
-    void realsenseCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void fusedPriorCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
 
     // パイプライン分離ヘルパー関数
-    void processRealSenseDynamic();
-    void publishRealSenseStatus(const std::string& status);
-    std::string last_realsense_status_;
     bool getTransformAsArray(
         const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
     );
@@ -167,36 +163,8 @@ private:
     std::vector<float> latest_2d_points_;
     rclcpp::Time latest_2d_stamp_;
 
-    // RealSense Camera Integration (Dynamic Extraction Only)
-    bool use_realsense_{false};
-    std::string topic_realsense_cloud_{"/realsense/cropped_cloud"};
-    std::string topic_realsense_dynamic_{"/realsense/dynamic_cloud"};
-    struct PendingRealSense {
-        sensor_msgs::msg::PointCloud2::SharedPtr cloud;
-        std::chrono::steady_clock::time_point received;
-    };
-    std::deque<PendingRealSense> realsense_queue_;
-    std::mutex realsense_queue_mutex_;
-    std::mutex realsense_processing_mutex_;
-    bool realsense_tracking_protection_{false};
-    std::deque<visualization_msgs::msg::Marker::SharedPtr> realsense_predictions_;
-    std::mutex realsense_predictions_mutex_;
-    rclcpp::Subscription<visualization_msgs::msg::Marker>::SharedPtr sub_realsense_prediction_;
-    double realsense_wait_sec_{0.15}, realsense_max_age_sec_{0.25};
-    double realsense_pose_max_age_sec_{0.25}, realsense_poll_sec_{0.02};
-    double realsense_dynamic_dist_thresh_{-1.0};
-    double realsense_ground_z_thresh_{-1.0};
-    double realsense_height_max_{1.5};
-    double realsense_prediction_tolerance_sec_{0.05};
-    int realsense_queue_size_{8}, realsense_min_points_{1};
-    int realsense_min_dynamic_points_{15};
-    int64_t realsense_last_stamp_ns_{-1};
-    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_realsense_status_;
-    rclcpp::TimerBase::SharedPtr realsense_timer_;
-
     // Callback Groups for Thread Isolation
     rclcpp::CallbackGroup::SharedPtr cb_group_localization_;
-    rclcpp::CallbackGroup::SharedPtr cb_group_realsense_;
     rclcpp::CallbackGroup::SharedPtr cb_group_timers_;
 
     // ROS 2 Interfaces
@@ -208,13 +176,11 @@ private:
     std::shared_ptr<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>> tf_filter_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_2d_lidar_;
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_realsense_cloud_;
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_fused_prior_;
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_obstacle_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_ground_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_dynamic_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_realsense_dynamic_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_2d_deskewed_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_localization_success_;
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pub_platform_pose_;

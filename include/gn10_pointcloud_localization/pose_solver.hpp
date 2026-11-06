@@ -135,19 +135,6 @@ public:
         bool extract_dynamic                             = true
     );
 
-    // 確定姿勢を用いた動的点群の抽出 (Pose探索をスキップ)
-    bool extractDynamicPointsOnly(
-        const std::vector<float>& h_raw_cloud,
-        const PoseCandidate& confirmed_pose,
-        float dynamic_dist_thresh,
-        float field_min_x,
-        float field_max_x,
-        float field_min_y,
-        float field_max_y,
-        std::vector<float>& out_dynamic_pts,
-        const float* tracking_sphere = nullptr
-    );
-
     // Preprocess point cloud (GroundFilter) and keep obstacles in d_obstacle_ on GPU
     int prepareObstacleCloud(
         const std::vector<float>& h_raw_cloud,
