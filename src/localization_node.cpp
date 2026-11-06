@@ -783,7 +783,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         std::lock_guard<std::mutex> lock(pose_mutex_);
         search_base_pose = last_known_pose_;
         double rotation  = 0;
-        if (imu_initialized_ && last_match_stamp_.nanoseconds() > 0 && !is_lost_) {
+        if (imu_initialized_ && last_match_stamp_.nanoseconds() > 0) {
             const double dt = (reference_stamp - last_match_stamp_).seconds();
             if (dt > 0.0 && dt < 1.0 &&
                 yaw_history_.delta(last_match_stamp_.nanoseconds(), reference_ns, rotation)) {
@@ -1051,12 +1051,23 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     auto t_pub_start = std::chrono::high_resolution_clock::now();
 
+    bool tf_published = false;
     if (matched) {
         publishPoseAndTransform(reference_stamp, best_pose, false);
+        tf_published = true;
     } else if (!is_lost_) {
         // 単発のマッチング失敗時は、IMU積分と速度モデルによる予測姿勢 (search_base_pose) で TF
         // を補間配信 これにより高速旋回中の一時的ドロップ時でも TF 途絶・跳ねを完全に防止する
         publishPoseAndTransform(reference_stamp, search_base_pose, true);
+        tf_published = true;
+    } else {
+        // is_lost_ 時でも、IMUが健全かつ直前のマッチから短時間（0.5秒未満）であれば
+        // IMU予測姿勢でTFを継続配信し、TF途絶による下流のフリーズやタイムスタンプ不整合を防止する
+        const double time_since_last_match = (reference_stamp - last_match_stamp_).seconds();
+        if (imu_initialized_ && time_since_last_match > 0.0 && time_since_last_match < 0.5) {
+            publishPoseAndTransform(reference_stamp, search_base_pose, true);
+            tf_published = true;
+        }
     }
     publishLocalizationSuccess(matched && !is_lost_);
 
@@ -1072,7 +1083,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         if (need_ground) publishCloud(pub_ground_, out_header, ground_pts);
         if (need_obstacle) publishCloud(pub_obstacle_, out_header, obstacle_pts);
     }
-    if (need_dynamic) {
+    if (need_dynamic && tf_published) {
         publishCloud(pub_dynamic_, out_header, dynamic_pts);
     }
 
