@@ -10,6 +10,8 @@
 #include <tf2_ros/transform_listener.h>
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <Eigen/Dense>
+#include <atomic>
 #include <memory>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -126,10 +128,12 @@ private:
     PoseCandidate last_known_pose_;
     PoseCandidate predicted_pose_;
     rclcpp::Time last_imu_stamp_;
-    bool imu_initialized_{false};
-    bool is_lost_{true};
+    std::atomic<bool> imu_initialized_{false};
+    std::atomic<bool> is_lost_{true};
     int lost_frame_count_{0};
-    float latest_omega_z_{0.0f};
+    std::atomic<float> latest_omega_z_{0.0f};
+    Eigen::Matrix3d R_base_imu_{Eigen::Matrix3d::Identity()};
+    bool imu_tf_initialized_{false};
 
     // Velocity & Motion Prediction
     bool velocity_estimation_enable_{true};
@@ -139,7 +143,7 @@ private:
     float velocity_max_linear_{4.0f};
     float velocity_x_{0.0f};
     float velocity_y_{0.0f};
-    bool has_velocity_{false};
+    std::atomic<bool> has_velocity_{false};
     rclcpp::Time last_match_stamp_;
     YawHistory yaw_history_;
     ScanAccumulator scan_accumulator_;
