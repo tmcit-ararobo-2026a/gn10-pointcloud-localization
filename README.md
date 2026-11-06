@@ -243,7 +243,8 @@ Shared settings are configured in [`config/common_params.yaml`](config/common_pa
 | `velocity_estimation.max_dt_sec` | `0.50` | Maximum delta time [s] allowed for velocity extrapolation. |
 | `velocity_estimation.max_linear_velocity` | `4.0` | Maximum clamp threshold [m/s] for estimated linear velocity. |
 | `lidar_2d.enable` | `true` | Enables Lakibeam 1 2D planar LiDAR integration. |
-| `lidar_2d.deskew` | `true` | Compensates for rotational distortion per beam using IMU integration. |
+| `lidar_2d.deskew` | `true` | Compensates for rotational (IMU yaw integration) and translational ($v_{\text{local}}$ forward projection) distortion per beam, and synchronizes 2D scans with 3D accumulation reference time. |
+| `lidar_2d.time_offset_sec` | `0.0` | Hardware/transport timestamp offset [s] added to 2D LiDAR timestamps. |
 | `lidar_2d.topic` | `/lakibeam/scan` | Input LaserScan topic name. |
 | `lidar_2d.frame_id` | `lakibeam_frame` | Fallback TF frame ID for 2D LiDAR. |
 | `lidar_2d.tf_wait_sec` | `0.05` | Timeout [s] for 2D LiDAR TF transform lookup. |

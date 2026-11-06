@@ -165,6 +165,7 @@ private:
     std::string topic_2d_deskewed_{"/lakibeam/deskewed_cloud"};
     std::string lidar_2d_frame_{"lakibeam_frame"};
     double lidar_2d_tf_wait_sec_{0.05};
+    double lidar_2d_time_offset_sec_{0.0};
     std::mutex lidar_2d_mutex_;
     std::vector<float> latest_2d_points_;
     rclcpp::Time latest_2d_stamp_;

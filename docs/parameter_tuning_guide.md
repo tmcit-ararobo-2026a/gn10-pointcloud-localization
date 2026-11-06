@@ -95,7 +95,8 @@ A pose match is accepted if either:
 | Parameter | Default | Type | Description & Tuning Advice |
 |---|---|---|---|
 | `lidar_2d.enable` | `true` | bool | Enable Lakibeam 1 2D planar LiDAR integration. |
-| `lidar_2d.deskew` | `true` | bool | Compensate for robot rotation during scan sweep using IMU integration (`time_increment`). |
+| `lidar_2d.deskew` | `true` | bool | Compensate for robot rotation (IMU yaw integration) and translation ($v_{\text{local}}$ forward projection) during scan sweep (`time_increment`), and synchronize 2D scans with 3D accumulation reference time. |
+| `lidar_2d.time_offset_sec` | `0.0` | double | Hardware/transport timestamp offset [s] added to 2D LiDAR timestamps. |
 | `lidar_2d.topic` | `"/lakibeam/scan"` | string | LaserScan input topic. |
 | `lidar_2d.frame_id` | `"lakibeam_frame"` | string | Fallback TF frame ID if message has an empty `header.frame_id`. |
 | `lidar_2d.tf_wait_sec` | `0.05` | double | Timeout [s] for TF buffer lookup (`base_link` $\to$ `frame_id`). |

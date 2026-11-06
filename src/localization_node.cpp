@@ -154,6 +154,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("lidar_2d.topic", "/lakibeam/scan");
     this->declare_parameter("lidar_2d.frame_id", "lakibeam_frame");
     this->declare_parameter("lidar_2d.tf_wait_sec", 0.05);
+    this->declare_parameter("lidar_2d.time_offset_sec", 0.0);
     this->declare_parameter("topics.output_2d_deskewed", "/lakibeam/deskewed_cloud");
 
     this->declare_parameter("global_search.range_min_x", -5.25);
@@ -263,8 +264,9 @@ void LocalizationNode::declareAndGetParameters()
     use_2d_lidar_deskew_  = this->get_parameter("lidar_2d.deskew").as_bool();
     topic_2d_lidar_       = this->get_parameter("lidar_2d.topic").as_string();
     topic_2d_deskewed_    = this->get_parameter("topics.output_2d_deskewed").as_string();
-    lidar_2d_frame_       = this->get_parameter("lidar_2d.frame_id").as_string();
-    lidar_2d_tf_wait_sec_ = this->get_parameter("lidar_2d.tf_wait_sec").as_double();
+    lidar_2d_frame_           = this->get_parameter("lidar_2d.frame_id").as_string();
+    lidar_2d_tf_wait_sec_     = this->get_parameter("lidar_2d.tf_wait_sec").as_double();
+    lidar_2d_time_offset_sec_ = this->get_parameter("lidar_2d.time_offset_sec").as_double();
 
     global_range_min_x_ =
         static_cast<float>(this->get_parameter("global_search.range_min_x").as_double());
@@ -348,7 +350,7 @@ void LocalizationNode::declareAndGetParameters()
     RCLCPP_INFO(
         this->get_logger(),
         "Parameters initialized: 3D matching (xy_range=%.2fm, yaw_range=%.2frad, cost_th_3d=%.3f, cost_th_2d=%.3f, min_3d_pts=%d), "
-        "2D LiDAR (enable=%s, deskew=%s, weight=%.2f, min_2d_pts=%d, tf_wait=%.3fs), "
+        "2D LiDAR (enable=%s, deskew=%s, weight=%.2f, min_2d_pts=%d, tf_wait=%.3fs, time_offset=%.3fs), "
         "Dynamic yaw expansion (enable=%s, omega_thresh=%.2frad/s, factor=%.2fs, max=%.2frad), "
         "Velocity estimation (enable=%s, window=%.2fs, min_dt=%.2fs, max_dt=%.2fs, max_v=%.1fm/s), "
         "Global search (step_xy=%.2fm, step_yaw=%.2frad, downsample=%d, lost_thresh=%d)",
@@ -362,6 +364,7 @@ void LocalizationNode::declareAndGetParameters()
         match_params_.weight_2d_lidar,
         match_params_.min_2d_points,
         lidar_2d_tf_wait_sec_,
+        lidar_2d_time_offset_sec_,
         dynamic_yaw_expansion_ ? "true" : "false",
         dynamic_yaw_omega_thresh_,
         dynamic_yaw_factor_,
@@ -743,9 +746,19 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
     const double tf_yaw    = std::atan2(siny_cosp, cosy_cosp);
 
     YawHistory imu_snapshot;
+    float robot_yaw = 0.0f;
+    float vx_world  = 0.0f;
+    float vy_world  = 0.0f;
+    bool has_vel    = false;
     {
         std::lock_guard<std::mutex> lock(pose_mutex_);
         imu_snapshot = yaw_history_;
+        robot_yaw    = predicted_pose_.yaw;
+        if (has_velocity_) {
+            vx_world = velocity_x_;
+            vy_world = velocity_y_;
+            has_vel  = true;
+        }
     }
 
     GroundFilterParams active_filter;
@@ -758,6 +771,14 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
     deskew_cfg.enable_deskew   = use_2d_lidar_deskew_;
     deskew_cfg.range_max_limit = active_filter.range_max;
     deskew_cfg.robot_radius    = active_filter.robot_radius;
+    deskew_cfg.time_offset_sec = lidar_2d_time_offset_sec_;
+
+    if (has_vel) {
+        const float c_yaw   = std::cos(robot_yaw);
+        const float s_yaw   = std::sin(robot_yaw);
+        deskew_cfg.vx_local = c_yaw * vx_world + s_yaw * vy_world;
+        deskew_cfg.vy_local = -s_yaw * vx_world + c_yaw * vy_world;
+    }
 
     int64_t ref_stamp_ns      = 0;
     std::vector<float> points = gn10_pointcloud_localization::deskewLaserScan(
@@ -827,26 +848,36 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     // 2D LiDAR (Lakibeam 1) の点群を取得
     std::vector<float> extra_2d_points;
+    int64_t extra_2d_stamp_ns = 0;
     if (use_2d_lidar_) {
         std::lock_guard<std::mutex> lock(lidar_2d_mutex_);
         if (!latest_2d_points_.empty() && latest_2d_stamp_.nanoseconds() > 0) {
             const double age =
                 std::abs((reference_stamp.nanoseconds() - latest_2d_stamp_.nanoseconds()) * 1e-9);
             if (age < 0.20) {
-                extra_2d_points = latest_2d_points_;
+                extra_2d_points   = latest_2d_points_;
+                extra_2d_stamp_ns = latest_2d_stamp_.nanoseconds();
             }
         }
     }
 
     // 速度予測モデル + IMU積分による探索中心 (search_base_pose) の計算
     PoseCandidate search_base_pose;
-    bool has_fresh_prior  = false;
-    float current_omega_z = 0.0f;
+    bool has_fresh_prior   = false;
+    float current_omega_z  = 0.0f;
     YawHistory imu_snapshot;
+    float vx_world_current = 0.0f;
+    float vy_world_current = 0.0f;
+    bool has_vel_current   = false;
     {
         std::lock_guard<std::mutex> lock(pose_mutex_);
         search_base_pose = last_known_pose_;
         imu_snapshot     = yaw_history_;
+        if (has_velocity_) {
+            vx_world_current = velocity_x_;
+            vy_world_current = velocity_y_;
+            has_vel_current  = true;
+        }
         double rotation  = 0;
         if (imu_initialized_ && last_match_stamp_.nanoseconds() > 0) {
             const double dt =
@@ -879,6 +910,26 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     }
 
+    // 2D 点群を 3D 蓄積窓の基準時刻 reference_stamp に時空間補正 (時間同期・前進射影)
+    if (use_2d_lidar_ && use_2d_lidar_deskew_ && !extra_2d_points.empty() && extra_2d_stamp_ns > 0) {
+        float vx_local = 0.0f;
+        float vy_local = 0.0f;
+        if (has_vel_current) {
+            const float c_yaw = std::cos(search_base_pose.yaw);
+            const float s_yaw = std::sin(search_base_pose.yaw);
+            vx_local = c_yaw * vx_world_current + s_yaw * vy_world_current;
+            vy_local = -s_yaw * vx_world_current + c_yaw * vy_world_current;
+        }
+        extra_2d_points = gn10_pointcloud_localization::alignPointsToTimestamp(
+            extra_2d_points,
+            extra_2d_stamp_ns,
+            reference_ns,
+            imu_snapshot,
+            vx_local,
+            vy_local
+        );
+    }
+
     bool fully_deskewed = scan_accumulator_.is_fully_covered(reference_ns, imu_snapshot);
     if (!fully_deskewed) {
         RCLCPP_WARN_THROTTLE(
@@ -899,9 +950,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         deskew_params.min_stamp_ns = scan_accumulator_.newest_start_stamp();
     }
     deskew_params.ref_yaw = search_base_pose.yaw;
-    if (has_velocity_) {
-        deskew_params.vx_world = velocity_x_;
-        deskew_params.vy_world = velocity_y_;
+    if (has_vel_current) {
+        deskew_params.vx_world = vx_world_current;
+        deskew_params.vy_world = vy_world_current;
     } else {
         deskew_params.vx_world = 0.0f;
         deskew_params.vy_world = 0.0f;
@@ -1863,6 +1914,12 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
                 result.reason     = name + " must be > 0";
                 return result;
             }
+        } else if (name == "lidar_2d.time_offset_sec") {
+            if (!std::isfinite(param.as_double())) {
+                result.successful = false;
+                result.reason     = name + " must be a finite number";
+                return result;
+            }
         }
     }
 
@@ -2002,6 +2059,8 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             lidar_2d_frame_ = param.as_string();
         } else if (name == "lidar_2d.tf_wait_sec") {
             lidar_2d_tf_wait_sec_ = param.as_double();
+        } else if (name == "lidar_2d.time_offset_sec") {
+            lidar_2d_time_offset_sec_ = param.as_double();
 
             // --- general / fusion ---
         } else if (name == "publish_tf") {
