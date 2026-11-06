@@ -1359,11 +1359,21 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         telemetry.header.stamp    = reference_stamp;
         telemetry.header.frame_id = map_frame_;
 
-        telemetry.best_cost   = best_cost;
-        telemetry.cost_3d     = solver_->lastCost3D();
-        telemetry.cost_2d     = solver_->lastCost2D();
-        telemetry.weight_2d   = solver_->lastWeight2D();
-        telemetry.inlier_cost = inlier_cost;
+        auto sanitize_float = [](float v) -> float {
+            if (std::isnan(v)) return 0.0f;
+            if (std::isinf(v)) return v;
+            // Guard against float32 bound assertion failures in Python rosidl subscribers
+            constexpr float ROS2_PY_MAX_FLOAT = 3.40282e38f;
+            if (v > ROS2_PY_MAX_FLOAT) return std::numeric_limits<float>::infinity();
+            if (v < -ROS2_PY_MAX_FLOAT) return -std::numeric_limits<float>::infinity();
+            return v;
+        };
+
+        telemetry.best_cost   = sanitize_float(best_cost);
+        telemetry.cost_3d     = sanitize_float(solver_->lastCost3D());
+        telemetry.cost_2d     = sanitize_float(solver_->lastCost2D());
+        telemetry.weight_2d   = sanitize_float(solver_->lastWeight2D());
+        telemetry.inlier_cost = sanitize_float(inlier_cost);
 
         telemetry.inlier_count = inlier_count;
         const int total_obs    = solver_->obstacleCount();
@@ -1374,11 +1384,11 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         telemetry.obstacle_count_2d    = solver_->obstacleCount2D();
         telemetry.obstacle_count_total = total_obs;
 
-        telemetry.linear_speed    = std::hypot(velocity_x_, velocity_y_);
-        telemetry.velocity_x      = velocity_x_;
-        telemetry.velocity_y      = velocity_y_;
-        telemetry.search_range_xy = active_match_params.range_xy;
-        telemetry.search_range_yaw = active_match_params.range_yaw;
+        telemetry.linear_speed    = sanitize_float(std::hypot(velocity_x_, velocity_y_));
+        telemetry.velocity_x      = sanitize_float(velocity_x_);
+        telemetry.velocity_y      = sanitize_float(velocity_y_);
+        telemetry.search_range_xy = sanitize_float(active_match_params.range_xy);
+        telemetry.search_range_yaw = sanitize_float(active_match_params.range_yaw);
 
         telemetry.match_accepted   = matched && !is_lost_;
         telemetry.is_lost          = is_lost_;

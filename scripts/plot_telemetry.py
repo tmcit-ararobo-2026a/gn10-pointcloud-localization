@@ -25,6 +25,13 @@ import time
 from collections import deque
 import numpy as np
 
+# Re-exec with -O (PYTHONOPTIMIZE=1) to prevent rosidl generator assertion crashes
+# on float32 bounds (e.g. std::numeric_limits<float>::max() > 3.402823466e+38) throwing:
+# "RuntimeError: Unable to convert call argument to Python object"
+if __debug__:
+    os.environ["PYTHONOPTIMIZE"] = "1"
+    os.execv(sys.executable, [sys.executable, "-O"] + sys.argv)
+
 # Prevent OpenGL crashes on systems without dedicated GPU or DRI driver
 os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
 
@@ -250,9 +257,17 @@ def run_live_node(topic, buffer_len=500, save_path=None, window_sec=15.0):
                 buffer["search_range_yaw"].append(msg.search_range_yaw)
 
     node = TelemetrySubscriber()
+    executor = rclpy.executors.SingleThreadedExecutor()
+    executor.add_node(node)
+
+    def spin_worker():
+        try:
+            executor.spin()
+        except Exception:
+            pass
 
     # Run ROS 2 spin in background daemon thread
-    spin_thread = threading.Thread(target=lambda: rclpy.spin(node), daemon=True)
+    spin_thread = threading.Thread(target=spin_worker, daemon=True)
     spin_thread.start()
 
     # Set up interactive matplotlib figure
@@ -395,6 +410,16 @@ def run_live_node(topic, buffer_len=500, save_path=None, window_sec=15.0):
     # Animate at 10 Hz (interval=100ms)
     ani = FuncAnimation(fig, update_plot, interval=100, blit=False, cache_frame_data=False)
 
+    import signal
+
+    def sigint_handler(_sig, _frame):
+        plt.close("all")
+
+    try:
+        signal.signal(signal.SIGINT, sigint_handler)
+    except Exception:
+        pass
+
     try:
         backend = matplotlib.get_backend().lower()
         if "agg" in backend and not ("tkagg" in backend or "qtagg" in backend):
@@ -407,12 +432,19 @@ def run_live_node(topic, buffer_len=500, save_path=None, window_sec=15.0):
     except KeyboardInterrupt:
         pass
     finally:
+        plt.close("all")
         if save_path:
             with lock:
                 records = {k: list(v) for k, v in buffer.items()}
             plot_static(records, save_path=save_path)
+        executor.shutdown()
+        spin_thread.join(timeout=1.0)
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            try:
+                rclpy.shutdown()
+            except Exception:
+                pass
 
 
 def main():
