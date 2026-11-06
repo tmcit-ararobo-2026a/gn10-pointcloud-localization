@@ -242,6 +242,11 @@ public:
     float lastCost3D() const { return last_cost_3d_; }
     float lastCost2D() const { return last_cost_2d_; }
     float lastWeight2D() const { return last_weight_2d_; }
+    void setLastCosts(float cost_3d, float cost_2d)
+    {
+        last_cost_3d_ = cost_3d;
+        last_cost_2d_ = cost_2d;
+    }
 
 private:
     int max_points_;

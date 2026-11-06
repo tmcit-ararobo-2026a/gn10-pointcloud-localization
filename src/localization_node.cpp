@@ -20,10 +20,11 @@
 
 LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
 {
-    last_match_stamp_ = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
-    latest_2d_stamp_  = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
-    prior_stamp_      = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
-    last_imu_stamp_   = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    last_match_stamp_         = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    latest_2d_stamp_          = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    prior_stamp_              = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    last_imu_stamp_           = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    last_global_search_stamp_ = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
 
     declareAndGetParameters();
 
@@ -165,6 +166,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("global_search.downsample_stride", 2);
     this->declare_parameter("global_search.top_k_candidates", 4);
     this->declare_parameter("global_search.lost_count_thresh", 5);
+    this->declare_parameter("global_search.interval_sec", 0.5);
 
     this->declare_parameter("initial_pose.x", -4.0);
     this->declare_parameter("initial_pose.y", -4.0);
@@ -284,6 +286,8 @@ void LocalizationNode::declareAndGetParameters()
         1, static_cast<int>(this->get_parameter("global_search.top_k_candidates").as_int())
     );
     lost_threshold_count_ = this->get_parameter("global_search.lost_count_thresh").as_int();
+    global_search_interval_sec_ =
+        std::max(0.1, this->get_parameter("global_search.interval_sec").as_double());
     publish_tf_           = this->get_parameter("publish_tf").as_bool();
     topic_telemetry_      = this->get_parameter("topics.output_telemetry").as_string();
     telemetry_enable_     = this->get_parameter("telemetry.enable").as_bool();
@@ -991,8 +995,14 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     }
 
-    if (is_lost_ && !matched) {
-        float current_prior_yaw = search_base_pose.yaw;
+    const bool can_run_global_search =
+        (last_global_search_stamp_.nanoseconds() == 0) ||
+        ((reference_stamp.nanoseconds() - last_global_search_stamp_.nanoseconds()) * 1e-9 >=
+         global_search_interval_sec_);
+
+    if (is_lost_ && !matched && can_run_global_search) {
+        last_global_search_stamp_ = reference_stamp;
+        float current_prior_yaw   = search_base_pose.yaw;
 
         best_pose = global_searcher_->search(
             *solver_,
@@ -1011,7 +1021,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             extra_pts_ptr
         );
 
-        global_recovered = isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
+        global_recovered = std::isfinite(best_cost) &&
+                           (best_cost < std::numeric_limits<float>::max() / 2.0f) &&
+                           isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
 
         if (global_recovered) {
             is_lost_          = false;

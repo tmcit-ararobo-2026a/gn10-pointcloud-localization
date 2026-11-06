@@ -116,6 +116,8 @@ private:
     int global_downsample_stride_{2};
     int global_top_k_candidates_{4};
     int lost_threshold_count_{5};
+    double global_search_interval_sec_{0.5};
+    rclcpp::Time last_global_search_stamp_;
     bool publish_tf_{true};
     bool use_fused_prior_{false};
     double prior_max_age_s_{0.25};
