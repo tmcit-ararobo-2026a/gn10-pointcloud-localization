@@ -67,6 +67,8 @@ def _create_localization_node(context):
 
     _override_float('max_dist_thresh', 'matching_params.max_dist_thresh')
     _override_float('cost_threshold', 'matching_params.cost_threshold')
+    _override_float('cost_threshold_3d', 'matching_params.cost_threshold_3d')
+    _override_float('cost_threshold_2d', 'matching_params.cost_threshold_2d')
     _override_float('dynamic_dist_thresh', 'matching_params.dynamic_dist_thresh')
     _override_float('weight_2d_lidar', 'matching_params.weight_2d_lidar')
 
@@ -140,6 +142,18 @@ def generate_launch_description():
         'cost_threshold',
         default_value='',
         description='Override matching_params.cost_threshold'
+    )
+
+    declare_cost_threshold_3d = DeclareLaunchArgument(
+        'cost_threshold_3d',
+        default_value='',
+        description='Override matching_params.cost_threshold_3d'
+    )
+
+    declare_cost_threshold_2d = DeclareLaunchArgument(
+        'cost_threshold_2d',
+        default_value='',
+        description='Override matching_params.cost_threshold_2d'
     )
 
     declare_dynamic_dist_thresh = DeclareLaunchArgument(
@@ -253,6 +267,8 @@ def generate_launch_description():
         declare_map_type,
         declare_max_dist_thresh,
         declare_cost_threshold,
+        declare_cost_threshold_3d,
+        declare_cost_threshold_2d,
         declare_dynamic_dist_thresh,
         declare_lidar_2d,
         declare_lidar_2d_deskew,

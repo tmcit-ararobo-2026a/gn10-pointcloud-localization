@@ -198,11 +198,13 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 | `matching_params.use_map_bounds` | `true` | PCD/ESDF読込時に地図ヘッダーのXY範囲を評価範囲に使用。意図的に範囲を制限する場合はfalse。 |
 | `matching_params.fine_refine` | `true` | 最良解の周りでさらに 125 候補の微小探索を行い sub-voxel 精度を向上。 |
 | `matching_params.fine_refine_levels` | `2` | 微小探索の反復回数。XY刻み0.05mなら2段で最終刻み0.002m。 |
-| `matching_params.cost_threshold` | `0.165` | 平均残差がこの値未満であれば合格判定。 |
+| `matching_params.cost_threshold` | `0.185` | 3D LiDAR 基準の残差合格判定しきい値 [m]（`cost_threshold_3d` と同等）。 |
+| `matching_params.cost_threshold_3d` | `0.185` | 3D LiDAR 独立残差合格判定しきい値 [m]。3D コストがこれ未満であれば 3D 条件合格。 |
+| `matching_params.cost_threshold_2d` | `0.080` | 2D LiDAR 独立残差合格判定しきい値 [m]。2D 点群がある場合、2D コストがこれ未満であることを独立判定。 |
 | `matching_params.inlier_dist_thresh`| `0.08` | マップ壁面から 8cm 以内の点を Inlier（適合点）と判定。 |
 | `matching_params.min_inliers` | `60` | インライア合格判定に必要な最小 Inlier 点数。 |
-| `matching_params.inlier_cost_thresh` | `0.01` | インライア合格判定に必要な平均 Inlier 残差上限 [m]。 |
-| `matching_params.min_inlier_ratio` | `0.35` | 全障害物点に対する最小インライア比率（インライア点数 / 全障害物点数）。部分一致による誤ロックを防止。 |
+| `matching_params.inlier_cost_thresh` | `0.040` | インライア合格判定に必要な平均 Inlier 残差上限 [m]。 |
+| `matching_params.min_inlier_ratio` | `0.30` | 全障害物点に対する最小インライア比率（インライア点数 / 全障害物点数）。部分一致による誤ロックを防止。 |
 | `matching_params.max_inlier_accept_cost` | `0.22` | インライア合格判定時の全体コスト上限ガード。 |
 | `matching_params.weight_2d_lidar` | `0.50` | 2D LiDAR 独立残差項の基本重み係数。 |
 | `matching_params.min_2d_points` | `30` | 2D 残差項を有効化するための最小 2D 障害物点数。 |

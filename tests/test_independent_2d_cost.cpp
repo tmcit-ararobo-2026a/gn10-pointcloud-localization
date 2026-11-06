@@ -212,18 +212,33 @@ void testESDFMatcherWeightedResidual()
 
     // Test strict inlier acceptance criteria (Task 1)
     MatchingParams accept_params;
-    accept_params.cost_threshold = 0.165f;
+    accept_params.cost_threshold = 0.185f;
+    accept_params.cost_threshold_3d = 0.185f;
+    accept_params.cost_threshold_2d = 0.080f;
     accept_params.min_inliers = 60;
     accept_params.inlier_cost_thresh = 0.05f;
     accept_params.min_inlier_ratio = 0.35f;
     accept_params.max_inlier_accept_cost = 0.22f;
 
-    // Rejected when only 60 out of 1000 points are inliers (ratio = 0.06 < 0.35)
-    assert(!accept_params.isMatchAccepted(0.18f, 60, 0.03f, 1000));
+    // Test legacy overload:
+    // Rejected when only 60 out of 1000 points are inliers (ratio = 0.06 < 0.35) and cost >= threshold (0.19 >= 0.185)
+    assert(!accept_params.isMatchAccepted(0.19f, 60, 0.03f, 1000));
     // Rejected when best_cost >= max_inlier_accept_cost (0.25 >= 0.22)
     assert(!accept_params.isMatchAccepted(0.25f, 500, 0.03f, 1000));
     // Accepted when inlier count, inlier cost, inlier ratio (>= 0.35), and max_inlier_accept_cost (< 0.22) all pass
     assert(accept_params.isMatchAccepted(0.19f, 400, 0.03f, 1000));
+
+    // Test independent 3D and 2D thresholds:
+    // Case A: 3D cost passes (< 0.185), 2D cost passes (< 0.080) -> Accepted
+    assert(accept_params.isMatchAccepted(0.175f, 0.020f, 500, 100, 200, 0.03f));
+    // Case B: 3D cost passes (< 0.185), 2D is absent (count < 30) -> Accepted (3D alone passes)
+    assert(accept_params.isMatchAccepted(0.175f, 0.0f, 500, 0, 200, 0.03f));
+    // Case C: 3D cost fails (> 0.185 and inliers low), 2D is good (0.020) -> Rejected (2D cannot mask bad 3D)
+    assert(!accept_params.isMatchAccepted(0.240f, 0.020f, 500, 100, 10, 0.07f));
+    // Case D: 3D cost fails (> 0.185) but 3D inlier criteria pass, 2D passes -> Accepted
+    assert(accept_params.isMatchAccepted(0.195f, 0.020f, 500, 100, 200, 0.03f));
+    // Case E: 3D cost passes (< 0.185) but 2D cost exceeds threshold (> 0.080) -> Rejected
+    assert(!accept_params.isMatchAccepted(0.175f, 0.120f, 500, 100, 200, 0.03f));
 
     cudaFree(d_cloud);
     cudaStreamDestroy(stream);

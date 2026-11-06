@@ -67,7 +67,7 @@ private:
     );
     void updateLostState(bool matched, float best_cost);
     bool isPoseMatchAccepted(
-        const MatchingParams& params, float best_cost, int inlier_count, float inlier_cost
+        const MatchingParams& params, int inlier_count, float inlier_cost
     ) const;
     void publishPoseAndTransform(
         const rclcpp::Time& stamp, const PoseCandidate& pose, bool is_predicted = false
@@ -164,7 +164,10 @@ private:
     rclcpp::Time latest_2d_stamp_;
 
     // Callback Groups for Thread Isolation
-    rclcpp::CallbackGroup::SharedPtr cb_group_localization_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_cloud_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_imu_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_2d_lidar_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_prior_;
     rclcpp::CallbackGroup::SharedPtr cb_group_timers_;
 
     // ROS 2 Interfaces

@@ -114,7 +114,9 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.fine_refine", true);
     this->declare_parameter("matching_params.fine_refine_levels", 2);
     this->declare_parameter("matching_params.max_dist_thresh", 0.20);
-    this->declare_parameter("matching_params.cost_threshold", 0.165);
+    this->declare_parameter("matching_params.cost_threshold", 0.185);
+    this->declare_parameter("matching_params.cost_threshold_3d", 0.185);
+    this->declare_parameter("matching_params.cost_threshold_2d", 0.080);
     this->declare_parameter("matching_params.dynamic_dist_thresh", 0.15);
     this->declare_parameter("matching_params.field_min_x", -5.5);
     this->declare_parameter("matching_params.field_max_x", 5.5);
@@ -123,8 +125,8 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.use_map_bounds", true);
     this->declare_parameter("matching_params.inlier_dist_thresh", 0.08);
     this->declare_parameter("matching_params.min_inliers", 60);
-    this->declare_parameter("matching_params.inlier_cost_thresh", 0.05);
-    this->declare_parameter("matching_params.min_inlier_ratio", 0.35);
+    this->declare_parameter("matching_params.inlier_cost_thresh", 0.040);
+    this->declare_parameter("matching_params.min_inlier_ratio", 0.30);
     this->declare_parameter("matching_params.max_inlier_accept_cost", 0.22);
     this->declare_parameter("matching_params.weight_2d_lidar", 0.40);
     this->declare_parameter("matching_params.min_2d_points", 30);
@@ -199,6 +201,13 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("matching_params.max_dist_thresh").as_double());
     match_params_.cost_threshold =
         static_cast<float>(this->get_parameter("matching_params.cost_threshold").as_double());
+    match_params_.cost_threshold_3d =
+        static_cast<float>(this->get_parameter("matching_params.cost_threshold_3d").as_double());
+    match_params_.cost_threshold_2d =
+        static_cast<float>(this->get_parameter("matching_params.cost_threshold_2d").as_double());
+    if (match_params_.cost_threshold != 0.185f && match_params_.cost_threshold_3d == 0.185f) {
+        match_params_.cost_threshold_3d = match_params_.cost_threshold;
+    }
     match_params_.dynamic_dist_thresh =
         static_cast<float>(this->get_parameter("matching_params.dynamic_dist_thresh").as_double());
     match_params_.field_min_x =
@@ -329,14 +338,15 @@ void LocalizationNode::declareAndGetParameters()
 
     RCLCPP_INFO(
         this->get_logger(),
-        "Parameters initialized: 3D matching (xy_range=%.2fm, yaw_range=%.2frad, cost_thresh=%.3f, min_3d_pts=%d), "
+        "Parameters initialized: 3D matching (xy_range=%.2fm, yaw_range=%.2frad, cost_th_3d=%.3f, cost_th_2d=%.3f, min_3d_pts=%d), "
         "2D LiDAR (enable=%s, deskew=%s, weight=%.2f, min_2d_pts=%d, tf_wait=%.3fs), "
         "Dynamic yaw expansion (enable=%s, omega_thresh=%.2frad/s, factor=%.2fs, max=%.2frad), "
         "Velocity estimation (enable=%s, window=%.2fs, min_dt=%.2fs, max_dt=%.2fs, max_v=%.1fm/s), "
         "Global search (step_xy=%.2fm, step_yaw=%.2frad, downsample=%d, lost_thresh=%d)",
         match_params_.range_xy,
         match_params_.range_yaw,
-        match_params_.cost_threshold,
+        match_params_.cost_threshold_3d,
+        match_params_.cost_threshold_2d,
         match_params_.min_3d_points,
         use_2d_lidar_ ? "true" : "false",
         use_2d_lidar_deskew_ ? "true" : "false",
@@ -576,15 +586,17 @@ void LocalizationNode::setupROSInterfaces()
     tf_listener_    = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-    cb_group_localization_ =
-        this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-    cb_group_timers_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_cloud_    = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_imu_      = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_2d_lidar_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_prior_    = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_timers_   = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
-    rclcpp::SubscriptionOptions loc_sub_opts;
-    loc_sub_opts.callback_group = cb_group_localization_;
+    rclcpp::SubscriptionOptions cloud_sub_opts;
+    cloud_sub_opts.callback_group = cb_group_cloud_;
 
     std::string topic_cloud = this->get_parameter("topics.input_cloud").as_string();
-    sub_cloud_filter_.subscribe(this, topic_cloud, rmw_qos_profile_sensor_data, loc_sub_opts);
+    sub_cloud_filter_.subscribe(this, topic_cloud, rmw_qos_profile_sensor_data, cloud_sub_opts);
     tf_filter_ = std::make_shared<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>>(
         sub_cloud_filter_,
         *tf_buffer_,
@@ -596,19 +608,24 @@ void LocalizationNode::setupROSInterfaces()
     );
     tf_filter_->registerCallback(&LocalizationNode::cloudCallback, this);
 
+    rclcpp::SubscriptionOptions imu_sub_opts;
+    imu_sub_opts.callback_group = cb_group_imu_;
+
     std::string topic_imu = this->get_parameter("topics.input_imu").as_string();
     sub_imu_              = this->create_subscription<sensor_msgs::msg::Imu>(
         topic_imu,
         rclcpp::SensorDataQoS().keep_last(200),
         std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1),
-        loc_sub_opts
+        imu_sub_opts
     );
     if (use_fused_prior_) {
+        rclcpp::SubscriptionOptions prior_sub_opts;
+        prior_sub_opts.callback_group = cb_group_prior_;
         sub_fused_prior_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
             this->get_parameter("topics.fused_prior").as_string(),
             20,
             std::bind(&LocalizationNode::fusedPriorCallback, this, std::placeholders::_1),
-            loc_sub_opts
+            prior_sub_opts
         );
     }
 
@@ -646,11 +663,13 @@ void LocalizationNode::setupROSInterfaces()
     }
 
     if (use_2d_lidar_) {
+        rclcpp::SubscriptionOptions lidar_2d_sub_opts;
+        lidar_2d_sub_opts.callback_group = cb_group_2d_lidar_;
         sub_2d_lidar_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
             topic_2d_lidar_,
             rclcpp::SensorDataQoS(),
             std::bind(&LocalizationNode::scan2dCallback, this, std::placeholders::_1),
-            loc_sub_opts
+            lidar_2d_sub_opts
         );
         pub_2d_deskewed_ =
             this->create_publisher<sensor_msgs::msg::PointCloud2>(topic_2d_deskewed_, 10);
@@ -947,8 +966,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             need_dynamic
         );
         const bool accepted =
-            matched &&
-            isPoseMatchAccepted(active_match_params, best_cost, inlier_count, inlier_cost);
+            matched && isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
         if (accepted) {
             is_lost_          = false;
             lost_frame_count_ = 0;
@@ -981,7 +999,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         );
 
         global_recovered =
-            isPoseMatchAccepted(active_match_params, best_cost, inlier_count, inlier_cost);
+            isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
 
         if (global_recovered) {
             is_lost_          = false;
@@ -1022,8 +1040,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         // Accept when total cost is below cost_threshold, OR when inlier count, inlier cost,
         // inlier ratio against total obstacles, and upper total cost guard are all satisfied.
         const bool match_accepted =
-            matched &&
-            isPoseMatchAccepted(active_match_params, best_cost, inlier_count, inlier_cost);
+            matched && isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
 
         if (match_accepted) {
             matched           = true;
@@ -1073,14 +1090,16 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                 velocity_history_.clear();
                 RCLCPP_WARN(
                     this->get_logger(),
-                    "Localization lost! (best_cost: %.4f, inliers: %d, inlier_cost: %.4f, 3D: %.4f [%d pts], 2D: %.4f [%d pts], w_2d: %.2f)",
+                    "Localization lost! (best_cost: %.4f, inliers: %d, inlier_cost: %.4f, 3D: %.4f [%d pts, th: %.3f], 2D: %.4f [%d pts, th: %.3f], w_2d: %.2f)",
                     best_cost,
                     inlier_count,
                     inlier_cost,
                     solver_->lastCost3D(),
                     solver_->obstacleCount3D(),
+                    active_match_params.cost_threshold_3d,
                     solver_->lastCost2D(),
                     solver_->obstacleCount2D(),
+                    active_match_params.cost_threshold_2d,
                     solver_->lastWeight2D()
                 );
             }
@@ -1484,23 +1503,23 @@ std::vector<TimedScanPoint> LocalizationNode::extractTimedBasePoints(
 }
 
 /**
- * @brief Evaluates whether a pose match is accepted using total cost or strict inlier conditions.
+ * @brief Evaluates whether a pose match is accepted using independent 3D and 2D cost thresholds.
  */
 bool LocalizationNode::isPoseMatchAccepted(
-    const MatchingParams& params, float best_cost, int inlier_count, float inlier_cost
+    const MatchingParams& params, int inlier_count, float inlier_cost
 ) const
 {
-    if (!std::isfinite(best_cost) || !solver_) {
+    if (!solver_) {
         return false;
     }
-    const int obstacle_count = solver_->obstacleCount();
-    const bool inlier_accepted =
-        (obstacle_count > 0) && (inlier_count >= params.min_inliers) &&
-        (inlier_cost < params.inlier_cost_thresh) &&
-        (static_cast<float>(inlier_count) / static_cast<float>(obstacle_count) >=
-         params.min_inlier_ratio) &&
-        (best_cost < params.max_inlier_accept_cost);
-    return (best_cost < params.cost_threshold) || inlier_accepted;
+    return params.isMatchAccepted(
+        solver_->lastCost3D(),
+        solver_->lastCost2D(),
+        solver_->obstacleCount3D(),
+        solver_->obstacleCount2D(),
+        inlier_count,
+        inlier_cost
+    );
 }
 
 void LocalizationNode::updateLostState(bool matched, float best_cost)
@@ -1798,11 +1817,14 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
                 result.reason     = "matching_params.min_inlier_ratio must be in [0.0, 1.0]";
                 return result;
             }
-        } else if (name == "matching_params.max_inlier_accept_cost") {
-            const double max_cost = param.as_double();
-            if (!std::isfinite(max_cost) || max_cost <= 0.0) {
+        } else if (name == "matching_params.max_inlier_accept_cost" ||
+                   name == "matching_params.cost_threshold" ||
+                   name == "matching_params.cost_threshold_3d" ||
+                   name == "matching_params.cost_threshold_2d") {
+            const double val = param.as_double();
+            if (!std::isfinite(val) || val <= 0.0) {
                 result.successful = false;
-                result.reason     = "matching_params.max_inlier_accept_cost must be > 0";
+                result.reason     = name + " must be > 0";
                 return result;
             }
         } else if (
@@ -1828,7 +1850,12 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         if (name == "matching_params.max_dist_thresh") {
             match_params_.max_dist_thresh = static_cast<float>(param.as_double());
         } else if (name == "matching_params.cost_threshold") {
-            match_params_.cost_threshold = static_cast<float>(param.as_double());
+            match_params_.cost_threshold    = static_cast<float>(param.as_double());
+            match_params_.cost_threshold_3d = match_params_.cost_threshold;
+        } else if (name == "matching_params.cost_threshold_3d") {
+            match_params_.cost_threshold_3d = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.cost_threshold_2d") {
+            match_params_.cost_threshold_2d = static_cast<float>(param.as_double());
         } else if (name == "matching_params.dynamic_dist_thresh") {
             match_params_.dynamic_dist_thresh = static_cast<float>(param.as_double());
         } else if (name == "matching_params.search_range_xy") {

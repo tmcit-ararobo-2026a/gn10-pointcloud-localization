@@ -161,7 +161,12 @@ PoseCandidate GlobalSearcher::search(
         cand_pose.yaw = normalizeAngle(cand_pose.yaw);
 
         const bool is_accepted = match_params.isMatchAccepted(
-            cand_cost, cand_inliers, cand_inlier_cost, full_obstacle_count
+            solver.lastCost3D(),
+            solver.lastCost2D(),
+            solver.obstacleCount3D(),
+            solver.obstacleCount2D(),
+            cand_inliers,
+            cand_inlier_cost
         );
         if (is_accepted && cand_cost < best_refined_cost) {
             found_accepted           = true;
@@ -370,7 +375,12 @@ PoseCandidate GlobalSearcher::search(
         cand_pose.yaw = normalizeAngle(cand_pose.yaw);
 
         const bool is_accepted = match_params.isMatchAccepted(
-            cand_cost, cand_inliers, cand_inlier_cost, full_obstacle_count
+            solver.lastCost3D(),
+            solver.lastCost2D(),
+            solver.obstacleCount3D(),
+            solver.obstacleCount2D(),
+            cand_inliers,
+            cand_inlier_cost
         );
         if (is_accepted && cand_cost < best_refined_cost) {
             found_accepted           = true;
