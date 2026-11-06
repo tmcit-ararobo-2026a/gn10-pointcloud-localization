@@ -665,7 +665,7 @@ void LocalizationNode::setupROSInterfaces()
     if (use_2d_lidar_) {
         rclcpp::SubscriptionOptions lidar_2d_sub_opts;
         lidar_2d_sub_opts.callback_group = cb_group_2d_lidar_;
-        sub_2d_lidar_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
+        sub_2d_lidar_                    = this->create_subscription<sensor_msgs::msg::LaserScan>(
             topic_2d_lidar_,
             rclcpp::SensorDataQoS(),
             std::bind(&LocalizationNode::scan2dCallback, this, std::placeholders::_1),
@@ -687,11 +687,9 @@ void LocalizationNode::setupROSInterfaces()
         1s, std::bind(&LocalizationNode::publishFieldMapMarkers, this), cb_group_timers_
     );
 
-    /*
-        param_callback_handle_ = this->add_on_set_parameters_callback(
-            std::bind(&LocalizationNode::onParametersChange, this, std::placeholders::_1)
-        );
-    */
+    param_callback_handle_ = this->add_on_set_parameters_callback(
+        std::bind(&LocalizationNode::onParametersChange, this, std::placeholders::_1)
+    );
 }
 
 void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
@@ -998,8 +996,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             extra_pts_ptr
         );
 
-        global_recovered =
-            isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
+        global_recovered = isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
 
         if (global_recovered) {
             is_lost_          = false;
@@ -1817,10 +1814,12 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
                 result.reason     = "matching_params.min_inlier_ratio must be in [0.0, 1.0]";
                 return result;
             }
-        } else if (name == "matching_params.max_inlier_accept_cost" ||
-                   name == "matching_params.cost_threshold" ||
-                   name == "matching_params.cost_threshold_3d" ||
-                   name == "matching_params.cost_threshold_2d") {
+        } else if (
+            name == "matching_params.max_inlier_accept_cost" ||
+            name == "matching_params.cost_threshold" ||
+            name == "matching_params.cost_threshold_3d" ||
+            name == "matching_params.cost_threshold_2d"
+        ) {
             const double val = param.as_double();
             if (!std::isfinite(val) || val <= 0.0) {
                 result.successful = false;
