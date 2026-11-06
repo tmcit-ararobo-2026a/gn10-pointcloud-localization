@@ -183,7 +183,6 @@ __global__ void filterDynamicPointsESDFKernel(
     float field_max_x,
     float field_min_y,
     float field_max_y,
-    float4 keep_sphere,
     uint8_t* __restrict__ out_is_dynamic
 )
 {
@@ -201,13 +200,6 @@ __global__ void filterDynamicPointsESDFKernel(
     float ly = cloud[i * 3 + 1];
     float lz = cloud[i * 3 + 2];
 
-    const float dx=lx-keep_sphere.x, dy=ly-keep_sphere.y, dz=lz-keep_sphere.z;
-    if (keep_sphere.w>0 && dx*dx+dy*dy+dz*dz<=keep_sphere.w*keep_sphere.w) {
-        // 床面近傍の点は保護対象から除外 (床面ノイズの固定化を防止)
-        if (lz > 0.02f) {
-            out_is_dynamic[i]=1; return;
-        }
-    }
     float wx = cos_y * lx - sin_y * ly + rx;
     float wy = sin_y * lx + cos_y * ly + ry;
     float wz = lz;
@@ -317,8 +309,7 @@ static void extractDynamicPointsGPU(
     float field_max_x,
     float field_min_y,
     float field_max_y,
-    std::vector<float>& out_dynamic_pts,
-    const float* tracking_sphere = nullptr
+    std::vector<float>& out_dynamic_pts
 )
 {
     out_dynamic_pts.clear();
@@ -347,7 +338,6 @@ static void extractDynamicPointsGPU(
         field_max_x,
         field_min_y,
         field_max_y,
-        tracking_sphere ? make_float4(tracking_sphere[0],tracking_sphere[1],tracking_sphere[2],tracking_sphere[3]) : make_float4(0,0,0,0),
         d_is_dynamic
     );
 
@@ -704,37 +694,6 @@ bool launchESDFMatcher(
         );
     }
 
-    return true;
-}
-
-bool launchESDFDynamicFilterOnly(
-    cudaStream_t stream,
-    const float* d_cloud,
-    int num_points,
-    const PoseCandidate& confirmed_pose,
-    float dynamic_dist_thresh,
-    float field_min_x,
-    float field_max_x,
-    float field_min_y,
-    float field_max_y,
-    std::vector<float>& out_dynamic_pts,
-    const float* tracking_sphere
-)
-{
-    if (num_points <= 0 || !g_esdf_loaded) return false;
-    extractDynamicPointsGPU(
-        stream,
-        d_cloud,
-        num_points,
-        confirmed_pose,
-        dynamic_dist_thresh,
-        field_min_x,
-        field_max_x,
-        field_min_y,
-        field_max_y,
-        out_dynamic_pts,
-        tracking_sphere
-    );
     return true;
 }
 

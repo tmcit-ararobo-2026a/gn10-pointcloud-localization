@@ -253,15 +253,7 @@ ros2 topic echo /localization/telemetry --csv > telemetry.csv
 python3 scripts/plot_telemetry.py --csv telemetry.csv --save analysis.png
 ```
 
-### RealSense 動的抽出の設定
-
-| パラメータ | 既定値 | 用途 |
-| :--- | :--- | :--- |
-| `realsense.enable` | `false` | RealSense 点群を用いた ESDF 動的障害物抽出の有効化 |
-| `realsense.input_topic` | `/realsense/cropped_cloud` | RealSense の入力点群トピック（base_link 変換対応） |
-| `realsense.output_topic` | `/realsense/dynamic_cloud` | ESDF 背景除去後の動的点群出力トピック |
-
-`start_lakibeam_tf`は既定でtrueです（配置: $x = -0.33\,\text{m}$, $y = 0.0\,\text{m}$, $z = 0.08\,\text{m}$, $\text{yaw} = \pi$ rad）。外部からTFを配信する場合はfalseを指定します。
+`start_lakibeam_tf` は既定で true です（配置: $x = -0.33\,\text{m}$, $y = 0.0\,\text{m}$, $z = 0.08\,\text{m}$, $\text{yaw} = \pi$ rad）。外部から TF を配信する場合は false を指定します。
 
 ---
 

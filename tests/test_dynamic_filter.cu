@@ -13,18 +13,11 @@ int main() {
         std::vector<float> input(count*3,0.15f),output;
         assert(cudaMemcpy(points,input.data(),input.size()*sizeof(float),cudaMemcpyHostToDevice)==cudaSuccess);
         PoseCandidate best{}; float cost=0;
-        // Exercise BOTH the existing matcher and new filter, including capacity growth.
+        // Exercise matcher dynamic points extraction and capacity growth.
         assert(launchESDFMatcher(stream,points,count,{},0,0,.1f,0,.1f,.5f,.1f,-1,1,-1,1,best,cost,output));
         assert(output.size()==input.size());
-        assert(launchESDFDynamicFilterOnly(stream,points,count,{},.1f,-1,1,-1,1,output));
-        assert(output==input);
-        assert(launchESDFDynamicFilterOnly(stream,points,count,{},.6f,-1,1,-1,1,output));
-        assert(output.empty());
-        float sphere[4]{.15f,.15f,.15f,.02f};
-        assert(launchESDFDynamicFilterOnly(stream,points,count,{},.6f,-1,1,-1,1,output,sphere));
-        assert(output==input); // Prediction protection preserves a cloth close to mapped geometry.
         assert(cudaDeviceSynchronize()==cudaSuccess);
     }
     cudaFree(points); cudaStreamDestroy(stream); freeESDFMapFromGPU();
-    std::cout<<"Matcher/filter capacity growth, small clouds, all-selected and empty results passed\n";
+    std::cout<<"Matcher dynamic filter and capacity growth passed\n";
 }

@@ -18,10 +18,6 @@
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
-namespace {
-constexpr double DEFAULT_PREDICTION_TOLERANCE_SEC = 0.05;
-}  // namespace
-
 LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
 {
     declareAndGetParameters();
@@ -152,24 +148,6 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("lidar_2d.tf_wait_sec", 0.05);
     this->declare_parameter("topics.output_2d_deskewed", "/lakibeam/deskewed_cloud");
 
-    this->declare_parameter("realsense.enable", false);
-    this->declare_parameter("realsense.input_topic", "/realsense/cropped_cloud");
-    this->declare_parameter("realsense.output_topic", "/realsense/dynamic_cloud");
-    this->declare_parameter("realsense.status_topic", "/realsense/filter_status");
-    this->declare_parameter("realsense.tf_wait_sec", 0.15);
-    this->declare_parameter("realsense.max_age_sec", 0.25);
-    this->declare_parameter("realsense.pose_max_age_sec", 0.25);
-    this->declare_parameter("realsense.poll_sec", 0.02);
-    this->declare_parameter("realsense.queue_size", 8);
-    this->declare_parameter("realsense.min_points", 1);
-    this->declare_parameter("realsense.min_dynamic_points", 15);
-    this->declare_parameter("realsense.tracking_protection", false);
-    this->declare_parameter("realsense.prediction_topic", "/cloth/filter_prediction");
-    this->declare_parameter("realsense.dynamic_dist_thresh", -1.0);
-    this->declare_parameter("realsense.ground_z_thresh", -1.0);
-    this->declare_parameter("realsense.height_max", 1.5);
-    this->declare_parameter("realsense.prediction_tolerance_sec", DEFAULT_PREDICTION_TOLERANCE_SEC);
-
     this->declare_parameter("global_search.range_min_x", -5.25);
     this->declare_parameter("global_search.range_max_x", 5.25);
     this->declare_parameter("global_search.range_min_y", -5.70);
@@ -263,29 +241,6 @@ void LocalizationNode::declareAndGetParameters()
     topic_2d_deskewed_    = this->get_parameter("topics.output_2d_deskewed").as_string();
     lidar_2d_frame_       = this->get_parameter("lidar_2d.frame_id").as_string();
     lidar_2d_tf_wait_sec_ = this->get_parameter("lidar_2d.tf_wait_sec").as_double();
-
-    use_realsense_           = this->get_parameter("realsense.enable").as_bool();
-    topic_realsense_cloud_   = this->get_parameter("realsense.input_topic").as_string();
-    topic_realsense_dynamic_ = this->get_parameter("realsense.output_topic").as_string();
-    realsense_wait_sec_ = get_parameter("realsense.tf_wait_sec").as_double();
-    realsense_max_age_sec_ = get_parameter("realsense.max_age_sec").as_double();
-    realsense_pose_max_age_sec_ = get_parameter("realsense.pose_max_age_sec").as_double();
-    realsense_poll_sec_ = get_parameter("realsense.poll_sec").as_double();
-    realsense_queue_size_ = get_parameter("realsense.queue_size").as_int();
-    realsense_min_points_ = get_parameter("realsense.min_points").as_int();
-    realsense_min_dynamic_points_ = get_parameter("realsense.min_dynamic_points").as_int();
-    realsense_tracking_protection_ = get_parameter("realsense.tracking_protection").as_bool();
-    realsense_dynamic_dist_thresh_ = get_parameter("realsense.dynamic_dist_thresh").as_double();
-    realsense_ground_z_thresh_ = get_parameter("realsense.ground_z_thresh").as_double();
-    realsense_height_max_ = get_parameter("realsense.height_max").as_double();
-    realsense_prediction_tolerance_sec_ = get_parameter("realsense.prediction_tolerance_sec").as_double();
-    for (double value : {realsense_wait_sec_, realsense_max_age_sec_,
-                         realsense_pose_max_age_sec_, realsense_poll_sec_,
-                         realsense_prediction_tolerance_sec_, realsense_height_max_}) {
-        if (!std::isfinite(value) || value <= 0) throw std::invalid_argument("Invalid RealSense timing/range");
-    }
-    if (realsense_queue_size_ <= 0 || realsense_min_points_ < 0 || realsense_min_dynamic_points_ < 0)
-        throw std::invalid_argument("Invalid RealSense queue/point count");
 
     global_range_min_x_ =
         static_cast<float>(this->get_parameter("global_search.range_min_x").as_double());
@@ -595,7 +550,6 @@ void LocalizationNode::setupROSInterfaces()
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     cb_group_localization_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-    cb_group_realsense_    = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     cb_group_timers_       = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
     rclcpp::SubscriptionOptions loc_sub_opts;
@@ -676,46 +630,6 @@ void LocalizationNode::setupROSInterfaces()
             topic_2d_lidar_.c_str(),
             use_2d_lidar_deskew_ ? "enabled" : "disabled",
             topic_2d_deskewed_.c_str()
-        );
-    }
-
-    if (use_realsense_) {
-        rclcpp::SubscriptionOptions rs_sub_opts;
-        rs_sub_opts.callback_group = cb_group_realsense_;
-
-        sub_realsense_cloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-            topic_realsense_cloud_,
-            rclcpp::SensorDataQoS().keep_last(1),
-            std::bind(&LocalizationNode::realsenseCloudCallback, this, std::placeholders::_1),
-            rs_sub_opts
-        );
-        pub_realsense_dynamic_ =
-            this->create_publisher<sensor_msgs::msg::PointCloud2>(topic_realsense_dynamic_, rclcpp::SensorDataQoS().keep_last(1));
-        pub_realsense_status_ = create_publisher<std_msgs::msg::String>(
-            get_parameter("realsense.status_topic").as_string(), rclcpp::QoS(1).transient_local());
-        if (realsense_tracking_protection_) {
-            sub_realsense_prediction_ = create_subscription<visualization_msgs::msg::Marker>(
-                get_parameter("realsense.prediction_topic").as_string(), 10,
-                [this](visualization_msgs::msg::Marker::SharedPtr marker) {
-                    std::lock_guard<std::mutex> lock(realsense_predictions_mutex_);
-                    realsense_predictions_.push_back(marker);
-                    while (realsense_predictions_.size() > static_cast<size_t>(realsense_queue_size_) * 2)
-                        realsense_predictions_.pop_front();
-                },
-                rs_sub_opts
-            );
-        }
-        realsense_timer_ = create_wall_timer(
-            std::chrono::duration<double>(realsense_poll_sec_),
-            std::bind(&LocalizationNode::processRealSenseDynamic, this),
-            cb_group_realsense_
-        );
-        publishRealSenseStatus("WAITING_FOR_CLOUD");
-        RCLCPP_INFO(
-            this->get_logger(),
-            "RealSense dynamic filter enabled: input='%s', output='%s'",
-            topic_realsense_cloud_.c_str(),
-            topic_realsense_dynamic_.c_str()
         );
     }
 
@@ -804,198 +718,6 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
         out_header.frame_id              = base_frame_;
         out_header.stamp                 = ref_stamp;
         publishCloud(pub_2d_deskewed_, out_header, points);
-    }
-}
-
-void LocalizationNode::publishRealSenseStatus(const std::string& status) {
-    if (!pub_realsense_status_ || status == last_realsense_status_) return;
-    last_realsense_status_ = status;
-    std_msgs::msg::String msg; msg.data = status; pub_realsense_status_->publish(msg);
-}
-
-void LocalizationNode::realsenseCloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-    const auto stamp = rclcpp::Time(msg->header.stamp, get_clock()->get_clock_type());
-    {
-        std::lock_guard<std::mutex> q_lock(realsense_queue_mutex_);
-        if (stamp.nanoseconds() == realsense_last_stamp_ns_) return;
-        if (stamp.nanoseconds() < realsense_last_stamp_ns_) {
-            // A simulation/bag clock rewind must not mix old queued frames into the new run.
-            realsense_queue_.clear();
-        }
-        realsense_last_stamp_ns_ = stamp.nanoseconds();
-        if (realsense_queue_.size() >= static_cast<size_t>(realsense_queue_size_)) {
-            realsense_queue_.pop_front();
-            publishRealSenseStatus("QUEUE_OVERFLOW");
-        }
-        realsense_queue_.push_back({msg, std::chrono::steady_clock::now()});
-    }
-    processRealSenseDynamic();
-}
-
-void LocalizationNode::processRealSenseDynamic() {
-    if (!use_realsense_) return;
-
-    // Prevent concurrent execution of RealSense dynamic filtering across timer and callback
-    std::unique_lock<std::mutex> proc_lock(realsense_processing_mutex_, std::try_to_lock);
-    if (!proc_lock.owns_lock()) return;
-
-    PendingRealSense pending;
-    {
-        std::lock_guard<std::mutex> q_lock(realsense_queue_mutex_);
-        if (realsense_queue_.empty()) return;
-        pending = realsense_queue_.front();
-    }
-
-    auto pop_queue = [this]() {
-        std::lock_guard<std::mutex> q_lock(realsense_queue_mutex_);
-        if (!realsense_queue_.empty()) realsense_queue_.pop_front();
-    };
-
-    const auto msg = pending.cloud;
-    const rclcpp::Time stamp(msg->header.stamp, get_clock()->get_clock_type());
-    const double age = (now() - stamp).seconds();
-    if (std::abs(age) > realsense_max_age_sec_) {
-        pop_queue();
-        publishRealSenseStatus("IMAGE_TIME_INVALID");
-        return;
-    }
-
-    bool is_lost_val = false;
-    rclcpp::Time match_stamp;
-    {
-        std::lock_guard<std::mutex> p_lock(pose_mutex_);
-        is_lost_val = is_lost_;
-        match_stamp = last_match_stamp_;
-    }
-    if (is_lost_val || std::abs((stamp - match_stamp).seconds()) > realsense_pose_max_age_sec_) {
-        if (std::chrono::duration<double>(std::chrono::steady_clock::now() - pending.received).count() >= realsense_wait_sec_)
-            pop_queue();
-        publishRealSenseStatus("WAITING_FOR_LOCALIZATION");
-        return;
-    }
-    // Transform lookup: try exact acquisition time first; fallback to latest pose if cloud is slightly ahead
-    geometry_msgs::msg::TransformStamped pose_tf;
-    try {
-        if (tf_buffer_->canTransform(map_frame_, base_frame_, stamp)) {
-            pose_tf = tf_buffer_->lookupTransform(map_frame_, base_frame_, stamp);
-        } else {
-            pose_tf = tf_buffer_->lookupTransform(map_frame_, base_frame_, tf2::TimePointZero);
-        }
-    } catch (const tf2::TransformException&) {
-        if (std::chrono::duration<double>(std::chrono::steady_clock::now() - pending.received).count() >= realsense_wait_sec_)
-            pop_queue();
-        publishRealSenseStatus("WAITING_FOR_TF");
-        return;
-    }
-
-    Eigen::Affine3d transform = Eigen::Affine3d::Identity();
-    if (msg->header.frame_id != base_frame_) {
-        try {
-            geometry_msgs::msg::TransformStamped cloud_tf;
-            if (tf_buffer_->canTransform(base_frame_, msg->header.frame_id, stamp)) {
-                cloud_tf = tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, stamp);
-            } else {
-                cloud_tf = tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, tf2::TimePointZero);
-            }
-            transform = tf2::transformToEigen(cloud_tf);
-        } catch (const tf2::TransformException&) {
-            if (std::chrono::duration<double>(std::chrono::steady_clock::now() - pending.received).count() >= realsense_wait_sec_)
-                pop_queue();
-            publishRealSenseStatus("WAITING_FOR_TF");
-            return;
-        }
-    }
-
-    visualization_msgs::msg::Marker::SharedPtr prediction;
-    if (realsense_tracking_protection_) {
-        std::lock_guard<std::mutex> pred_lock(realsense_predictions_mutex_);
-        for (const auto& item : realsense_predictions_) {
-            if (std::abs((rclcpp::Time(item->header.stamp, get_clock()->get_clock_type()) - stamp).seconds()) < realsense_prediction_tolerance_sec_) {
-                prediction = item;
-                break;
-            }
-        }
-    }
-    try {
-        const auto& translation = pose_tf.transform.translation;
-        PoseCandidate pose{static_cast<float>(translation.x), static_cast<float>(translation.y),
-            static_cast<float>(tf2::getYaw(pose_tf.transform.rotation))};
-        const sensor_msgs::msg::PointField *xf=nullptr, *yf=nullptr, *zf=nullptr;
-        for (const auto& f : msg->fields) {
-            if (f.name=="x") xf=&f;
-            if (f.name=="y") yf=&f;
-            if (f.name=="z") zf=&f;
-        }
-        auto valid = [&](const sensor_msgs::msg::PointField* f) {
-            return f && f->datatype == sensor_msgs::msg::PointField::FLOAT32 && f->count == 1 &&
-                   size_t(f->offset)+sizeof(float) <= msg->point_step;
-        };
-        if (!valid(xf) || !valid(yf) || !valid(zf) || msg->is_bigendian ||
-            size_t(msg->row_step) < size_t(msg->width)*msg->point_step ||
-            msg->data.size() < size_t(msg->row_step)*msg->height)
-            throw std::invalid_argument("Invalid RealSense PointCloud2 layout");
-        const float ground_z = (realsense_ground_z_thresh_ >= 0.0)
-            ? static_cast<float>(realsense_ground_z_thresh_)
-            : filter_params_.ground_z_thresh;
-        const float height_max = static_cast<float>(realsense_height_max_);
-        const float radius_sq = filter_params_.robot_radius * filter_params_.robot_radius;
-
-        std::vector<float> points;
-        points.reserve(size_t(msg->width)*msg->height*3);
-        for (size_t row=0; row<msg->height; ++row) for (size_t col=0; col<msg->width; ++col) {
-            const auto* ptr=msg->data.data()+row*msg->row_step+col*msg->point_step;
-            float x,y,z;
-            std::memcpy(&x, ptr + xf->offset, sizeof(float));
-            std::memcpy(&y, ptr + yf->offset, sizeof(float));
-            std::memcpy(&z, ptr + zf->offset, sizeof(float));
-            if (!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)) continue;
-            const Eigen::Vector3d point=transform*Eigen::Vector3d(x,y,z);
-            const float px = static_cast<float>(point.x());
-            const float py = static_cast<float>(point.y());
-            const float pz = static_cast<float>(point.z());
-
-            // 1. 床面点群の除去 (ground_z_thresh 以下の点は床として除外)
-            if (pz <= ground_z) continue;
-
-            // 2. 上限高さ・ロボット近傍（自身のバンパー等）の除去
-            if (pz > height_max) continue;
-            if (px * px + py * py <= radius_sq) continue;
-
-            points.push_back(px);
-            points.push_back(py);
-            points.push_back(pz);
-        }
-        float sphere[4]{};
-        if (prediction && prediction->action==visualization_msgs::msg::Marker::ADD) {
-            if (prediction->header.frame_id!=base_frame_) throw std::invalid_argument("Prediction frame mismatch");
-            sphere[0]=prediction->pose.position.x; sphere[1]=prediction->pose.position.y;
-            sphere[2]=prediction->pose.position.z; sphere[3]=prediction->scale.x*0.5;
-            for (float value : sphere) if (!std::isfinite(value)) throw std::invalid_argument("Invalid prediction sphere");
-        }
-        std::vector<float> dynamic;
-        if (points.size()/3 >= static_cast<size_t>(realsense_min_points_) && !points.empty()) {
-            const float dist_thresh = (realsense_dynamic_dist_thresh_ > 0.0) ?
-                static_cast<float>(realsense_dynamic_dist_thresh_) : match_params_.dynamic_dist_thresh;
-            if (!solver_->extractDynamicPointsOnly(points,pose,dist_thresh,
-                match_params_.field_min_x,match_params_.field_max_x,
-                match_params_.field_min_y,match_params_.field_max_y,dynamic,sphere))
-                throw std::runtime_error("RealSense ESDF extraction failed");
-        }
-
-        // 定常的微小ノイズの除去:
-        // 抽出された動的点群が min_dynamic_points 未満の場合は、強い照明等の散乱ノイズと判定してクリア
-        if (dynamic.size() / 3 < static_cast<size_t>(realsense_min_dynamic_points_)) {
-            dynamic.clear();
-        }
-        std_msgs::msg::Header header=msg->header; header.frame_id=base_frame_;
-        // Empty observations are meaningful; always publish them for tracker loss handling.
-        publishCloud(pub_realsense_dynamic_,header,dynamic);
-        pop_queue();
-        publishRealSenseStatus("READY");
-    } catch (const std::exception& error) {
-        pop_queue();
-        publishRealSenseStatus("FILTER_ERROR");
-        RCLCPP_ERROR_THROTTLE(get_logger(),*get_clock(),1000,"RealSense filter: %s",error.what());
     }
 }
 
@@ -1965,8 +1687,6 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         "scan_accumulation.timestamp_scale", "scan_accumulation.timestamp_relative",
         "matching_params.use_map_bounds",
         "lidar_2d.topic",
-        "realsense.input_topic", "realsense.output_topic", "realsense.status_topic",
-        "realsense.prediction_topic", "realsense.poll_sec", "realsense.queue_size",
         "benchmark.enable", "benchmark.csv_output_path",
         "initial_pose.x", "initial_pose.y", "initial_pose.yaw", "initial_pose.use_for_local_search"
     };
@@ -2099,30 +1819,6 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             filter_params_.robot_height_max = static_cast<float>(param.as_double());
         } else if (name == "filter_params.ground_z_thresh") {
             filter_params_.ground_z_thresh = static_cast<float>(param.as_double());
-
-        // --- realsense ---
-        } else if (name == "realsense.enable") {
-            use_realsense_ = param.as_bool();
-        } else if (name == "realsense.dynamic_dist_thresh") {
-            realsense_dynamic_dist_thresh_ = param.as_double();
-        } else if (name == "realsense.ground_z_thresh") {
-            realsense_ground_z_thresh_ = param.as_double();
-        } else if (name == "realsense.height_max") {
-            realsense_height_max_ = param.as_double();
-        } else if (name == "realsense.min_points") {
-            realsense_min_points_ = static_cast<int>(param.as_int());
-        } else if (name == "realsense.min_dynamic_points") {
-            realsense_min_dynamic_points_ = static_cast<int>(param.as_int());
-        } else if (name == "realsense.tracking_protection") {
-            realsense_tracking_protection_ = param.as_bool();
-        } else if (name == "realsense.prediction_tolerance_sec") {
-            realsense_prediction_tolerance_sec_ = param.as_double();
-        } else if (name == "realsense.tf_wait_sec") {
-            realsense_wait_sec_ = param.as_double();
-        } else if (name == "realsense.max_age_sec") {
-            realsense_max_age_sec_ = param.as_double();
-        } else if (name == "realsense.pose_max_age_sec") {
-            realsense_pose_max_age_sec_ = param.as_double();
 
         // --- global_search ---
         } else if (name == "global_search.range_min_x") {

@@ -50,21 +50,6 @@ bool launchESDFMatcher(
     int point_stride         = 1
 );
 
-// 確定姿勢を用いた動的点群の高速抽出 (Pose探索をスキップ)
-bool launchESDFDynamicFilterOnly(
-    cudaStream_t stream,
-    const float* d_cloud,
-    int num_points,
-    const PoseCandidate& confirmed_pose,
-    float dynamic_dist_thresh,
-    float field_min_x,
-    float field_max_x,
-    float field_min_y,
-    float field_max_y,
-    std::vector<float>& out_dynamic_pts,
-        const float* tracking_sphere = nullptr
-);
-
 #ifdef __cplusplus
 }
 #endif
