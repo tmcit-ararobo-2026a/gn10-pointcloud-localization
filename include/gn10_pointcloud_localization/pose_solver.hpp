@@ -9,8 +9,8 @@
 #include <mutex>
 #include <vector>
 
-#include "gn10_pointcloud_localization/cuda/field_objects.cuh"
 #include "gn10_pointcloud_localization/cuda/esdf_matcher.cuh"
+#include "gn10_pointcloud_localization/cuda/field_objects.cuh"
 #include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
 #include "gn10_pointcloud_localization/esdf_map.hpp"
 
@@ -61,19 +61,24 @@ struct MatchingParams {
     int min_3d_points{50};
 
     /**
-     * @brief Evaluates whether 3D and 2D LiDAR matching satisfies independent cost thresholds and inlier criteria.
+     * @brief Evaluates whether 3D and 2D LiDAR matching satisfies independent cost thresholds and
+     * inlier criteria.
      */
     bool isMatchAccepted(
-        float cost_3d, float cost_2d, int count_3d, int count_2d,
-        int inlier_count, float inlier_cost
+        float cost_3d,
+        float cost_2d,
+        int count_3d,
+        int count_2d,
+        int inlier_count,
+        float inlier_cost
     ) const
     {
         bool pass_3d = false;
         if (count_3d >= min_3d_points) {
             const bool inlier_accepted =
-                (inlier_count >= min_inliers) &&
-                (inlier_cost < inlier_cost_thresh) &&
-                (static_cast<float>(inlier_count) / static_cast<float>(count_3d) >= min_inlier_ratio) &&
+                (inlier_count >= min_inliers) && (inlier_cost < inlier_cost_thresh) &&
+                (static_cast<float>(inlier_count) / static_cast<float>(count_3d) >=
+                 min_inlier_ratio) &&
                 (cost_3d < max_inlier_accept_cost);
             pass_3d = (cost_3d < cost_threshold_3d) || inlier_accepted;
         } else if (count_2d >= min_2d_points) {
@@ -107,10 +112,8 @@ struct MatchingParams {
         }
         const float inlier_ratio =
             static_cast<float>(inlier_count) / static_cast<float>(total_obstacle_count);
-        return (inlier_count >= min_inliers) &&
-               (inlier_cost < inlier_cost_thresh) &&
-               (inlier_ratio >= min_inlier_ratio) &&
-               (best_cost < max_inlier_accept_cost);
+        return (inlier_count >= min_inliers) && (inlier_cost < inlier_cost_thresh) &&
+               (inlier_ratio >= min_inlier_ratio) && (best_cost < max_inlier_accept_cost);
     }
 
     void useESDFBounds(const ESDFHeader& header)
@@ -149,7 +152,8 @@ public:
         bool extract_dynamic                             = true
     );
 
-    // Deskew-integrated tracking (GPU Deskew + GroundFilter + SDF Matcher + optional Dynamic Point extraction)
+    // Deskew-integrated tracking (GPU Deskew + GroundFilter + SDF Matcher + optional Dynamic Point
+    // extraction)
     bool processPointCloud(
         const std::vector<TimedScanPoint>& timed_points,
         const float h_transform[12],
@@ -203,7 +207,8 @@ public:
     // Copy the filtered clouds for RViz only when a subscriber needs them.
     void copyFilteredClouds(std::vector<float>* ground, std::vector<float>* obstacle);
 
-    // Evaluate global SDF candidates on d_obstacle_ and extract Top-K spatially/angularly separated poses
+    // Evaluate global SDF candidates on d_obstacle_ and extract Top-K spatially/angularly separated
+    // poses
     bool evaluateGlobalSDF(
         int obstacle_count,
         const PoseCandidate& base_pose,
@@ -237,13 +242,34 @@ public:
         double time_dynamic_extraction_ms{0.0};
         size_t d2h_transfer_bytes{0};
     };
-    const ProfileMetrics& lastProfileMetrics() const { return last_metrics_; }
-    int obstacleCount() const { return obstacle_count_; }
-    int obstacleCount3D() const { return num_3d_obstacles_; }
-    int obstacleCount2D() const { return num_2d_obstacles_; }
-    float lastCost3D() const { return last_cost_3d_; }
-    float lastCost2D() const { return last_cost_2d_; }
-    float lastWeight2D() const { return last_weight_2d_; }
+    const ProfileMetrics& lastProfileMetrics() const
+    {
+        return last_metrics_;
+    }
+    int obstacleCount() const
+    {
+        return obstacle_count_;
+    }
+    int obstacleCount3D() const
+    {
+        return num_3d_obstacles_;
+    }
+    int obstacleCount2D() const
+    {
+        return num_2d_obstacles_;
+    }
+    float lastCost3D() const
+    {
+        return last_cost_3d_;
+    }
+    float lastCost2D() const
+    {
+        return last_cost_2d_;
+    }
+    float lastWeight2D() const
+    {
+        return last_weight_2d_;
+    }
     void setLastCosts(float cost_3d, float cost_2d)
     {
         last_cost_3d_ = cost_3d;
