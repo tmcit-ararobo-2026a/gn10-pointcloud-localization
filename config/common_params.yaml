@@ -1,125 +1,150 @@
 /**:
   ros__parameters:
-    # Shared map and ESDF settings
-    map_source_type: "json"
-    map_file_path: ""
+    # =========================================================================
+    # 1. Map & 3D ESDF Voxel Grid Configuration
+    # =========================================================================
+    map_source_type: "json"             # Map source format: "json" | "pcd" | "esdf" | "ros2_param"
+    map_file_path: ""                   # Path to map file (empty uses default nhk2026_map.json)
     esdf:
-      resolution: 0.05
-      max_dist: 0.50
-      crop_enabled: true
-      crop_min_x: -5.5
-      crop_max_x: 5.5
-      crop_min_y: -6.0
-      crop_max_y: 6.0
-      min_z: -0.20
-      max_z: 4.00
-      publish_map: true
-      publish_max_distance: -1.0
-      publish_stride: 1
+      resolution: 0.05                  # 3D ESDF voxel resolution [m] (5 cm grid)
+      max_dist: 0.50                    # Maximum Euclidean distance stored in ESDF voxels [m]
+      crop_enabled: true                # Restrict ESDF grid generation to the specified 3D bounding box
+      crop_min_x: -5.5                  # ESDF grid minimum X coordinate [m]
+      crop_max_x: 5.5                   # ESDF grid maximum X coordinate [m]
+      crop_min_y: -6.0                  # ESDF grid minimum Y coordinate [m]
+      crop_max_y: 6.0                   # ESDF grid maximum Y coordinate [m]
+      min_z: -0.20                      # ESDF grid minimum Z coordinate [m]
+      max_z: 4.00                       # ESDF grid maximum Z coordinate [m]
+      publish_map: true                 # Publish 3D ESDF voxel cloud once on startup (transient_local QoS)
+      publish_max_distance: -1.0        # Max voxel distance to visualize [m] (< 0 uses esdf.max_dist)
+      publish_stride: 1                 # Voxel subsampling stride for visualization (>= 1)
 
+    # =========================================================================
+    # 2. Coordinate Frames & ROS 2 Topics
+    # =========================================================================
     frames:
-      map_frame: "map"
-      base_frame: "base_link"
+      map_frame: "map"                  # Global fixed map frame ID
+      base_frame: "base_link"           # Robot body frame ID
 
     topics:
-      input_cloud: "/livox/lidar"
-      input_imu: "/livox/imu"
-      output_dynamic: "/dynamic_cloud"
-      output_ground: "/ground_cloud"
-      output_obstacle: "/obstacle_cloud"
-      output_localization_success: "/robot/operation/localization_success"
-      output_pose: "/platform_constraint"
-      output_markers: "/field_map_markers"
-      output_esdf_map: "/esdf_map"
-      output_telemetry: "/localization/telemetry"
-      fused_prior: "/platform_constraint"
+      input_cloud: "/livox/lidar"       # 3D LiDAR (Livox Mid-360) PointCloud2 input topic
+      input_imu: "/livox/imu"           # IMU input topic for rotational deskew and yaw prediction
+      output_dynamic: "/dynamic_cloud"  # Extracted dynamic obstacle PointCloud2 output topic
+      output_ground: "/ground_cloud"    # Filtered ground PointCloud2 output topic
+      output_obstacle: "/obstacle_cloud" # Filtered static + dynamic obstacle PointCloud2 output topic
+      output_localization_success: "/robot/operation/localization_success" # Bool tracking status topic
+      output_pose: "/platform_constraint" # Estimated 2D pose (PoseWithCovarianceStamped) output topic
+      output_markers: "/field_map_markers" # Analytic field geometry MarkerArray topic
+      output_esdf_map: "/esdf_map"      # Visualized ESDF voxel PointCloud2 topic
+      output_telemetry: "/localization/telemetry" # Real-time diagnostic telemetry topic
+      fused_prior: "/platform_constraint" # Optional external fused pose prior topic
 
     telemetry:
-      enable: true
+      enable: true                      # Enable real-time LocalizationTelemetry publishing and 1 Hz summary log
 
-    publish_tf: true
+    publish_tf: true                    # Broadcast map -> base_link TF transform
     fusion:
-      use_prior: false
-      prior_max_age_s: 0.25
+      use_prior: false                  # Use external fused pose prior as local search center
+      prior_max_age_s: 0.25             # Maximum age [s] of external prior before ignoring it
 
+    # =========================================================================
+    # 3. Point Cloud Preprocessing & Ground Filter (GPU)
+    # =========================================================================
     filter_params:
-      max_range: 12.0
-      robot_radius: 0.8
-      robot_height_min: 0.0
-      robot_height_max: 1.2
-      ground_z_thresh: 0.06
-      max_points: 200000
+      max_range: 12.0                   # Maximum horizontal detection radius from base_link [m]
+      robot_radius: 0.8                 # Robot self-filter cylinder radius [m] (removes chassis reflections)
+      robot_height_min: 0.0             # Robot self-filter minimum height Z [m]
+      robot_height_max: 1.2             # Robot self-filter maximum height Z [m]
+      ground_z_thresh: 0.06             # Ground classification threshold Z [m] (points <= 0.06 m are floor)
+      max_points: 200000                # Maximum point buffer capacity on GPU
 
+    # =========================================================================
+    # 4. 3D Scan Accumulation & GPU Deskew
+    # =========================================================================
     scan_accumulation:
-      window_s: 0.10
-      timestamp_field: "timestamp"
-      timestamp_scale: 1.0e-9
-      timestamp_relative: false
+      window_s: 0.10                    # Rolling time window [s] for accumulating Livox non-repetitive scans
+      timestamp_field: "timestamp"      # Per-point timestamp field name in PointCloud2
+      timestamp_scale: 1.0e-9           # Multiplier to convert per-point timestamp to seconds (1e-9 for ns)
+      timestamp_relative: false         # Whether per-point timestamps are relative to header.stamp
 
+    # =========================================================================
+    # 5. Local Multi-Resolution ESDF Matching & Acceptance Criteria
+    # =========================================================================
     matching_params:
-      search_range_xy: 0.30
-      search_step_xy: 0.05
-      search_range_yaw: 0.15
-      search_step_yaw: 0.03
-      fine_refine: true
-      fine_refine_levels: 2
-      max_dist_thresh: 0.25
-      cost_threshold: 0.25
-      cost_threshold_3d: 0.25
-      cost_threshold_2d: 0.08
-      dynamic_dist_thresh: 0.15
-      field_min_x: -5.5
-      field_max_x: 5.5
-      field_min_y: -6.0
-      field_max_y: 6.0
-      use_map_bounds: true
-      inlier_dist_thresh: 0.08
-      min_inliers: 400
-      inlier_cost_thresh: 0.035
-      min_inlier_ratio: 0.28
-      max_inlier_accept_cost: 0.22
-      weight_2d_lidar: 0.40
-      min_2d_points: 30
-      target_2d_points: 200
-      min_3d_points: 50
-      dynamic_yaw_expansion: true
-      dynamic_yaw_omega_thresh: 0.5
-      dynamic_yaw_factor: 0.15
-      dynamic_yaw_max_range: 0.40
+      search_range_xy: 0.30             # Coarse XY search half-window [m] (+/- 0.30 m around predicted pose)
+      search_step_xy: 0.05              # Coarse XY grid step [m] (refined by 1/5 per fine_refine_levels)
+      search_range_yaw: 0.15            # Coarse yaw search half-window [rad] (+/- 0.15 rad, ~8.6 deg)
+      search_step_yaw: 0.03             # Coarse yaw grid step [rad] (refined by 1/5 per fine_refine_levels)
+      fine_refine: true                 # Enable multi-resolution coarse-to-fine grid refinement
+      fine_refine_levels: 2             # Number of 5x refinement levels (2 levels -> 2 mm XY, 0.0012 rad yaw)
+      max_dist_thresh: 0.25             # Per-point Huber/L1 residual clipping ceiling [m] (suppresses outliers)
+      cost_threshold_3d: 0.22           # Independent 3D LiDAR mean residual acceptance threshold [m]
+      cost_threshold_2d: 0.08           # Independent 2D LiDAR mean residual acceptance threshold [m]
+      dynamic_dist_thresh: 0.15         # Distance threshold [m] above which 3D points are extracted as dynamic_cloud
+      field_min_x: -5.5                 # Field X lower boundary [m] (overridden by ESDF header if use_map_bounds=true)
+      field_max_x: 5.5                  # Field X upper boundary [m]
+      field_min_y: -6.0                 # Field Y lower boundary [m]
+      field_max_y: 6.0                  # Field Y upper boundary [m]
+      use_map_bounds: true              # Automatically adopt field boundaries from the loaded ESDF map header
+      inlier_dist_thresh: 0.08          # Distance threshold [m] to count a 3D obstacle point as a wall inlier
+      min_inliers: 400                  # Minimum 3D inlier point count for inlier-based acceptance
+      inlier_cost_thresh: 0.035         # Maximum mean residual [m] of inlier points for inlier-based acceptance
+      min_inlier_ratio: 0.28            # Minimum ratio (inliers / 3D obstacles) for inlier-based acceptance
+      max_inlier_accept_cost: 0.22      # Hard upper bound on 3D cost [m] even when inliers pass (set > cost_threshold_3d to enable inlier rescue)
+      weight_2d_lidar: 0.40             # Base weight w_2d (0.0..1.0) of 2D LiDAR in composite ESDF cost
+      min_2d_points: 30                 # Minimum valid 2D LiDAR points required to activate 2D matching
+      target_2d_points: 200             # Reference 2D point count for full FoV scaling (fov_scale = min(1, N_2d/200))
+      min_3d_points: 50                 # Minimum 3D obstacle points required to activate 3D matching
+      dynamic_yaw_expansion: true       # Dynamically widen search_range_yaw during fast rotation
+      dynamic_yaw_omega_thresh: 0.5     # Angular velocity threshold |omega_z| [rad/s] to start yaw window expansion
+      dynamic_yaw_factor: 0.15          # Scaling factor [s]: expanded_yaw = range_yaw + (|omega_z| - omega_thresh) * factor
+      dynamic_yaw_max_range: 0.40       # Upper cap [rad] for dynamically expanded yaw search range
 
+    # =========================================================================
+    # 6. Linear Velocity Estimation & Translational Prediction
+    # =========================================================================
     velocity_estimation:
-      enable: true
-      window_sec: 0.20
-      min_dt_sec: 0.15
-      max_dt_sec: 0.50
-      max_linear_velocity: 4.0
+      enable: true                      # Estimate linear velocity (vx, vy) from matched pose history (EMA alpha=0.6)
+      window_sec: 0.20                  # Sliding window duration [s] of pose history for velocity differencing
+      min_dt_sec: 0.15                  # Minimum time span [s] required to compute a valid velocity estimate
+      max_dt_sec: 0.50                  # Maximum time span [s] before velocity history expires
+      max_linear_velocity: 4.0          # Physical speed sanity limit [m/s] (rejects pose jumps)
 
+    # =========================================================================
+    # 7. 2D LiDAR (Richbeam Lakibeam1) Integration & Deskew
+    # =========================================================================
     lidar_2d:
-      enable: true
-      deskew: true
-      time_offset_sec: 0.0
-      topic: "/lakibeam/scan"
-      frame_id: "lakibeam_frame"
-      tf_wait_sec: 0.05
+      enable: true                      # Enable rear 2D LiDAR fusion and fallback
+      deskew: true                      # Enable per-beam IMU rotational + translational deskew and timestamp alignment
+      time_offset_sec: 0.0              # Static timestamp offset [s] added to LaserScan header.stamp
+      topic: "/lakibeam/scan"           # Input 2D LaserScan topic
+      frame_id: "lakibeam_frame"        # Default 2D LiDAR frame ID if header.frame_id is empty
+      tf_wait_sec: 0.05                 # Timeout [s] for base_link <- lakibeam_frame TF lookup
 
+    # =========================================================================
+    # 8. Global Search Recovery (Top-K Non-Maximum Suppression)
+    # =========================================================================
     global_search:
-      range_min_x: -5.25
-      range_max_x: 5.25
-      range_min_y: -5.70
-      range_max_y: 5.70
-      range_yaw_diff: 3.1415
-      step_xy: 0.30
-      step_yaw: 0.3
-      downsample_stride: 2
-      top_k_candidates: 4
-      lost_count_thresh: 10
+      range_min_x: -5.25                # Global search minimum X coordinate [m]
+      range_max_x: 5.25                 # Global search maximum X coordinate [m]
+      range_min_y: -5.70                # Global search minimum Y coordinate [m]
+      range_max_y: 5.70                 # Global search maximum Y coordinate [m]
+      range_yaw_diff: 3.1415            # Global yaw search half-range [rad] around prior heading (overridden per team)
+      step_xy: 0.30                     # Global coarse XY grid step [m]
+      step_yaw: 0.3                     # Global coarse yaw grid step [rad]
+      downsample_stride: 2              # Point cloud decimation stride during global search
+      top_k_candidates: 4               # Number of spatially separated Top-K coarse peaks to fine-refine
+      lost_count_thresh: 10             # Consecutive failed frames before entering LOST state & triggering global search
 
+    # =========================================================================
+    # 9. Initial Pose & Benchmark Profiling
+    # =========================================================================
     initial_pose:
-      use_for_local_search: false
-      x: 0.0
-      y: 0.0
-      yaw: 0.0
+      use_for_local_search: false       # Start directly in local tracking mode around (x, y, yaw) if true
+      x: 0.0                            # Initial robot X coordinate in map frame [m]
+      y: 0.0                            # Initial robot Y coordinate in map frame [m]
+      yaw: 0.0                          # Initial robot heading in map frame [rad]
 
     benchmark:
-      enable: false
-      csv_output_path: ""
+      enable: false                     # Enable per-frame latency & PCIe bandwidth CSV profiling
+      csv_output_path: ""               # Output path for benchmark CSV file

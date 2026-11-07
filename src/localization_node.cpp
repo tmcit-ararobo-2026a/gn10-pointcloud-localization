@@ -46,7 +46,7 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
     setupMapData();
     setupROSInterfaces();
 
-    // マップ読み込み完了後に一度だけ ESDF マップをパブリッシュ
+    // Publish the 3D ESDF map once after map initialization completes
     if (publish_esdf_map_) {
         publishESDFMap();
     }
@@ -388,7 +388,7 @@ void LocalizationNode::setupMapData()
     float esdf_res         = static_cast<float>(this->get_parameter("esdf.resolution").as_double());
     float esdf_max_dist    = static_cast<float>(this->get_parameter("esdf.max_dist").as_double());
 
-    // 相対パスの場合、パッケージの map/ ディレクトリを基準に探索
+    // Resolve relative paths against the package's share/map/ directory
     if (!file_path.empty()) {
         std::filesystem::path p(file_path);
         if (p.is_relative()) {
@@ -398,13 +398,12 @@ void LocalizationNode::setupMapData()
             if (std::filesystem::exists(map_dir_path)) {
                 file_path = map_dir_path.string();
             } else {
-                // share側になければソース側の map
-                // ディレクトリもチェック（シンボリックリンクや開発時対応）
+                // Fall back to the resolved share path (supports symlinked development builds)
                 file_path = map_dir_path.string();
             }
         }
 
-        // 拡張子から map_source_type を自動推論
+        // Automatically infer map_source_type from the file extension
         std::string ext = p.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
             return std::tolower(c);
@@ -444,7 +443,7 @@ void LocalizationNode::setupMapData()
                 this->get_logger(), "map_source_type is 'pcd' but map_file_path is empty!"
             );
         } else {
-            // 自動キャッシュチェック (map/cache/<PCD名>.esdf)
+            // Check for cached binary ESDF map (map/cache/<pcd_stem>.esdf)
             const std::filesystem::path pcd_path(file_path);
             const std::filesystem::path cache_dir = pcd_path.parent_path() / "cache";
             std::error_code cache_error;
@@ -538,7 +537,7 @@ void LocalizationNode::setupMapData()
         map_objects_ = MapLoader::createNHK2026FieldMap();
     }
 
-    // JSON / パラメータ読み込み時も ESDF 3D テクスチャを自動生成して高速化
+    // Automatically build a 3D ESDF texture from analytic field objects for O(1) GPU matching
     RCLCPP_INFO(this->get_logger(), "Building 3D ESDF texture from field objects...");
     if (esdf_map_.buildFromFieldObjects(
             map_objects_,
@@ -829,24 +828,10 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             is_lost_         = true;
         }
     }
-    if (!scan_accumulator_.append(timed_points, reference_ns)) {
-        publishLocalizationSuccess(false);
-        return;
-    }
-
+    const bool window_ready        = scan_accumulator_.append(timed_points, reference_ns);
     const auto& accumulated_points = scan_accumulator_.points();
-    if (accumulated_points.size() < 150) {
-        publishLocalizationSuccess(false);
-        return;
-    }
 
-    std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
-    PoseCandidate best_pose;
-    float best_cost       = std::numeric_limits<float>::infinity();
-    bool matched          = false;
-    bool global_recovered = false;
-
-    // 2D LiDAR (Lakibeam 1) の点群を取得
+    // Retrieve latest deskewed 2D LiDAR (Lakibeam1) point cloud if fresh (< 0.20s)
     std::vector<float> extra_2d_points;
     int64_t extra_2d_stamp_ns = 0;
     if (use_2d_lidar_) {
@@ -861,7 +846,28 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     }
 
-    // 速度予測モデル + IMU積分による探索中心 (search_base_pose) の計算
+    MatchingParams active_match_params;
+    GroundFilterParams active_filter_params;
+    {
+        std::lock_guard<std::mutex> lock(param_mutex_);
+        active_match_params  = match_params_;
+        active_filter_params = filter_params_;
+    }
+
+    const bool has_valid_2d =
+        (static_cast<int>(extra_2d_points.size() / 3) >= active_match_params.min_2d_points);
+    if ((!window_ready || accumulated_points.size() < 150) && !has_valid_2d) {
+        publishLocalizationSuccess(false);
+        return;
+    }
+
+    std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
+    PoseCandidate best_pose;
+    float best_cost       = std::numeric_limits<float>::infinity();
+    bool matched          = false;
+    bool global_recovered = false;
+
+    // Compute local search center (search_base_pose) via IMU yaw integration and linear velocity prediction
     PoseCandidate search_base_pose;
     bool has_fresh_prior   = false;
     float current_omega_z  = 0.0f;
@@ -889,6 +895,13 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
         search_base_pose.yaw = normalizeAngle(search_base_pose.yaw);
         predicted_pose_      = search_base_pose;
+        if (imu_initialized_ && last_imu_stamp_.nanoseconds() > reference_ns) {
+            double rot_to_latest_imu = 0.0;
+            if (imu_snapshot.delta(reference_ns, last_imu_stamp_.nanoseconds(), rot_to_latest_imu)) {
+                predicted_pose_.yaw =
+                    normalizeAngle(search_base_pose.yaw + static_cast<float>(rot_to_latest_imu));
+            }
+        }
         current_omega_z      = latest_omega_z_.load();
 
         if (velocity_estimation_enable_ && has_velocity_ && !is_lost_ &&
@@ -910,7 +923,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     }
 
-    // 2D 点群を 3D 蓄積窓の基準時刻 reference_stamp に時空間補正 (時間同期・前進射影)
+    // Spatiotemporally align the 2D LiDAR point cloud to the 3D accumulation reference_stamp
     if (use_2d_lidar_ && use_2d_lidar_deskew_ && !extra_2d_points.empty() && extra_2d_stamp_ns > 0) {
         float vx_local = 0.0f;
         float vy_local = 0.0f;
@@ -940,7 +953,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         );
     }
 
-    // GPU Deskew 用パラメータの構築
+    // Populate GPU deskew parameters for the 3D point cloud
     DeskewParams deskew_params;
     deskew_params.enabled      = true;
     deskew_params.reference_ns = reference_ns;
@@ -974,19 +987,13 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     double time_deskew_ms =
         std::chrono::duration<double, std::milli>(t_deskew_end - t_cb_start).count();
 
-    MatchingParams active_match_params;
-    GroundFilterParams active_filter_params;
-    {
-        std::lock_guard<std::mutex> lock(param_mutex_);
-        active_match_params  = match_params_;
-        active_filter_params = filter_params_;
-    }
     const float abs_omega = std::abs(current_omega_z);
     if (dynamic_yaw_expansion_ && abs_omega > dynamic_yaw_omega_thresh_) {
         const float max_yaw_range = std::max(active_match_params.range_yaw, dynamic_yaw_max_range_);
-        active_match_params.range_yaw = std::min(
-            max_yaw_range, std::max(active_match_params.range_yaw, abs_omega * dynamic_yaw_factor_)
-        );
+        const float expanded_yaw =
+            active_match_params.range_yaw +
+            (abs_omega - dynamic_yaw_omega_thresh_) * dynamic_yaw_factor_;
+        active_match_params.range_yaw = std::min(max_yaw_range, expanded_yaw);
     }
 
     // Adaptively expand translational search window up to 1.5x during high-speed movement (>= 2.0
@@ -1130,6 +1137,18 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             // Estimate translation over a fixed time interval rather than
             // differentiating alternating 50 ms scan noise into fake velocity.
             if (velocity_estimation_enable_) {
+                if (!velocity_history_.empty()) {
+                    const auto& prev_entry = velocity_history_.back();
+                    const double step_dt =
+                        (reference_stamp.nanoseconds() - prev_entry.stamp.nanoseconds()) * 1e-9;
+                    const float step_dist =
+                        std::hypot(best_pose.x - prev_entry.pose.x, best_pose.y - prev_entry.pose.y);
+                    if (step_dt <= 1e-3 ||
+                        (step_dist / static_cast<float>(step_dt)) > velocity_max_linear_) {
+                        velocity_history_.clear();
+                        has_velocity_ = false;
+                    }
+                }
                 velocity_history_.push_back({reference_stamp, best_pose});
                 while (velocity_history_.size() > 2 &&
                        (reference_stamp.nanoseconds() - velocity_history_[1].stamp.nanoseconds()) *
@@ -1203,25 +1222,22 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         publishPoseAndTransform(reference_stamp, best_pose, false);
         tf_published = true;
     } else if (!is_lost_) {
-        // 単発のマッチング失敗時は、IMU積分と速度モデルによる予測姿勢 (search_base_pose) で TF
-        // を補間配信 これにより高速旋回中の一時的ドロップ時でも TF 途絶・跳ねを完全に防止する
-        publishPoseAndTransform(reference_stamp, search_base_pose, true);
-        tf_published = true;
-    } else {
-        // is_lost_ 時でも、IMUが健全かつ直前のマッチから短時間（0.5秒未満）であれば
-        // IMU予測姿勢でTFを継続配信し、TF途絶による下流のフリーズやタイムスタンプ不整合を防止する
+        int lost_cnt          = 0;
         int64_t last_match_ns = 0;
         {
             std::lock_guard<std::mutex> lock(pose_mutex_);
+            lost_cnt      = lost_frame_count_;
             last_match_ns = last_match_stamp_.nanoseconds();
         }
-        if (imu_initialized_ && last_match_ns > 0) {
-            const double time_since_last_match =
-                (reference_stamp.nanoseconds() - last_match_ns) * 1e-9;
-            if (time_since_last_match > 0.0 && time_since_last_match < 0.5) {
-                publishPoseAndTransform(reference_stamp, search_base_pose, true);
-                tf_published = true;
-            }
+        const double time_since_last_match =
+            (last_match_ns > 0) ? ((reference_stamp.nanoseconds() - last_match_ns) * 1e-9) : 1e9;
+        // Broadcast predicted TF only for transient single/double-frame dropouts (<= 2 frames and
+        // <= 0.10 s). On continuous matching failures or when lost, immediately stop TF
+        // publication so downstream navigation triggers its pose_age emergency stop.
+        if (imu_initialized_ && lost_cnt <= 2 && time_since_last_match > 0.0 &&
+            time_since_last_match <= 0.10) {
+            publishPoseAndTransform(reference_stamp, search_base_pose, true);
+            tf_published = true;
         }
     }
     publishLocalizationSuccess(matched && !is_lost_);
@@ -1517,7 +1533,7 @@ std::vector<TimedScanPoint> LocalizationNode::extractRawTimedPoints(
             if (ns > end_ns) {
                 end_ns = ns;
             }
-            // センサ座標系の生点群を格納（事前加工ゼロ）
+            // Store raw sensor-frame point with nanosecond timestamp (zero host-side pre-transform)
             result.push_back({x, y, z, ns});
         }
     }
@@ -1665,6 +1681,15 @@ void LocalizationNode::publishPoseAndTransform(
         std::lock_guard<std::mutex> lock(pose_mutex_);
         last_known_pose_ = pose;
         predicted_pose_  = pose;
+        if (imu_initialized_ && last_imu_stamp_.nanoseconds() > stamp.nanoseconds()) {
+            double rot_to_latest_imu = 0.0;
+            if (yaw_history_.delta(
+                    stamp.nanoseconds(), last_imu_stamp_.nanoseconds(), rot_to_latest_imu
+                )) {
+                predicted_pose_.yaw =
+                    normalizeAngle(pose.yaw + static_cast<float>(rot_to_latest_imu));
+            }
+        }
     }
 
     tf2::Quaternion q;
@@ -1767,7 +1792,7 @@ void LocalizationNode::publishFieldMapMarkers()
 }
 
 /**
- * @brief 読み込み済みの ESDF マップを RViz2 表示用 PointCloud2 として 1 回だけパブリッシュする
+ * @brief Publishes the loaded 3D ESDF map once as a PointCloud2 topic for RViz2 visualization.
  */
 void LocalizationNode::publishESDFMap()
 {
@@ -1793,7 +1818,7 @@ void LocalizationNode::publishESDFMap()
     out_msg->is_dense         = true;
     out_msg->is_bigendian     = false;
 
-    // フィールドの設定: x, y, z, intensity (距離を格納)
+    // Configure PointCloud2 fields: x, y, z, intensity (stores Euclidean distance [m])
     sensor_msgs::PointCloud2Modifier modifier(*out_msg);
     modifier.setPointCloud2Fields(
         4,
@@ -1812,7 +1837,7 @@ void LocalizationNode::publishESDFMap()
     );
     modifier.resize(total_points);
 
-    // 点群データの書き込み (intensity フィールドに距離[m]を代入)
+    // Populate voxel coordinates and store distance [m] in the intensity channel
     sensor_msgs::PointCloud2Iterator<float> iter_x(*out_msg, "x");
     sensor_msgs::PointCloud2Iterator<float> iter_y(*out_msg, "y");
     sensor_msgs::PointCloud2Iterator<float> iter_z(*out_msg, "z");
@@ -1827,7 +1852,7 @@ void LocalizationNode::publishESDFMap()
         *iter_intensity        = point_data.distance_m;
     }
 
-    // 1 回だけパブリッシュ (QoS transient_local により後から起動した RViz2 にも自動配信)
+    // Publish once (transient_local QoS automatically delivers to late-joining RViz2 subscribers)
     pub_esdf_map_->publish(std::move(out_msg));
     RCLCPP_INFO(
         this->get_logger(),
@@ -1844,7 +1869,7 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
 
-    // 実行時に変更不可なパラメータ
+    // Parameters that cannot be modified dynamically at runtime
     static const std::unordered_set<std::string> immutable_params = {
         "map_source_type",
         "map_file_path",
@@ -1890,7 +1915,7 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         "initial_pose.use_for_local_search"
     };
 
-    // 1. パラメータ値の妥当性検証
+    // 1. Validate parameter values before applying changes
     for (const auto& param : parameters) {
         const auto& name = param.get_name();
         if (immutable_params.count(name)) {
@@ -1955,7 +1980,7 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         }
     }
 
-    // 2. スレッドセーフに更新を適用
+    // 2. Apply validated parameter updates under mutex lock
     std::lock_guard<std::mutex> lock(param_mutex_);
     bool update_global_search_cfg = false;
 

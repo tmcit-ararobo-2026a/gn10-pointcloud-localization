@@ -171,7 +171,7 @@ class SystemGPUMonitor:
         while self.running:
             now = time.time() - start_time
 
-            # プロセス特定
+            # Locate target process PID
             if self.target_pid is None or not psutil.pid_exists(self.target_pid):
                 self.target_pid = self.find_target_pid()
 
@@ -237,15 +237,15 @@ def run_benchmark_trial(bag_path, trial_duration_s=25.0, output_dir=Path("./benc
     print(f"[*] Resource CSV: {resource_csv}")
     print(f"========================================================")
 
-    # 1. 既存の ROS 2 / localization ノードを安全にクリーンアップ
+    # 1. Clean up any existing ROS 2 localization node processes
     subprocess.run(["pkill", "-9", "-f", "gn10_pointcloud_localization_node"], stderr=subprocess.DEVNULL)
     time.sleep(1.0)
 
-    # 2. リソースモニターの初期化
+    # 2. Initialize system & GPU resource monitor
     monitor = SystemGPUMonitor(sample_interval_s=0.05)
     monitor.start()
 
-    # 3. ノード起動 (ROS 2 launch with benchmark parameters)
+    # 3. Launch localization node with benchmark profiling enabled
     launch_cmd = [
         "ros2", "launch", "gn10_pointcloud_localization", "localization.launch.py",
         "use_sim_time:=true",
@@ -256,9 +256,9 @@ def run_benchmark_trial(bag_path, trial_duration_s=25.0, output_dir=Path("./benc
     env["PYTHONUNBUFFERED"] = "1"
 
     launch_proc = subprocess.Popen(launch_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(3.0)  # ESDF マップ初期化待機
+    time.sleep(3.0)  # Wait for ESDF map initialization
 
-    # 4. rosbag 再生
+    # 4. Play rosbag
     bag_cmd = [
         "timeout", str(int(trial_duration_s)),
         "ros2", "bag", "play", str(bag_path), "--clock", "--disable-keyboard-controls"
@@ -266,7 +266,7 @@ def run_benchmark_trial(bag_path, trial_duration_s=25.0, output_dir=Path("./benc
     print(f"[*] Playing rosbag for {trial_duration_s}s...")
     bag_proc = subprocess.run(bag_cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # 5. 測定終了 & プロセス終了
+    # 5. Stop monitoring and terminate node processes
     print("[*] Benchmark run completed. Shutting down nodes...")
     monitor.stop()
 
@@ -277,12 +277,12 @@ def run_benchmark_trial(bag_path, trial_duration_s=25.0, output_dir=Path("./benc
         launch_proc.kill()
     subprocess.run(["pkill", "-9", "-f", "gn10_pointcloud_localization_node"], stderr=subprocess.DEVNULL)
 
-    # 6. リソース CSV の保存
+    # 6. Save resource metrics CSV
     df_res = monitor.to_dataframe()
     df_res.to_csv(resource_csv, index=False)
     print(f"[+] Saved system & GPU resource metrics: {len(df_res)} samples -> {resource_csv}")
 
-    # 7. パイプライン CSV の確認
+    # 7. Verify pipeline profiling CSV
     if pipeline_csv.exists() and pipeline_csv.stat().st_size > 0:
         df_pipe = pd.read_csv(pipeline_csv)
         print(f"[+] Recorded pipeline profiling frames: {len(df_pipe)} frames -> {pipeline_csv}")
@@ -351,7 +351,7 @@ def generate_publication_visualizations(df_pipe, df_res, output_dir=Path("./benc
         ax1.plot(t, df_pipe['time_ground_filter_ms'].to_numpy(), label='Ground Filter (GPU)', color='#2ca02c', lw=1.2, alpha=0.85)
         ax1.plot(t, df_pipe['time_deskew_ms'].to_numpy(), label='IMU Deskew (CPU)', color='#9467bd', lw=1.2, alpha=0.8)
 
-        # 60Hz 限界線 (16.67ms) と 30Hz 限界線 (33.33ms)
+        # 60 Hz deadline (16.67 ms) and 30 Hz deadline (33.33 ms)
         ax1.axhline(16.67, color='red', linestyle='--', lw=1.5, label='60 Hz Threshold (16.6 ms)')
         ax1.set_xlabel('Elapsed Time [s]')
         ax1.set_ylabel('Execution Time [ms]')
@@ -360,7 +360,7 @@ def generate_publication_visualizations(df_pipe, df_res, output_dir=Path("./benc
         ax1.legend(loc='upper right', framealpha=0.9)
         ax1.set_ylim(0, max(25.0, float(df_pipe['time_total_ms'].quantile(0.99)) * 1.3))
 
-        # 箱ひげ図
+        # Box plot distribution
         box_data = [
             df_pipe['time_total_ms'].dropna().to_numpy(),
             df_pipe['time_matching_ms'].dropna().to_numpy(),
@@ -493,7 +493,7 @@ def generate_markdown_and_latex_reports(df_pipe, df_res, output_dir=Path("./benc
 
     df_summary = pd.DataFrame(metrics_list)
 
-    # 1. Markdown Table (自前フォーマットで tabulate 依存なし)
+    # 1. Markdown Table (custom formatter without external tabulate dependency)
     headers = ["Metric", "Mean", "Std", "Min", "Median", "p95", "p99", "Max"]
     col_w = [30, 10, 10, 10, 10, 10, 10, 10]
     header_line = "| " + " | ".join(h.ljust(w) for h, w in zip(headers, col_w)) + " |"

@@ -61,11 +61,11 @@ public:
         grid_ = std::move(data);
     }
 
-    // ファイル保存・読込
+    // Binary file serialization and deserialization (.esdf format)
     bool saveBinary(const std::string& file_path) const;
     bool loadBinary(const std::string& file_path);
 
-    // 点群 (x, y, z float 配列) からの高速 ESDF 構築 (床面フィルタ対応)
+    // Build 3D ESDF from a raw point cloud (interleaved x, y, z float array) with ground filtering
     bool buildFromPoints(
         const std::vector<float>& points_xyz,
         float resolution,
@@ -74,7 +74,7 @@ public:
         float ground_z_thresh             = 0.04f
     );
 
-    // PCD ファイルからの構築（自動キャッシュ機能・床面フィルタ対応）
+    // Build 3D ESDF from a PCD file (with automatic .esdf binary caching and ground filtering)
     bool buildFromPCD(
         const std::string& pcd_file_path,
         float resolution,
@@ -83,7 +83,7 @@ public:
         float ground_z_thresh             = 0.04f
     );
 
-    // 従来のフィールド定義オブジェクトからの ESDF 構築（互換性用）
+    // Build 3D ESDF from analytic field object primitives (backward compatibility)
     bool buildFromFieldObjects(
         const std::vector<FieldObject>& objects,
         float resolution,
@@ -96,22 +96,23 @@ public:
         float max_dist = 0.5f
     );
 
-    // 座標 (wx, wy, wz) に対するホスト側での距離取得（デバッグ・検証用）
+    // Query signed/unsigned Euclidean distance at world coordinates (wx, wy, wz) on the host
     float getDistance(float wx, float wy, float wz) const;
 
     /**
-     * @brief 3D ESDF から Z 軸最小値射影を行い、2D コストマップ（OccupancyGrid 準拠）を生成する
+     * @brief Projects the 3D ESDF along the Z axis (minimum distance within [z_min, z_max])
+     *        to generate a 2D OccupancyGrid-compatible costmap.
      *
-     * @param z_min ロボット干渉範囲の下限 [m]
-     * @param z_max ロボット干渉範囲の上限 [m]
-     * @param robot_radius ロボット物理半径 [m] (この距離以内は不可侵 100)
-     * @param inflation_margin インフレーション波及マージン [m] (この範囲でコスト 99 から 1 へ減衰)
-     * @param out_width 出力 2D マップの幅 (セル数)
-     * @param out_height 出力 2D マップの高さ (セル数)
-     * @param out_origin_x 出力 2D マップの原点 X [m]
-     * @param out_origin_y 出力 2D マップの原点 Y [m]
-     * @param out_costmap 出力 2D コストマップ配列 (0..100)
-     * @return true 射影成功時
+     * @param z_min Lower Z bound of robot collision height [m]
+     * @param z_max Upper Z bound of robot collision height [m]
+     * @param robot_radius Physical robot radius [m] (cells within this distance get lethal cost 100)
+     * @param inflation_margin Inflation decay margin [m] (cost decays linearly from 99 to 1)
+     * @param out_width Output 2D map width [cells]
+     * @param out_height Output 2D map height [cells]
+     * @param out_origin_x Output 2D map origin X [m]
+     * @param out_origin_y Output 2D map origin Y [m]
+     * @param out_costmap Output 2D costmap array (values in [0, 100])
+     * @return true if projection succeeds
      */
     bool sliceTo2DCostmap(
         float z_min,
@@ -126,7 +127,7 @@ public:
     ) const;
 
     /**
-     * @brief 可視化用 ESDF ボクセル点データ構造体
+     * @brief ESDF voxel point structure for RViz2 visualization
      */
     struct ESDFVoxelPoint {
         float x;
@@ -136,11 +137,11 @@ public:
     };
 
     /**
-     * @brief 可視化用のボクセル点群を抽出する
+     * @brief Extracts voxel center points from the 3D ESDF for visualization.
      *
-     * @param max_distance_m 抽出する最大距離[m] (負値の場合は header_.max_dist_thresh 未満)
-     * @param stride ボクセルの間引きステップ (1以上の整数)
-     * @return std::vector<ESDFVoxelPoint> 抽出されたボクセル点群
+     * @param max_distance_m Maximum distance threshold [m] to extract (if negative, uses header_.max_dist_thresh)
+     * @param stride Voxel subsampling stride (>= 1)
+     * @return std::vector<ESDFVoxelPoint> Extracted voxel points
      */
     std::vector<ESDFVoxelPoint> extractVoxelPoints(
         float max_distance_m = -1.0f, int stride = 1

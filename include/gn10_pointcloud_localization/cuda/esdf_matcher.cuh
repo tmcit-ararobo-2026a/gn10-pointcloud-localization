@@ -13,11 +13,11 @@
 extern "C" {
 #endif
 
-// ESDF 3D テクスチャのアップロード & バインド
+// Upload and bind the 3D ESDF voxel grid as a hardware-interpolated 3D CUDA texture
 void uploadESDFMapToGPU(const ESDFHeader& header, const float* h_grid_data);
 void freeESDFMapFromGPU();
 
-// 3D Texture を使用した ESDF マッチャー
+// Launch GPU 3D-texture ESDF matcher over a 3D (x, y, yaw) candidate grid
 bool launchESDFMatcher(
     cudaStream_t stream,
     const float* d_obstacle_cloud,

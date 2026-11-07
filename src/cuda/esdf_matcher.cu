@@ -13,7 +13,7 @@
 
 #include "gn10_pointcloud_localization/cuda/esdf_matcher.cuh"
 
-// 3D Texture Memory リソース
+// 3D Texture Memory resources
 static cudaArray_t g_esdf_array       = nullptr;
 static cudaTextureObject_t g_esdf_tex = 0;
 __constant__ ESDFHeader c_esdf_header;
@@ -44,13 +44,13 @@ static float* d_inlier_dist_sum = nullptr;
 static float* d_cost_3d_sum     = nullptr;
 static float* d_cost_2d_sum     = nullptr;
 
-// 3D Texture からハードウェア Trilinear 補間を用いて距離を取得するデバイス関数
-// tex3D は非正規化座標モードの場合、中心が 0.5f オフセットとなります
+// Device function to query Euclidean distance from the 3D CUDA texture using hardware trilinear
+// interpolation. In unnormalized coordinate mode, tex3D centers texels at index + 0.5f.
 __device__ inline float queryESDF(
     cudaTextureObject_t tex, const ESDFHeader& header, float wx, float wy, float wz
 )
 {
-    // グリッド範囲内か判定
+    // Check lower grid bounds
     if (wx < header.min_x || wy < header.min_y || wz < header.min_z) {
         return header.max_dist_thresh;
     }
@@ -121,14 +121,14 @@ __global__ void evaluateESDFKernel(
         float ly = cloud[i * 3 + 1];
         float lz = cloud[i * 3 + 2];
 
-        // map 座標系へ変換
+        // Transform point from base_link to map frame
         float wx = cos_y * lx - sin_y * ly + rx;
         float wy = sin_y * lx + cos_y * ly + ry;
         float wz = lz;
 
         float cost_i = max_dist_thresh;
         if (wx >= field_min_x && wx <= field_max_x && wy >= field_min_y && wy <= field_max_y) {
-            // 3D Texture Memory 参照 (O(1) & ハードウェアトライリニア補間)
+            // O(1) 3D texture memory lookup with hardware trilinear interpolation
             float d = queryESDF(tex, c_esdf_header, wx, wy, wz);
             cost_i = fminf(d, max_dist_thresh);
         }
@@ -263,7 +263,7 @@ __global__ void computeBestPoseMetricsESDFKernel(
         if (wx >= field_min_x && wx <= field_max_x && wy >= field_min_y && wy <= field_max_y) {
             float d = queryESDF(tex, c_esdf_header, wx, wy, wz);
             cost_i = fminf(d, max_dist_thresh);
-            if (d < inlier_dist_thresh) {
+            if (d < inlier_dist_thresh && (num_3d_points == 0 || i < num_3d_points)) {
                 s_count[tid] += 1;
                 s_dist[tid] += d;
             }
@@ -345,7 +345,7 @@ static void extractDynamicPointsGPU(
 
     const Point3D* d_in_pts = reinterpret_cast<const Point3D*>(d_cloud);
 
-    // CUB DeviceSelect::Flagged による GPU 内ストリームコンパクション
+    // In-GPU stream compaction using CUB DeviceSelect::Flagged
     size_t required_temp_bytes = 0;
     checkDynamicCuda(cub::DeviceSelect::Flagged(
         nullptr, required_temp_bytes,
@@ -478,7 +478,7 @@ void uploadESDFMapToGPU(const ESDFHeader& header, const float* h_grid_data)
         return;
     }
 
-    // テクスチャオブジェクトの設定 (Trilinear 補間 + Clamp)
+    // Configure CUDA texture object (hardware trilinear interpolation + clamp addressing)
     cudaResourceDesc resDesc;
     memset(&resDesc, 0, sizeof(resDesc));
     resDesc.resType         = cudaResourceTypeArray;
@@ -489,9 +489,9 @@ void uploadESDFMapToGPU(const ESDFHeader& header, const float* h_grid_data)
     texDesc.addressMode[0]   = cudaAddressModeClamp;
     texDesc.addressMode[1]   = cudaAddressModeClamp;
     texDesc.addressMode[2]   = cudaAddressModeClamp;
-    texDesc.filterMode       = cudaFilterModeLinear;  // ハードウェアトライリニア補間
+    texDesc.filterMode       = cudaFilterModeLinear;  // Hardware trilinear interpolation
     texDesc.readMode         = cudaReadModeElementType;
-    texDesc.normalizedCoords = 0;  // 非正規化座標 (ボクセルインデックス基準)
+    texDesc.normalizedCoords = 0;  // Unnormalized coordinates (voxel index space)
 
     err = cudaCreateTextureObject(&g_esdf_tex, &resDesc, &texDesc, nullptr);
     if (err != cudaSuccess) {
@@ -626,7 +626,7 @@ bool launchESDFMatcher(
     out_best_cost = h_argmin.value;
     out_best_pose = grid.indexToPose(best_idx);
 
-    // Inlier & Component Cost メトリクスの計算
+    // Compute inlier count, inlier mean residual, and independent 3D/2D component costs
     if (out_inlier_count || out_inlier_cost || out_cost_3d || out_cost_2d) {
         cudaMemsetAsync(d_inlier_count, 0, sizeof(int), stream);
         cudaMemsetAsync(d_inlier_dist_sum, 0, sizeof(float), stream);
@@ -677,7 +677,7 @@ bool launchESDFMatcher(
             *out_cost_2d = (actual_2d > 0) ? (h_cost_2d_sum / static_cast<float>(actual_2d)) : 0.0f;
     }
 
-    // 動的点群抽出 (2D LiDAR 点群を除いた 3D LiDAR 障害物点群のみを対象とする)
+    // Extract dynamic obstacle points (evaluated strictly on the 3D LiDAR obstacle cloud)
     out_dynamic_pts.clear();
     if (extract_dynamic && actual_3d > 0) {
         extractDynamicPointsGPU(

@@ -229,17 +229,255 @@ void testESDFMatcherWeightedResidual()
     // Accepted when inlier count, inlier cost, inlier ratio (>= 0.35), and max_inlier_accept_cost (< 0.22) all pass
     assert(accept_params.isMatchAccepted(0.19f, 400, 0.03f, 1000));
 
-    // Test independent 3D and 2D thresholds:
+    // Test independent 3D and 2D thresholds (pass_3d || pass_2d with inactive-sensor guards):
     // Case A: 3D cost passes (< 0.185), 2D cost passes (< 0.080) -> Accepted
     assert(accept_params.isMatchAccepted(0.175f, 0.020f, 500, 100, 200, 0.03f));
     // Case B: 3D cost passes (< 0.185), 2D is absent (count < 30) -> Accepted (3D alone passes)
     assert(accept_params.isMatchAccepted(0.175f, 0.0f, 500, 0, 200, 0.03f));
-    // Case C: 3D cost fails (> 0.185 and inliers low), 2D is good (0.020) -> Rejected (2D cannot mask bad 3D)
-    assert(!accept_params.isMatchAccepted(0.240f, 0.020f, 500, 100, 10, 0.07f));
-    // Case D: 3D cost fails (> 0.185) but 3D inlier criteria pass, 2D passes -> Accepted
-    assert(accept_params.isMatchAccepted(0.195f, 0.020f, 500, 100, 200, 0.03f));
-    // Case E: 3D cost passes (< 0.185) but 2D cost exceeds threshold (> 0.080) -> Rejected
-    assert(!accept_params.isMatchAccepted(0.175f, 0.120f, 500, 100, 200, 0.03f));
+    // Case C: 3D cost fails (> 0.185 and inliers low), 2D is absent (count < 30) -> Rejected
+    assert(!accept_params.isMatchAccepted(0.240f, 0.0f, 500, 0, 10, 0.07f));
+    // Case D: Both 3D and 2D fail their thresholds -> Rejected
+    assert(!accept_params.isMatchAccepted(0.240f, 0.120f, 500, 100, 10, 0.07f));
+    // Case E: 3D cost passes (< 0.185) while 2D spikes (> 0.080) -> Accepted via 3D fallback
+    assert(accept_params.isMatchAccepted(0.175f, 0.120f, 500, 100, 200, 0.03f));
+    // Case F: 3D is insufficient (< 50 pts) and 2D fails (> 0.080) -> Rejected
+    assert(!accept_params.isMatchAccepted(0.0f, 0.120f, 10, 100, 0, 1.0f));
+    // Case G: 3D fails (> 0.185 and inliers low), 2D passes (< 0.080) -> Accepted via 2D fallback
+    assert(accept_params.isMatchAccepted(0.240f, 0.020f, 500, 100, 10, 0.07f));
+
+    // Test PoseSolver symmetric fallback: 3D-only when 2D fails, and 2D-only when 3D fails
+    PoseSolver solver(10000);
+    const float identity_tf[12] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f
+    };
+    GroundFilterParams gf_params;
+    gf_params.range_max = 10.0f;
+    gf_params.robot_radius = 0.0f;
+    gf_params.ground_z_thresh = 0.05f;
+
+    MatchingParams solver_params = accept_params;
+    solver_params.range_xy = 0.25f;
+    solver_params.step_xy = 0.05f;
+    solver_params.range_yaw = 0.05f;
+    solver_params.step_yaw = 0.05f;
+    solver_params.max_dist_thresh = 0.50f;
+    solver_params.useESDFBounds(header);
+
+    // Build a dummy ESDFMap wrapper not needed because uploadESDFMapToGPU was already called;
+    // enable ESDF mode on solver via an ESDFMap instance
+    ESDFMap dummy_map;
+    dummy_map.setHeader(header);
+    dummy_map.setData(std::vector<float>(grid));
+    solver.setESDFMap(dummy_map);
+
+    // 1) Good 3D (at x = 0.0m) + Spiked 2D (at x = 0.35m -> cost_2d > 0.08):
+    // Solver must reject 2D influence (w_2d = 0.0) and lock onto 3D wall at x = 0.0m
+    std::vector<float> spiked_2d;
+    for (int i = 0; i < num_2d; ++i) {
+        spiked_2d.push_back(0.35f);
+        spiked_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
+        spiked_2d.push_back(0.2f);
+    }
+    PoseCandidate solved_pose{};
+    float solved_cost = 0.0f;
+    int solved_inliers = 0;
+    float solved_inlier_cost = 0.0f;
+    bool ok_3d_fb = solver.processPointCloud(
+        cloud_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &spiked_2d,
+        false
+    );
+    assert(ok_3d_fb);
+    assert(solver.lastWeight2D() == 0.0f);
+    assert(std::abs(solved_pose.x - 0.0f) < 0.06f);
+    assert(solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
+
+    // 2) Bad 3D (at x = 0.80m -> cost_3d ~ 0.50) + Good 2D (at x = 0.0m -> cost_2d < 0.08):
+    // Solver must reject corrupted 3D influence (w_2d = 1.0) and lock onto 2D wall at x = 0.0m
+    std::vector<float> bad_3d;
+    for (int i = 0; i < num_3d; ++i) {
+        bad_3d.push_back(0.80f);
+        bad_3d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_3d));
+        bad_3d.push_back(0.5f);
+    }
+    std::vector<float> good_2d;
+    for (int i = 0; i < num_2d; ++i) {
+        good_2d.push_back(0.0f);
+        good_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
+        good_2d.push_back(0.2f);
+    }
+    bool ok_2d_fb = solver.processPointCloud(
+        bad_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &good_2d,
+        false
+    );
+    assert(ok_2d_fb);
+    assert(solver.lastWeight2D() == 1.0f);
+    assert(std::abs(solved_pose.x - 0.0f) < 0.06f);
+    assert(solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
+
+    // 3) Empty 3D (0 points) + Good 2D (at x = 0.0m):
+    // Solver must still prepare and match using 2D LiDAR alone
+    std::vector<float> empty_3d;
+    bool ok_2d_only = solver.processPointCloud(
+        empty_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &good_2d,
+        false
+    );
+    assert(ok_2d_only);
+    assert(solver.obstacleCount3D() == 0);
+    assert(solver.obstacleCount2D() == num_2d);
+    assert(solver.lastWeight2D() == 1.0f);
+    assert(std::abs(solved_pose.x - 0.0f) < 0.06f);
+    assert(solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
+
+    // 4) Anti-oscillation Guard 1 (Hysteresis deadband near cost_threshold_2d):
+    // When 3D is valid (pass_3d == true) and 2D has a mild offset (x = 0.09m, between
+    // cost_threshold_2d = 0.08m and 2.0 * cost_threshold_2d = 0.16m), the solver must NOT
+    // abruptly drop 2D weight to 0.0, preventing chattering at the 0.08m boundary.
+    std::vector<float> mild_offset_2d;
+    for (int i = 0; i < num_2d; ++i) {
+        mild_offset_2d.push_back(0.09f);
+        mild_offset_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
+        mild_offset_2d.push_back(0.2f);
+    }
+    bool ok_deadband = solver.processPointCloud(
+        cloud_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &mild_offset_2d,
+        false
+    );
+    assert(ok_deadband);
+    assert(solver.lastWeight2D() > 0.0f);
+    assert(std::abs(solved_pose.x) < 0.06f);
+
+    // 5) Anti-oscillation Guard 2 (Tight local continuity window on 2D-only fallback):
+    // 5a) When 3D has points (num_3d = 200 >= 50) but fails, and 2D is within the tight
+    //     continuity window (x = 0.08m <= 2 * step_xy = 0.10m), 2D-only fallback succeeds smoothly.
+    std::vector<float> near_2d;
+    for (int i = 0; i < num_2d; ++i) {
+        near_2d.push_back(0.08f);
+        near_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
+        near_2d.push_back(0.2f);
+    }
+    bool ok_near_2d = solver.processPointCloud(
+        bad_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &near_2d,
+        false
+    );
+    assert(ok_near_2d);
+    assert(solver.lastWeight2D() == 1.0f);
+    assert(std::abs(solved_pose.x - (-0.08f)) < 0.06f);
+    assert(solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
+
+    // 5b) When 3D has points (num_3d = 200 >= 50) but fails, and 2D has a distant false wall
+    //     at x = 0.25m (outside 2 * step_xy = 0.10m from base_pose = 0.0m), the 2D-only fallback
+    //     window is clamped to +/- 0.10m so it cannot reach x = -0.25m and is safely rejected.
+    std::vector<float> distant_2d;
+    for (int i = 0; i < num_2d; ++i) {
+        distant_2d.push_back(0.25f);
+        distant_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
+        distant_2d.push_back(0.2f);
+    }
+    bool ok_anti_jump = solver.processPointCloud(
+        bad_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &distant_2d,
+        false
+    );
+    assert(ok_anti_jump);
+    assert(solver.lastWeight2D() == 0.0f);
+    assert(solver.lastCost2D() >= solver_params.cost_threshold_2d);
+    assert(!solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
 
     cudaFree(d_cloud);
     cudaStreamDestroy(stream);

@@ -23,17 +23,18 @@ struct LaserScanDeskewConfig {
 };
 
 /**
- * @brief 2D LaserScan にビーム単位の IMU 回転歪み補正およびロボット並進歪み補正 (Deskew) を適用し、base_link 座標系の点群に変換する
+ * @brief Applies per-beam IMU rotational deskew and translational velocity deskew to a 2D
+ *        LaserScan message, transforming valid beams into the base_link frame.
  *
- * @param scan 入力 LaserScan メッセージ
- * @param tf_x base_link から見たセンサの並進 X [m]
- * @param tf_y base_link から見たセンサの並進 Y [m]
- * @param tf_z base_link から見たセンサの並進 Z [m]
- * @param tf_yaw base_link から見たセンサの取り付け Yaw 角 [rad]
- * @param yaw_history IMU 積分履歴 (YawHistory)
- * @param config 設定パラメータ (Deskew有効化、最大距離、ロボット半径、base_link系並進速度、時刻オフセット)
- * @param out_ref_stamp_ns スキャン末尾 (または先頭) の基準時刻 [ns]
- * @return std::vector<float> base_link 座標系の点群 (x, y, z のインターリーブ配列)
+ * @param scan Input LaserScan message
+ * @param tf_x Sensor translation X in base_link frame [m]
+ * @param tf_y Sensor translation Y in base_link frame [m]
+ * @param tf_z Sensor translation Z in base_link frame [m]
+ * @param tf_yaw Sensor mounting yaw angle in base_link frame [rad]
+ * @param yaw_history Integrated IMU yaw history (YawHistory)
+ * @param config Deskew configuration (enable flag, max range, robot footprint radius, local velocity, time offset)
+ * @param out_ref_stamp_ns Output reference timestamp at the end (or start) of the scan [ns]
+ * @return std::vector<float> Deskewed point cloud in base_link frame (interleaved x, y, z)
  */
 inline std::vector<float> deskewLaserScan(
     const sensor_msgs::msg::LaserScan& scan,
@@ -65,6 +66,12 @@ inline std::vector<float> deskewLaserScan(
         time_inc = static_cast<double>(scan.time_increment);
     } else if (std::isfinite(scan.scan_time) && scan.scan_time > 0.0 && num_ranges > 1) {
         time_inc = static_cast<double>(scan.scan_time) / static_cast<double>(num_ranges - 1);
+    }
+    if (num_ranges > 1 && time_inc > 0.0) {
+        const double total_scan_duration = static_cast<double>(num_ranges - 1) * time_inc;
+        if (total_scan_duration > 1.0) {
+            time_inc = 0.0;
+        }
     }
 
     const int64_t end_stamp_ns =
@@ -103,7 +110,7 @@ inline std::vector<float> deskewLaserScan(
         const float xl = r * std::cos(beam_angle);
         const float yl = r * std::sin(beam_angle);
 
-        // 静的 TF による base_link への変換
+        // Transform beam endpoint from sensor frame to base_link frame via static extrinsic TF
         float xb = tf_cos * xl - tf_sin * yl + static_cast<float>(tf_x);
         float yb = tf_sin * xl + tf_cos * yl + static_cast<float>(tf_y);
         const float zb = static_cast<float>(tf_z);
@@ -111,7 +118,7 @@ inline std::vector<float> deskewLaserScan(
         const int64_t beam_stamp_ns =
             start_stamp_ns + static_cast<int64_t>(std::round(i * time_inc * 1e9));
 
-        // ビームごとの IMU 回転 Deskew 補正 (基準時刻姿勢への復元)
+        // Per-beam IMU rotational deskew (project to reference timestamp orientation)
         if (has_ref_imu) {
             double beam_imu_angle = 0.0;
             if (yaw_history.get_angle_at(beam_stamp_ns, beam_imu_angle)) {
@@ -125,7 +132,7 @@ inline std::vector<float> deskewLaserScan(
             }
         }
 
-        // ビームごとの並進 Deskew 補正 (基準時刻位置への復元)
+        // Per-beam translational deskew (project to reference timestamp position)
         if (has_trans_deskew) {
             const float dt_sec =
                 static_cast<float>(beam_stamp_ns - out_ref_stamp_ns) * 1e-9f;
@@ -135,7 +142,7 @@ inline std::vector<float> deskewLaserScan(
             yb += dy;
         }
 
-        // ロボットフットプリント内の除外
+        // Exclude points inside the robot footprint radius
         if (xb * xb + yb * yb <= radius_sq) {
             continue;
         }
@@ -149,15 +156,17 @@ inline std::vector<float> deskewLaserScan(
 }
 
 /**
- * @brief 2D 点群を別時刻の基準フレーム (例: 3D LiDAR の基準時刻 reference_stamp) へ時空間補正 (時間同期・前進射影) する
+ * @brief Spatiotemporally aligns a 2D point cloud from source_stamp_ns to a target reference
+ *        timestamp (e.g., the 3D LiDAR scan end timestamp reference_stamp) using IMU rotation
+ *        and local translational velocity.
  *
- * @param points 入力点群 (x, y, z のインターリーブ配列, base_link 座標系)
- * @param source_stamp_ns 元点群の基準時刻 [ns]
- * @param target_stamp_ns ターゲット基準時刻 [ns]
- * @param yaw_history IMU 積分履歴
- * @param vx_local ターゲット基準時刻における base_link 系の速度 X [m/s]
- * @param vy_local ターゲット基準時刻における base_link 系の速度 Y [m/s]
- * @return std::vector<float> 時刻補正後の点群 (x, y, z のインターリーブ配列)
+ * @param points Input point cloud in base_link frame (interleaved x, y, z)
+ * @param source_stamp_ns Source reference timestamp of the 2D scan [ns]
+ * @param target_stamp_ns Target reference timestamp to align to [ns]
+ * @param yaw_history Integrated IMU yaw history
+ * @param vx_local Local linear velocity X in base_link frame at the target timestamp [m/s]
+ * @param vy_local Local linear velocity Y in base_link frame at the target timestamp [m/s]
+ * @return std::vector<float> Timestamp-aligned point cloud in base_link frame (interleaved x, y, z)
  */
 inline std::vector<float> alignPointsToTimestamp(
     const std::vector<float>& points,

@@ -239,12 +239,12 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='livox_tf',
         arguments=[
-            '--x', '0.24',
+            '--x', '0.25',
             '--y', '-0.25',
             '--z', '1.09',
             '--yaw', '0.0',
             '--pitch', '-0.273',
-            '--roll', '3.13',
+            '--roll', '3.14159',
             '--frame-id', 'base_link',
             '--child-frame-id', 'livox_frame'
         ]
@@ -259,7 +259,7 @@ def generate_launch_description():
             '--x', '-0.33',
             '--y', '0.0',
             '--z', '0.08',
-            '--yaw', '3.14159',
+            '--yaw', '3.13',
             '--pitch', '0.0',
             '--roll', '0.0',
             '--frame-id', 'base_link',

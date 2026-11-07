@@ -84,72 +84,19 @@ bool PoseSolver::processPointCloud(
 )
 {
     std::lock_guard<std::recursive_mutex> lock(solver_mutex_);
-    int num_points  = static_cast<int>(h_raw_cloud.size() / 3);
-    ground_count_   = 0;
-    obstacle_count_ = 0;
-    if (num_points == 0 || num_points > max_points_) {
+    const int h_obstacle_count =
+        prepareObstacleCloud(h_raw_cloud, h_transform, filter_params, extra_base_link_points);
+    if (h_obstacle_count == 0) {
         out_best_cost = std::numeric_limits<float>::max();
-        if (out_inlier_count) *out_inlier_count = 0;
-        if (out_inlier_cost) *out_inlier_cost = 1.0f;
+        if (out_inlier_count != nullptr) {
+            *out_inlier_count = 0;
+        }
+        if (out_inlier_cost != nullptr) {
+            *out_inlier_cost = 1.0f;
+        }
+        out_dynamic_pts.clear();
         return false;
     }
-
-    last_metrics_ = ProfileMetrics{};
-    auto t_gf_start = std::chrono::high_resolution_clock::now();
-
-    std::memcpy(h_in_, h_raw_cloud.data(), num_points * 3 * sizeof(float));
-
-    cudaMemcpyAsync(d_in_, h_in_, num_points * 3 * sizeof(float), cudaMemcpyHostToDevice, stream_);
-    cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
-
-    int h_ground_count   = 0;
-    int h_obstacle_count = 0;
-
-    launchGroundFilter(
-        stream_,
-        d_in_,
-        d_ground_,
-        d_obstacle_,
-        d_transform_,
-        num_points,
-        filter_params.range_max,
-        filter_params.robot_radius,
-        filter_params.robot_height_min,
-        filter_params.robot_height_max,
-        filter_params.ground_z_thresh,
-        d_ground_count_,
-        d_obstacle_count_,
-        &h_ground_count,
-        &h_obstacle_count
-    );
-
-    cudaStreamSynchronize(stream_);
-    auto t_gf_end = std::chrono::high_resolution_clock::now();
-    last_metrics_.time_ground_filter_ms =
-        std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();
-
-    num_3d_obstacles_ = h_obstacle_count;
-    num_2d_obstacles_ = 0;
-
-    // 2D LiDAR などの追加点群 (base_link 座標系) を障害物バッファにマージ
-    if (extra_base_link_points && !extra_base_link_points->empty()) {
-        int extra_points = static_cast<int>(extra_base_link_points->size() / 3);
-        if (h_obstacle_count + extra_points <= max_points_) {
-            cudaMemcpyAsync(
-                d_obstacle_ + h_obstacle_count * 3,
-                extra_base_link_points->data(),
-                extra_points * 3 * sizeof(float),
-                cudaMemcpyHostToDevice,
-                stream_
-            );
-            num_2d_obstacles_ = extra_points;
-            h_obstacle_count += extra_points;
-            cudaStreamSynchronize(stream_);
-        }
-    }
-
-    ground_count_   = h_ground_count;
-    obstacle_count_ = h_obstacle_count;
 
     return matchObstacleCloud(
         h_obstacle_count,
@@ -183,10 +130,16 @@ bool PoseSolver::processPointCloud(
 )
 {
     std::lock_guard<std::recursive_mutex> lock(solver_mutex_);
-    int num_points = static_cast<int>(timed_points.size());
-    ground_count_   = 0;
-    obstacle_count_ = 0;
-    if (num_points == 0 || num_points > max_points_) {
+    const int h_obstacle_count = prepareObstacleCloud(
+        timed_points,
+        h_transform,
+        deskew_params,
+        imu_samples,
+        stride,
+        filter_params,
+        extra_base_link_points
+    );
+    if (h_obstacle_count == 0) {
         out_best_cost = std::numeric_limits<float>::max();
         if (out_inlier_count != nullptr) {
             *out_inlier_count = 0;
@@ -194,86 +147,9 @@ bool PoseSolver::processPointCloud(
         if (out_inlier_cost != nullptr) {
             *out_inlier_cost = 1.0f;
         }
+        out_dynamic_pts.clear();
         return false;
     }
-
-    last_metrics_ = ProfileMetrics{};
-    auto t_gf_start = std::chrono::high_resolution_clock::now();
-
-    // Stage timed scan points into page-locked (pinned) host buffer for true async H2D transfer
-    std::memcpy(h_timed_in_, timed_points.data(), num_points * sizeof(TimedScanPoint));
-    cudaMemcpyAsync(
-        d_timed_in_, h_timed_in_, num_points * sizeof(TimedScanPoint), cudaMemcpyHostToDevice, stream_
-    );
-    cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
-
-    const size_t total_samples = imu_samples.size();
-    const int num_samples =
-        static_cast<int>(std::min(total_samples, static_cast<size_t>(kMaxImuSamples)));
-    const size_t start_offset = total_samples - static_cast<size_t>(num_samples);
-    if (num_samples > 0) {
-        cudaMemcpyAsync(
-            d_imu_samples_,
-            imu_samples.data() + start_offset,
-            num_samples * sizeof(IMUSample),
-            cudaMemcpyHostToDevice,
-            stream_
-        );
-    }
-
-    int h_ground_count   = 0;
-    int h_obstacle_count = 0;
-
-    // GPU Deskew 統合 Ground Filter の起動
-    launchGroundFilterWithDeskew(
-        stream_,
-        d_timed_in_,
-        d_ground_,
-        d_obstacle_,
-        d_transform_,
-        num_points,
-        stride,
-        deskew_params,
-        d_imu_samples_,
-        num_samples,
-        filter_params.range_max,
-        filter_params.robot_radius,
-        filter_params.robot_height_min,
-        filter_params.robot_height_max,
-        filter_params.ground_z_thresh,
-        d_ground_count_,
-        d_obstacle_count_,
-        &h_ground_count,
-        &h_obstacle_count
-    );
-
-    cudaStreamSynchronize(stream_);
-    auto t_gf_end = std::chrono::high_resolution_clock::now();
-    last_metrics_.time_ground_filter_ms =
-        std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();
-
-    num_3d_obstacles_ = h_obstacle_count;
-    num_2d_obstacles_ = 0;
-
-    // 2D LiDAR などの追加点群 (base_link 座標系) を障害物バッファにマージ
-    if (extra_base_link_points != nullptr && !extra_base_link_points->empty()) {
-        int extra_points = static_cast<int>(extra_base_link_points->size() / 3);
-        if (h_obstacle_count + extra_points <= max_points_) {
-            cudaMemcpyAsync(
-                d_obstacle_ + h_obstacle_count * 3,
-                extra_base_link_points->data(),
-                extra_points * 3 * sizeof(float),
-                cudaMemcpyHostToDevice,
-                stream_
-            );
-            num_2d_obstacles_ = extra_points;
-            h_obstacle_count += extra_points;
-            cudaStreamSynchronize(stream_);
-        }
-    }
-
-    ground_count_   = h_ground_count;
-    obstacle_count_ = h_obstacle_count;
 
     return matchObstacleCloud(
         h_obstacle_count,
@@ -330,164 +206,302 @@ bool PoseSolver::matchObstacleCloud(
     out_dynamic_pts.clear();
     bool pose_matched = false;
     auto t_match_start = std::chrono::high_resolution_clock::now();
-    if (h_obstacle_count > match_params.min_3d_points) {
+    if (num_3d_obstacles_ >= match_params.min_3d_points ||
+        num_2d_obstacles_ >= match_params.min_2d_points) {
         // Compute dynamic 2D LiDAR weighting based on active point count and FoV coverage
         const float effective_weight_2d = computeEffectiveWeight2D(match_params);
         last_weight_2d_ = effective_weight_2d;
 
-        PoseCandidate coarse_pose{};
-        float coarse_cost = std::numeric_limits<float>::max();
-        std::vector<float> ignored_dynamic;
+        int local_inliers = 0;
+        float local_inlier_cost = 1.0f;
 
-        int* step_inlier_count = nullptr;
-        float* step_inlier_cost = nullptr;
-        bool output_coarse_dynamic = false;
-        int coarse_point_stride = computeCoarsePointStride();
-        if (!match_params.fine_refine) {
-            step_inlier_count = out_inlier_count;
-            step_inlier_cost = out_inlier_cost;
-            output_coarse_dynamic = extract_dynamic;
-            coarse_point_stride = 1;
-        }
+        auto run_local_match = [&](const float* d_obs_ptr,
+                                   int active_total_count,
+                                   int active_3d_count,
+                                   int active_2d_count,
+                                   float weight_2d,
+                                   float search_range_xy,
+                                   float search_range_yaw,
+                                   float* out_c3d,
+                                   float* out_c2d) -> bool {
+            out_dynamic_pts.clear();
+            PoseCandidate coarse_pose{};
+            float coarse_cost = std::numeric_limits<float>::max();
+            std::vector<float> ignored_dynamic;
 
-        std::vector<float>& target_dynamic_buf = output_coarse_dynamic ? out_dynamic_pts : ignored_dynamic;
+            int* step_inlier_count = nullptr;
+            float* step_inlier_cost = nullptr;
+            bool output_coarse_dynamic = false;
+            int coarse_point_stride = (active_3d_count > 1500)
+                                          ? std::max(1, active_3d_count / 1200)
+                                          : 1;
+            if (!match_params.fine_refine) {
+                step_inlier_count = &local_inliers;
+                step_inlier_cost = &local_inlier_cost;
+                output_coarse_dynamic = extract_dynamic;
+                coarse_point_stride = 1;
+            }
 
-        if (use_esdf_) {
-            pose_matched = launchESDFMatcher(
-                stream_,
+            std::vector<float>& target_dynamic_buf =
+                output_coarse_dynamic ? out_dynamic_pts : ignored_dynamic;
+
+            bool matched = false;
+            if (use_esdf_) {
+                matched = launchESDFMatcher(
+                    stream_,
+                    d_obs_ptr,
+                    active_total_count,
+                    search_base_pose,
+                    search_range_xy,
+                    search_range_xy,
+                    match_params.step_xy,
+                    search_range_yaw,
+                    match_params.step_yaw,
+                    match_params.max_dist_thresh,
+                    match_params.dynamic_dist_thresh,
+                    match_params.field_min_x,
+                    match_params.field_max_x,
+                    match_params.field_min_y,
+                    match_params.field_max_y,
+                    coarse_pose,
+                    coarse_cost,
+                    target_dynamic_buf,
+                    output_coarse_dynamic,
+                    step_inlier_count,
+                    step_inlier_cost,
+                    match_params.inlier_dist_thresh,
+                    active_3d_count,
+                    active_2d_count,
+                    weight_2d,
+                    (!match_params.fine_refine) ? out_c3d : nullptr,
+                    (!match_params.fine_refine) ? out_c2d : nullptr,
+                    nullptr,
+                    coarse_point_stride
+                );
+            } else {
+                matched = launchFieldSDFMatcher(
+                    stream_,
+                    d_obs_ptr,
+                    active_total_count,
+                    search_base_pose,
+                    search_range_xy,
+                    search_range_xy,
+                    match_params.step_xy,
+                    search_range_yaw,
+                    match_params.step_yaw,
+                    match_params.max_dist_thresh,
+                    match_params.dynamic_dist_thresh,
+                    match_params.field_min_x,
+                    match_params.field_max_x,
+                    match_params.field_min_y,
+                    match_params.field_max_y,
+                    coarse_pose,
+                    coarse_cost,
+                    target_dynamic_buf,
+                    output_coarse_dynamic,
+                    step_inlier_count,
+                    step_inlier_cost,
+                    match_params.inlier_dist_thresh,
+                    nullptr,
+                    coarse_point_stride
+                );
+            }
+            out_best_pose = coarse_pose;
+            out_best_cost = coarse_cost;
+            if (matched && match_params.fine_refine) {
+                float fine_xy = match_params.step_xy;
+                float fine_yaw = match_params.step_yaw;
+                for (int level = 0; level < match_params.fine_refine_levels && matched; ++level) {
+                    fine_xy /= 5.0f;
+                    fine_yaw /= 5.0f;
+                    const PoseCandidate center = out_best_pose;
+                    const bool is_final_level = (level + 1 == match_params.fine_refine_levels);
+                    const bool extract_level_dynamic = is_final_level && extract_dynamic;
+
+                    int* fine_inlier_count = is_final_level ? &local_inliers : nullptr;
+                    float* fine_inlier_cost = is_final_level ? &local_inlier_cost : nullptr;
+
+                    if (use_esdf_) {
+                        matched = launchESDFMatcher(
+                            stream_,
+                            d_obs_ptr,
+                            active_total_count,
+                            center,
+                            2.0f * fine_xy,
+                            2.0f * fine_xy,
+                            fine_xy,
+                            2.0f * fine_yaw,
+                            fine_yaw,
+                            match_params.max_dist_thresh,
+                            match_params.dynamic_dist_thresh,
+                            match_params.field_min_x,
+                            match_params.field_max_x,
+                            match_params.field_min_y,
+                            match_params.field_max_y,
+                            out_best_pose,
+                            out_best_cost,
+                            out_dynamic_pts,
+                            extract_level_dynamic,
+                            fine_inlier_count,
+                            fine_inlier_cost,
+                            match_params.inlier_dist_thresh,
+                            active_3d_count,
+                            active_2d_count,
+                            weight_2d,
+                            is_final_level ? out_c3d : nullptr,
+                            is_final_level ? out_c2d : nullptr
+                        );
+                    } else {
+                        matched = launchFieldSDFMatcher(
+                            stream_,
+                            d_obs_ptr,
+                            active_total_count,
+                            center,
+                            2.0f * fine_xy,
+                            2.0f * fine_xy,
+                            fine_xy,
+                            2.0f * fine_yaw,
+                            fine_yaw,
+                            match_params.max_dist_thresh,
+                            match_params.dynamic_dist_thresh,
+                            match_params.field_min_x,
+                            match_params.field_max_x,
+                            match_params.field_min_y,
+                            match_params.field_max_y,
+                            out_best_pose,
+                            out_best_cost,
+                            out_dynamic_pts,
+                            extract_level_dynamic,
+                            fine_inlier_count,
+                            fine_inlier_cost,
+                            match_params.inlier_dist_thresh
+                        );
+                    }
+                }
+            }
+            return matched;
+        };
+
+        auto is_3d_passed = [&](float c3d, int inliers, float inlier_c) -> bool {
+            if (num_3d_obstacles_ < match_params.min_3d_points) {
+                return false;
+            }
+            const bool inlier_ok =
+                (inliers >= match_params.min_inliers) &&
+                (inlier_c < match_params.inlier_cost_thresh) &&
+                (static_cast<float>(inliers) / static_cast<float>(num_3d_obstacles_) >=
+                 match_params.min_inlier_ratio) &&
+                (c3d < match_params.max_inlier_accept_cost);
+            return (c3d < match_params.cost_threshold_3d) || inlier_ok;
+        };
+
+        if (num_3d_obstacles_ >= match_params.min_3d_points) {
+            pose_matched = run_local_match(
                 d_obstacle_,
                 h_obstacle_count,
-                search_base_pose,
-                match_params.range_xy,
-                match_params.range_xy,
-                match_params.step_xy,
-                match_params.range_yaw,
-                match_params.step_yaw,
-                match_params.max_dist_thresh,
-                match_params.dynamic_dist_thresh,
-                match_params.field_min_x,
-                match_params.field_max_x,
-                match_params.field_min_y,
-                match_params.field_max_y,
-                coarse_pose,
-                coarse_cost,
-                target_dynamic_buf,
-                output_coarse_dynamic,
-                step_inlier_count,
-                step_inlier_cost,
-                match_params.inlier_dist_thresh,
                 num_3d_obstacles_,
                 num_2d_obstacles_,
                 effective_weight_2d,
-                (!match_params.fine_refine) ? &last_cost_3d_ : nullptr,
-                (!match_params.fine_refine) ? &last_cost_2d_ : nullptr,
-                nullptr,
-                coarse_point_stride
-            );
-        } else {
-            pose_matched = launchFieldSDFMatcher(
-                stream_,
-                d_obstacle_,
-                h_obstacle_count,
-                search_base_pose,
                 match_params.range_xy,
-                match_params.range_xy,
-                match_params.step_xy,
                 match_params.range_yaw,
-                match_params.step_yaw,
-                match_params.max_dist_thresh,
-                match_params.dynamic_dist_thresh,
-                match_params.field_min_x,
-                match_params.field_max_x,
-                match_params.field_min_y,
-                match_params.field_max_y,
-                coarse_pose,
-                coarse_cost,
-                target_dynamic_buf,
-                output_coarse_dynamic,
-                step_inlier_count,
-                step_inlier_cost,
-                match_params.inlier_dist_thresh,
-                nullptr,
-                coarse_point_stride
+                &last_cost_3d_,
+                &last_cost_2d_
             );
-        }
-        out_best_pose = coarse_pose;
-        out_best_cost = coarse_cost;
-        if (pose_matched && match_params.fine_refine) {
-            float fine_xy = match_params.step_xy;
-            float fine_yaw = match_params.step_yaw;
-            for (int level = 0; level < match_params.fine_refine_levels && pose_matched; ++level) {
-                fine_xy /= 5.0f;
-                fine_yaw /= 5.0f;
-                const PoseCandidate center = out_best_pose;
-                const bool is_final_level = (level + 1 == match_params.fine_refine_levels);
-                const bool extract_level_dynamic = is_final_level && extract_dynamic;
 
-                int* fine_inlier_count = nullptr;
-                float* fine_inlier_cost = nullptr;
-                if (is_final_level) {
-                    fine_inlier_count = out_inlier_count;
-                    fine_inlier_cost = out_inlier_cost;
+            if (use_esdf_ && pose_matched && effective_weight_2d > 0.0f &&
+                num_2d_obstacles_ >= match_params.min_2d_points) {
+                bool pass_3d = is_3d_passed(last_cost_3d_, local_inliers, local_inlier_cost);
+                // Anti-oscillation deadband (Guard 1):
+                // When the combined match already satisfies 3D acceptance (pass_3d == true),
+                // do not detach 2D at the normal acceptance threshold (cost_threshold_2d).
+                // Only detach 2D and re-run 3D-only if 3D acceptance failed (!pass_3d) OR
+                // if 2D cost exhibits a severe anomaly (>= 2.0 * cost_threshold_2d).
+                // This prevents frame-to-frame weight chattering near cost_threshold_2d.
+                const bool severe_2d_anomaly =
+                    (last_cost_2d_ >= 2.0f * match_params.cost_threshold_2d);
+
+                if (!pass_3d || severe_2d_anomaly) {
+                    last_weight_2d_ = 0.0f;
+                    pose_matched = run_local_match(
+                        d_obstacle_,
+                        num_3d_obstacles_,
+                        num_3d_obstacles_,
+                        0,
+                        0.0f,
+                        match_params.range_xy,
+                        match_params.range_yaw,
+                        &last_cost_3d_,
+                        nullptr
+                    );
+                    pass_3d = pose_matched &&
+                              is_3d_passed(last_cost_3d_, local_inliers, local_inlier_cost);
                 }
 
-                if (use_esdf_) {
-                    pose_matched = launchESDFMatcher(
-                        stream_,
-                        d_obstacle_,
-                        h_obstacle_count,
-                        center,
-                        2.0f * fine_xy,
-                        2.0f * fine_xy,
-                        fine_xy,
-                        2.0f * fine_yaw,
-                        fine_yaw,
-                        match_params.max_dist_thresh,
-                        match_params.dynamic_dist_thresh,
-                        match_params.field_min_x,
-                        match_params.field_max_x,
-                        match_params.field_min_y,
-                        match_params.field_max_y,
-                        out_best_pose,
-                        out_best_cost,
-                        out_dynamic_pts,
-                        extract_level_dynamic,
-                        fine_inlier_count,
-                        fine_inlier_cost,
-                        match_params.inlier_dist_thresh,
-                        num_3d_obstacles_,
+                if (!pass_3d) {
+                    // Anti-jump continuity window (Guard 2):
+                    // When 3D LiDAR has points (num_3d_obstacles_ >= min_3d_points) but fails
+                    // acceptance, restrict the 2D-only fallback search around search_base_pose
+                    // to at most 2 * step_xy and 2 * step_yaw. This maintains local tracking
+                    // continuity while preventing 2D-only from jumping to a distant wall and
+                    // oscillating against 3D on subsequent frames.
+                    const PoseCandidate saved_3d_pose = out_best_pose;
+                    const float saved_3d_cost = out_best_cost;
+                    const int saved_3d_inliers = local_inliers;
+                    const float saved_3d_inlier_cost = local_inlier_cost;
+                    const std::vector<float> saved_3d_dynamic = out_dynamic_pts;
+
+                    const float fallback_range_xy =
+                        std::min(match_params.range_xy, 2.0f * match_params.step_xy);
+                    const float fallback_range_yaw =
+                        std::min(match_params.range_yaw, 2.0f * match_params.step_yaw);
+
+                    last_weight_2d_ = 1.0f;
+                    const bool matched_2d_only = run_local_match(
+                        d_obstacle_ + num_3d_obstacles_ * 3,
                         num_2d_obstacles_,
-                        effective_weight_2d,
-                        is_final_level ? &last_cost_3d_ : nullptr,
-                        is_final_level ? &last_cost_2d_ : nullptr
+                        0,
+                        num_2d_obstacles_,
+                        1.0f,
+                        fallback_range_xy,
+                        fallback_range_yaw,
+                        nullptr,
+                        &last_cost_2d_
                     );
-                } else {
-                    pose_matched = launchFieldSDFMatcher(
-                        stream_,
-                        d_obstacle_,
-                        h_obstacle_count,
-                        center,
-                        2.0f * fine_xy,
-                        2.0f * fine_xy,
-                        fine_xy,
-                        2.0f * fine_yaw,
-                        fine_yaw,
-                        match_params.max_dist_thresh,
-                        match_params.dynamic_dist_thresh,
-                        match_params.field_min_x,
-                        match_params.field_max_x,
-                        match_params.field_min_y,
-                        match_params.field_max_y,
-                        out_best_pose,
-                        out_best_cost,
-                        out_dynamic_pts,
-                        extract_level_dynamic,
-                        fine_inlier_count,
-                        fine_inlier_cost,
-                        match_params.inlier_dist_thresh
-                    );
+                    if (!matched_2d_only || last_cost_2d_ >= match_params.cost_threshold_2d) {
+                        // Neither 3D nor tight 2D fallback passed; restore 3D-only state
+                        out_best_pose = saved_3d_pose;
+                        out_best_cost = saved_3d_cost;
+                        local_inliers = saved_3d_inliers;
+                        local_inlier_cost = saved_3d_inlier_cost;
+                        out_dynamic_pts = saved_3d_dynamic;
+                        last_weight_2d_ = 0.0f;
+                    } else {
+                        pose_matched = true;
+                    }
                 }
             }
+        } else {
+            // Only 2D LiDAR has sufficient obstacle points (< min_3d_points)
+            last_cost_3d_ = match_params.max_dist_thresh;
+            last_weight_2d_ = 1.0f;
+            pose_matched = run_local_match(
+                d_obstacle_ + num_3d_obstacles_ * 3,
+                num_2d_obstacles_,
+                0,
+                num_2d_obstacles_,
+                1.0f,
+                match_params.range_xy,
+                match_params.range_yaw,
+                nullptr,
+                &last_cost_2d_
+            );
+        }
+
+        if (out_inlier_count != nullptr) {
+            *out_inlier_count = local_inliers;
+        }
+        if (out_inlier_cost != nullptr) {
+            *out_inlier_cost = local_inlier_cost;
         }
     } else {
         out_best_cost = std::numeric_limits<float>::max();
@@ -528,59 +542,68 @@ int PoseSolver::prepareObstacleCloud(
     obstacle_count_   = 0;
     num_3d_obstacles_ = 0;
     num_2d_obstacles_ = 0;
-    if (num_points == 0 || num_points > max_points_) {
+    const bool has_extra = (extra_base_link_points != nullptr && !extra_base_link_points->empty());
+    if (num_points > max_points_ || (num_points == 0 && !has_extra)) {
         return 0;
     }
 
     last_metrics_ = ProfileMetrics{};
     auto t_gf_start = std::chrono::high_resolution_clock::now();
 
-    std::memcpy(h_timed_in_, timed_points.data(), num_points * sizeof(TimedScanPoint));
-    cudaMemcpyAsync(
-        d_timed_in_, h_timed_in_, num_points * sizeof(TimedScanPoint), cudaMemcpyHostToDevice, stream_
-    );
-    cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
-
-    const size_t total_samples = imu_samples.size();
-    const int num_samples =
-        static_cast<int>(std::min(total_samples, static_cast<size_t>(kMaxImuSamples)));
-    const size_t start_offset = total_samples - static_cast<size_t>(num_samples);
-    if (num_samples > 0) {
-        cudaMemcpyAsync(
-            d_imu_samples_,
-            imu_samples.data() + start_offset,
-            num_samples * sizeof(IMUSample),
-            cudaMemcpyHostToDevice,
-            stream_
-        );
-    }
-
     int h_ground_count   = 0;
     int h_obstacle_count = 0;
 
-    launchGroundFilterWithDeskew(
-        stream_,
-        d_timed_in_,
-        d_ground_,
-        d_obstacle_,
-        d_transform_,
-        num_points,
-        stride,
-        deskew_params,
-        d_imu_samples_,
-        num_samples,
-        filter_params.range_max,
-        filter_params.robot_radius,
-        filter_params.robot_height_min,
-        filter_params.robot_height_max,
-        filter_params.ground_z_thresh,
-        d_ground_count_,
-        d_obstacle_count_,
-        &h_ground_count,
-        &h_obstacle_count
-    );
+    if (num_points > 0) {
+        std::memcpy(h_timed_in_, timed_points.data(), num_points * sizeof(TimedScanPoint));
+        cudaMemcpyAsync(
+            d_timed_in_,
+            h_timed_in_,
+            num_points * sizeof(TimedScanPoint),
+            cudaMemcpyHostToDevice,
+            stream_
+        );
+        cudaMemcpyAsync(
+            d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_
+        );
 
-    cudaStreamSynchronize(stream_);
+        const size_t total_samples = imu_samples.size();
+        const int num_samples =
+            static_cast<int>(std::min(total_samples, static_cast<size_t>(kMaxImuSamples)));
+        const size_t start_offset = total_samples - static_cast<size_t>(num_samples);
+        if (num_samples > 0) {
+            cudaMemcpyAsync(
+                d_imu_samples_,
+                imu_samples.data() + start_offset,
+                num_samples * sizeof(IMUSample),
+                cudaMemcpyHostToDevice,
+                stream_
+            );
+        }
+
+        launchGroundFilterWithDeskew(
+            stream_,
+            d_timed_in_,
+            d_ground_,
+            d_obstacle_,
+            d_transform_,
+            num_points,
+            stride,
+            deskew_params,
+            d_imu_samples_,
+            num_samples,
+            filter_params.range_max,
+            filter_params.robot_radius,
+            filter_params.robot_height_min,
+            filter_params.robot_height_max,
+            filter_params.ground_z_thresh,
+            d_ground_count_,
+            d_obstacle_count_,
+            &h_ground_count,
+            &h_obstacle_count
+        );
+
+        cudaStreamSynchronize(stream_);
+    }
     auto t_gf_end = std::chrono::high_resolution_clock::now();
     last_metrics_.time_ground_filter_ms =
         std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();
@@ -623,40 +646,47 @@ int PoseSolver::prepareObstacleCloud(
     obstacle_count_   = 0;
     num_3d_obstacles_ = 0;
     num_2d_obstacles_ = 0;
-    if (num_points == 0 || num_points > max_points_) {
+    const bool has_extra = (extra_base_link_points != nullptr && !extra_base_link_points->empty());
+    if (num_points > max_points_ || (num_points == 0 && !has_extra)) {
         return 0;
     }
 
     last_metrics_ = ProfileMetrics{};
     auto t_gf_start = std::chrono::high_resolution_clock::now();
 
-    std::memcpy(h_in_, h_raw_cloud.data(), num_points * 3 * sizeof(float));
-
-    cudaMemcpyAsync(d_in_, h_in_, num_points * 3 * sizeof(float), cudaMemcpyHostToDevice, stream_);
-    cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
-
     int h_ground_count   = 0;
     int h_obstacle_count = 0;
 
-    launchGroundFilter(
-        stream_,
-        d_in_,
-        d_ground_,
-        d_obstacle_,
-        d_transform_,
-        num_points,
-        filter_params.range_max,
-        filter_params.robot_radius,
-        filter_params.robot_height_min,
-        filter_params.robot_height_max,
-        filter_params.ground_z_thresh,
-        d_ground_count_,
-        d_obstacle_count_,
-        &h_ground_count,
-        &h_obstacle_count
-    );
+    if (num_points > 0) {
+        std::memcpy(h_in_, h_raw_cloud.data(), num_points * 3 * sizeof(float));
 
-    cudaStreamSynchronize(stream_);
+        cudaMemcpyAsync(
+            d_in_, h_in_, num_points * 3 * sizeof(float), cudaMemcpyHostToDevice, stream_
+        );
+        cudaMemcpyAsync(
+            d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_
+        );
+
+        launchGroundFilter(
+            stream_,
+            d_in_,
+            d_ground_,
+            d_obstacle_,
+            d_transform_,
+            num_points,
+            filter_params.range_max,
+            filter_params.robot_radius,
+            filter_params.robot_height_min,
+            filter_params.robot_height_max,
+            filter_params.ground_z_thresh,
+            d_ground_count_,
+            d_obstacle_count_,
+            &h_ground_count,
+            &h_obstacle_count
+        );
+
+        cudaStreamSynchronize(stream_);
+    }
     auto t_gf_end = std::chrono::high_resolution_clock::now();
     last_metrics_.time_ground_filter_ms =
         std::chrono::duration<double, std::milli>(t_gf_end - t_gf_start).count();

@@ -46,8 +46,8 @@ public:
     }
 
     /**
-     * @brief IMUサンプル列を取得する
-     * @param out_samples サンプルの出力先
+     * @brief Exports the buffered IMU samples for GPU deskew upload.
+     * @param out_samples Output vector of IMUSample entries
      */
     void get_imu_samples(std::vector<IMUSample>& out_samples) const
     {
@@ -63,10 +63,10 @@ public:
     }
 
     /**
-     * @brief 指定時刻における積分角度を取得する
-     * @param target_stamp_ns 対象時刻[ns]
-     * @param out_angle 算出された角度[rad]
-     * @return 取得に成功したかどうか
+     * @brief Queries the integrated yaw angle at the specified timestamp.
+     * @param target_stamp_ns Target timestamp [ns]
+     * @param out_angle Output integrated yaw angle [rad]
+     * @return true if target_stamp_ns is within the valid interpolation/extrapolation window
      */
     bool get_angle_at(int64_t target_stamp_ns, double& out_angle) const
     {
@@ -145,8 +145,8 @@ public:
     }
 
     /**
-     * @brief 蓄積された生点群を取得する
-     * @return 蓄積点群への参照
+     * @brief Returns the accumulated raw timed point cloud.
+     * @return Const reference to the accumulated TimedScanPoint vector
      */
     const std::vector<TimedScanPoint>& points() const
     {
@@ -154,10 +154,10 @@ public:
     }
 
     /**
-     * @brief IMUカバレッジ状態を確認する
-     * @param reference 基準時刻[ns]
-     * @param imu IMU履歴
-     * @return 最古点までIMUでカバーされているかどうか
+     * @brief Checks whether the IMU history covers all accumulated points back to the oldest point.
+     * @param reference Reference timestamp [ns]
+     * @param imu Integrated IMU yaw history
+     * @return true if the oldest point and reference timestamp are both covered by IMU history
      */
     bool is_fully_covered(int64_t reference, const YawHistory& imu) const
     {
@@ -169,8 +169,8 @@ public:
     }
 
     /**
-     * @brief 最新スキャンの開始時刻を取得する
-     * @return 最新スキャンの開始時刻[ns]
+     * @brief Returns the start timestamp of the newest appended scan.
+     * @return Start timestamp of the newest scan [ns]
      */
     int64_t newest_start_stamp() const
     {

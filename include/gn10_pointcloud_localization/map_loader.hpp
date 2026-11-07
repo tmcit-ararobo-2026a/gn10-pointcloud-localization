@@ -12,12 +12,12 @@
 class MapLoader
 {
 public:
-    // JSONファイルからマップを読み込み
+    // Load analytic field objects from a JSON file
     static std::vector<FieldObject> loadFromJSON(const std::string& file_path);
 
-    // ROS2パラメータ(文字列リスト)からマップを読み込み
+    // Load analytic field objects from ROS 2 parameter string array
     static std::vector<FieldObject> loadFromParams(const std::vector<std::string>& param_strings);
 
-    // ハードコードされた標準NHK2026フィールドマップ（フォールバック用）
+    // Hardcoded standard NHK 2026 field map (fallback when no external map is provided)
     static std::vector<FieldObject> createNHK2026FieldMap();
 };
