@@ -220,7 +220,8 @@ QoS に `transient_local` を採用しているため、ノード起動後に RV
 | `velocity_estimation.max_dt_sec` | `0.50` | 速度外挿を許容する最大経過時間 [s]。 |
 | `velocity_estimation.max_linear_velocity` | `4.0` | 推定並進速度の上限クランプ値 [m/s]。 |
 | `lidar_2d.enable` | `true` | Lakibeam 1 2D 平面 LiDAR 統合の有効化。 |
-| `lidar_2d.deskew` | `true` | IMU 積分による 2D レーザースキャンの回転歪み補正。 |
+| `lidar_2d.deskew` | `true` | IMU 積分による回転歪み補正、ロボット並進速度 ($v_{\text{local}}$) による並進歪み補正、および 3D LiDAR 蓄積窓基準時刻との時間同期補正。 |
+| `lidar_2d.time_offset_sec` | `0.0` | 2D LiDAR タイムスタンプに加算するハードウェア/通信遅延オフセット [s]。 |
 | `lidar_2d.topic` | `/lakibeam/scan` | 入力 LaserScan トピック名。 |
 | `lidar_2d.frame_id` | `lakibeam_frame` | 2D LiDAR のフォールバック TF フレーム名。 |
 | `lidar_2d.tf_wait_sec` | `0.05` | 2D LiDAR の TF 変換待機タイムアウト [s]。 |
