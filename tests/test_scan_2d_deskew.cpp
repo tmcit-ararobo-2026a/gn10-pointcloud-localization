@@ -294,16 +294,15 @@ void testTimeOffsetAndAlignment()
     assert(std::abs(rot_aligned[1] - exp_y) < 1e-4f);
     std::cout << "  [AlignPoints] Rotational alignment correctly rotated coordinates." << std::endl;
 
-    // 3. 異常な time_increment (ドライバ初回スキャン未初期化等による巨大値) のクランプ保護テスト
+    // 3. 異常な time_increment (ドライバ初回スキャン未初期化等による巨大値) の無視保護テスト
     sensor_msgs::msg::LaserScan corrupted_scan = scan;
     corrupted_scan.time_increment = 1000.0f; // 1000秒/ビームの異常値
     config.time_offset_sec = 0.0;
     int64_t corrupted_ref_ns = 0;
     deskewLaserScan(corrupted_scan, 0.0, 0.0, 0.0, 0.0, imu, config, corrupted_ref_ns);
-    // 1/30秒 (約33.3ms) にフォールバックされること
-    int64_t expected_fallback_ns = base_ns + static_cast<int64_t>(std::round((1.0 / 30.0) * 1e9));
-    assert(std::abs(corrupted_ref_ns - expected_fallback_ns) < 1000LL);
-    std::cout << "  [TimeIncrementClamp] Corrupted time_increment safely clamped to 1/30s scan duration." << std::endl;
+    // 1秒を超える非現実的なスキャン時間は time_inc = 0 として安全に無視され start_stamp_ns になること
+    assert(corrupted_ref_ns == base_ns);
+    std::cout << "  [TimeIncrementGuard] Corrupted time_increment safely ignored without fake frequency assumptions." << std::endl;
 
     std::cout << "[Test] testTimeOffsetAndAlignment PASSED!" << std::endl;
 }

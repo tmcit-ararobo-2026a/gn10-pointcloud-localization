@@ -188,7 +188,10 @@ if(BUILD_TESTING)
   target_compile_options(scan_2d_deskew_test PRIVATE -UNDEBUG)
   add_test(NAME scan_2d_deskew COMMAND scan_2d_deskew_test)
 
-  add_executable(independent_2d_cost_test tests/test_independent_2d_cost.cpp)
+  add_executable(independent_2d_cost_test
+    tests/test_independent_2d_cost.cpp
+    src/pose_solver.cpp
+  )
   target_include_directories(independent_2d_cost_test PRIVATE include)
   target_link_libraries(independent_2d_cost_test gn10_cuda_lib gn10_esdf_lib CUDA::cudart)
   ament_target_dependencies(independent_2d_cost_test rclcpp)

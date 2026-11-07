@@ -831,41 +831,6 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     }
     const bool window_ready        = scan_accumulator_.append(timed_points, reference_ns);
     const auto& accumulated_points = scan_accumulator_.points();
-    if ((!window_ready && accumulated_points.size() < 1000) || accumulated_points.size() < 150) {
-        PoseCandidate pred_to_pub{};
-        bool should_pub_pred = false;
-        {
-            std::lock_guard<std::mutex> lock(pose_mutex_);
-            if (!is_lost_ && last_match_stamp_.nanoseconds() > 0) {
-                const double dt =
-                    (reference_stamp.nanoseconds() - last_match_stamp_.nanoseconds()) * 1e-9;
-                if (dt > 0.0 && dt < 0.5) {
-                    pred_to_pub    = last_known_pose_;
-                    double rot_inc = 0.0;
-                    if (imu_initialized_ &&
-                        yaw_history_.delta(last_match_stamp_.nanoseconds(), reference_ns, rot_inc)) {
-                        pred_to_pub.yaw = normalizeAngle(pred_to_pub.yaw + static_cast<float>(rot_inc));
-                    }
-                    if (velocity_estimation_enable_ && has_velocity_ && dt < velocity_max_dt_sec_) {
-                        pred_to_pub.x += velocity_x_ * static_cast<float>(dt);
-                        pred_to_pub.y += velocity_y_ * static_cast<float>(dt);
-                    }
-                    should_pub_pred = true;
-                }
-            }
-        }
-        if (should_pub_pred) {
-            publishPoseAndTransform(reference_stamp, pred_to_pub, true);
-        }
-        publishLocalizationSuccess(false);
-        return;
-    }
-
-    std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
-    PoseCandidate best_pose;
-    float best_cost       = std::numeric_limits<float>::infinity();
-    bool matched          = false;
-    bool global_recovered = false;
 
     // 2D LiDAR (Lakibeam 1) の点群を取得
     std::vector<float> extra_2d_points;
@@ -881,6 +846,27 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             }
         }
     }
+
+    MatchingParams active_match_params;
+    GroundFilterParams active_filter_params;
+    {
+        std::lock_guard<std::mutex> lock(param_mutex_);
+        active_match_params  = match_params_;
+        active_filter_params = filter_params_;
+    }
+
+    const bool has_valid_2d =
+        (static_cast<int>(extra_2d_points.size() / 3) >= active_match_params.min_2d_points);
+    if ((!window_ready || accumulated_points.size() < 150) && !has_valid_2d) {
+        publishLocalizationSuccess(false);
+        return;
+    }
+
+    std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
+    PoseCandidate best_pose;
+    float best_cost       = std::numeric_limits<float>::infinity();
+    bool matched          = false;
+    bool global_recovered = false;
 
     // 速度予測モデル + IMU積分による探索中心 (search_base_pose) の計算
     PoseCandidate search_base_pose;
@@ -1002,13 +988,6 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     double time_deskew_ms =
         std::chrono::duration<double, std::milli>(t_deskew_end - t_cb_start).count();
 
-    MatchingParams active_match_params;
-    GroundFilterParams active_filter_params;
-    {
-        std::lock_guard<std::mutex> lock(param_mutex_);
-        active_match_params  = match_params_;
-        active_filter_params = filter_params_;
-    }
     const float abs_omega = std::abs(current_omega_z);
     if (dynamic_yaw_expansion_ && abs_omega > dynamic_yaw_omega_thresh_) {
         const float max_yaw_range = std::max(active_match_params.range_yaw, dynamic_yaw_max_range_);
@@ -1243,25 +1222,21 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         publishPoseAndTransform(reference_stamp, best_pose, false);
         tf_published = true;
     } else if (!is_lost_) {
-        // 単発のマッチング失敗時は、IMU積分と速度モデルによる予測姿勢 (search_base_pose) で TF
-        // を補間配信 これにより高速旋回中の一時的ドロップ時でも TF 途絶・跳ねを完全に防止する
-        publishPoseAndTransform(reference_stamp, search_base_pose, true);
-        tf_published = true;
-    } else {
-        // is_lost_ 時でも、IMUが健全かつ直前のマッチから短時間（0.5秒未満）であれば
-        // IMU予測姿勢でTFを継続配信し、TF途絶による下流のフリーズやタイムスタンプ不整合を防止する
+        int lost_cnt          = 0;
         int64_t last_match_ns = 0;
         {
             std::lock_guard<std::mutex> lock(pose_mutex_);
+            lost_cnt      = lost_frame_count_;
             last_match_ns = last_match_stamp_.nanoseconds();
         }
-        if (imu_initialized_ && last_match_ns > 0) {
-            const double time_since_last_match =
-                (reference_stamp.nanoseconds() - last_match_ns) * 1e-9;
-            if (time_since_last_match > 0.0 && time_since_last_match < 0.5) {
-                publishPoseAndTransform(reference_stamp, search_base_pose, true);
-                tf_published = true;
-            }
+        const double time_since_last_match =
+            (last_match_ns > 0) ? ((reference_stamp.nanoseconds() - last_match_ns) * 1e-9) : 1e9;
+        // 単発（最大2フレームかつ0.10秒以内）のマッチング失敗時のみ予測姿勢でTFを補間し、
+        // 連続失敗時やロスト時はTF配信を即座に停止して下流の緊急停止（pose_age超過）を作動させる
+        if (imu_initialized_ && lost_cnt <= 2 && time_since_last_match > 0.0 &&
+            time_since_last_match <= 0.10) {
+            publishPoseAndTransform(reference_stamp, search_base_pose, true);
+            tf_published = true;
         }
     }
     publishLocalizationSuccess(matched && !is_lost_);

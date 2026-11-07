@@ -242,6 +242,144 @@ void testESDFMatcherWeightedResidual()
     assert(accept_params.isMatchAccepted(0.175f, 0.120f, 500, 100, 200, 0.03f));
     // Case F: 3D is insufficient (< 50 pts) and 2D fails (> 0.080) -> Rejected
     assert(!accept_params.isMatchAccepted(0.0f, 0.120f, 10, 100, 0, 1.0f));
+    // Case G: 3D fails (> 0.185 and inliers low), 2D passes (< 0.080) -> Accepted via 2D fallback
+    assert(accept_params.isMatchAccepted(0.240f, 0.020f, 500, 100, 10, 0.07f));
+
+    // Test PoseSolver symmetric fallback: 3D-only when 2D fails, and 2D-only when 3D fails
+    PoseSolver solver(10000);
+    const float identity_tf[12] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f
+    };
+    GroundFilterParams gf_params;
+    gf_params.range_max = 10.0f;
+    gf_params.robot_radius = 0.0f;
+    gf_params.ground_z_thresh = 0.05f;
+
+    MatchingParams solver_params = accept_params;
+    solver_params.range_xy = 0.25f;
+    solver_params.step_xy = 0.05f;
+    solver_params.range_yaw = 0.05f;
+    solver_params.step_yaw = 0.05f;
+    solver_params.max_dist_thresh = 0.50f;
+    solver_params.useESDFBounds(header);
+
+    // Build a dummy ESDFMap wrapper not needed because uploadESDFMapToGPU was already called;
+    // enable ESDF mode on solver via an ESDFMap instance
+    ESDFMap dummy_map;
+    dummy_map.setHeader(header);
+    dummy_map.setData(std::vector<float>(grid));
+    solver.setESDFMap(dummy_map);
+
+    // 1) Good 3D (at x = 0.0m) + Spiked 2D (at x = 0.35m -> cost_2d > 0.08):
+    // Solver must reject 2D influence (w_2d = 0.0) and lock onto 3D wall at x = 0.0m
+    std::vector<float> spiked_2d;
+    for (int i = 0; i < num_2d; ++i) {
+        spiked_2d.push_back(0.35f);
+        spiked_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
+        spiked_2d.push_back(0.2f);
+    }
+    PoseCandidate solved_pose{};
+    float solved_cost = 0.0f;
+    int solved_inliers = 0;
+    float solved_inlier_cost = 0.0f;
+    bool ok_3d_fb = solver.processPointCloud(
+        cloud_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &spiked_2d,
+        false
+    );
+    assert(ok_3d_fb);
+    assert(solver.lastWeight2D() == 0.0f);
+    assert(std::abs(solved_pose.x - 0.0f) < 0.06f);
+    assert(solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
+
+    // 2) Bad 3D (at x = 0.80m -> cost_3d ~ 0.50) + Good 2D (at x = 0.0m -> cost_2d < 0.08):
+    // Solver must reject corrupted 3D influence (w_2d = 1.0) and lock onto 2D wall at x = 0.0m
+    std::vector<float> bad_3d;
+    for (int i = 0; i < num_3d; ++i) {
+        bad_3d.push_back(0.80f);
+        bad_3d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_3d));
+        bad_3d.push_back(0.5f);
+    }
+    std::vector<float> good_2d;
+    for (int i = 0; i < num_2d; ++i) {
+        good_2d.push_back(0.0f);
+        good_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
+        good_2d.push_back(0.2f);
+    }
+    bool ok_2d_fb = solver.processPointCloud(
+        bad_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &good_2d,
+        false
+    );
+    assert(ok_2d_fb);
+    assert(solver.lastWeight2D() == 1.0f);
+    assert(std::abs(solved_pose.x - 0.0f) < 0.06f);
+    assert(solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
+
+    // 3) Empty 3D (0 points) + Good 2D (at x = 0.0m):
+    // Solver must still prepare and match using 2D LiDAR alone
+    std::vector<float> empty_3d;
+    bool ok_2d_only = solver.processPointCloud(
+        empty_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &good_2d,
+        false
+    );
+    assert(ok_2d_only);
+    assert(solver.obstacleCount3D() == 0);
+    assert(solver.obstacleCount2D() == num_2d);
+    assert(solver.lastWeight2D() == 1.0f);
+    assert(std::abs(solved_pose.x - 0.0f) < 0.06f);
+    assert(solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
 
     cudaFree(d_cloud);
     cudaStreamDestroy(stream);

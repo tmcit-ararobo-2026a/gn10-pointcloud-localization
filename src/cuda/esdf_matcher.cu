@@ -263,7 +263,7 @@ __global__ void computeBestPoseMetricsESDFKernel(
         if (wx >= field_min_x && wx <= field_max_x && wy >= field_min_y && wy <= field_max_y) {
             float d = queryESDF(tex, c_esdf_header, wx, wy, wz);
             cost_i = fminf(d, max_dist_thresh);
-            if (d < inlier_dist_thresh) {
+            if (d < inlier_dist_thresh && (num_3d_points == 0 || i < num_3d_points)) {
                 s_count[tid] += 1;
                 s_dist[tid] += d;
             }

@@ -68,8 +68,8 @@ inline std::vector<float> deskewLaserScan(
     }
     if (num_ranges > 1 && time_inc > 0.0) {
         const double total_scan_duration = static_cast<double>(num_ranges - 1) * time_inc;
-        if (total_scan_duration < 0.005 || total_scan_duration > 0.10) {
-            time_inc = (1.0 / 30.0) / static_cast<double>(num_ranges - 1);
+        if (total_scan_duration > 1.0) {
+            time_inc = 0.0;
         }
     }
 
@@ -178,11 +178,10 @@ inline std::vector<float> alignPointsToTimestamp(
         return points;
     }
 
-    const double raw_dt_sec = static_cast<double>(target_stamp_ns - source_stamp_ns) * 1e-9;
-    if (std::abs(raw_dt_sec) < 1e-4 && vx_local == 0.0f && vy_local == 0.0f) {
+    const double dt_sec = static_cast<double>(target_stamp_ns - source_stamp_ns) * 1e-9;
+    if (std::abs(dt_sec) < 1e-4 && vx_local == 0.0f && vy_local == 0.0f) {
         return points;
     }
-    const double dt_sec = std::clamp(raw_dt_sec, -0.10, 0.10);
 
     double delta_yaw = 0.0;
     yaw_history.delta(source_stamp_ns, target_stamp_ns, delta_yaw);
