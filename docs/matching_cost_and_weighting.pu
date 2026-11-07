@@ -1,93 +1,70 @@
 @startuml matching_cost_and_weighting
-!theme plain
-skinparam defaultTextAlignment left
-skinparam ActivityBorderColor #0055BB
-skinparam ActivityBackgroundColor #F0F8FF
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName "Roboto, Noto Sans CJK JP, sans-serif"
+skinparam defaultFontSize 12
+skinparam roundCorner 8
+skinparam shadowing true
+skinparam ArrowColor #263238
+skinparam ArrowThickness 1.5
 
-title 3D & 2D LiDAR Independent Residual Matching Cost and Convergence Verification
-
-start
-
-:Receive 3D LiDAR obstacles (N_3D points)
-and 2D LiDAR obstacles (N_2D points);
-
-partition "1. Effective 2D Weight Determination" {
-  if (N_2D >= min_2d_points AND N_3D >= min_3d_points) then (Both Available)
-    :Calculate Field-of-View Ratio:
-    fov_scale = min(1.0, N_2D / target_2d_points);
-    :Scale Configured Weight:
-    w_2D = weight_2d_lidar * fov_scale;
-  elseif (N_2D >= min_2d_points AND N_3D < min_3d_points) then (3D Occluded / Degraded)
-    :Fallback Entirely to 2D LiDAR:
-    w_2D = 1.0;
-  else (2D Not Reliable / Sparse)
-    :Disable 2D Weight:
-    w_2D = 0.0;
-  endif
+skinparam rectangle {
+    BackgroundColor #FFFFFF
+    BorderColor #546E7A
+    BorderThickness 1.5
 }
 
-partition "2. GPU Parallel Matching Architecture" {
-  :Generate SearchGrid Directly on GPU:
-  rx, ry, ryaw computed inside kernel from blockIdx.x
-  (Zero CPU candidate vector allocation and zero H2D candidate transfer);
-
-  if (Coarse Search Phase) then (Coarse Search)
-    :Adaptive Point Cloud Decimation:
-    point_stride = max(1, N_3D / 1200);
-    :Evaluate ESDF with Point Stride & Normalized Denominator;
-  else (Fine Refinement Phase)
-    :Sub-voxel Hierarchical Search (Levels = 2):
-    point_stride = 1 (Full Point Evaluation);
-  endif
-
-  :Compute Normalized 3D Residual Cost:
-  C_3D = (1 / sampled_N_3D) * Σ min( ESDF( T * p_3D,i ), max_dist_thresh );
-
-  if (w_2D > 0.0) then (Evaluate 2D)
-    :Compute Normalized 2D Residual Cost:
-    C_2D = (1 / N_2D) * Σ min( ESDF( T * p_2D,j ), max_dist_thresh );
-  else (Skip 2D)
-    :C_2D = 0.0;
-  endif
-
-  :Synthesize Composite Cost:
-  C_total = (1.0 - w_2D) * C_3D + w_2D * C_2D;
+skinparam note {
+    BackgroundColor #FFF8E1
+    BorderColor #FFB300
+    FontColor #263238
 }
 
-partition "3. Inlier Verification & Strict Acceptance Check" {
-  :Count Inliers:
-  N_inlier = count of points with ESDF( T * p ) <= inlier_dist_thresh;
-  :Compute Average Inlier Cost:
-  C_inlier = (1 / N_inlier) * Σ ESDF( T * p );
-  :Compute Inlier Ratio:
-  R_inlier = N_inlier / N_total_obstacles;
+title **gn10-pointcloud-localization: Mathematical Cost Formulation & Anti-Oscillation 3D/2D Fallback**
 
-  if (C_total < cost_threshold) then (Accepted by Low Composite Cost)
-    :Mark Localization Succeeded;
-    :Update Position & Velocity EMA;
-    :Reset lost_frame_count = 0;
-  elseif (N_inlier >= min_inliers AND \n C_inlier < inlier_cost_thresh AND \n R_inlier >= min_inlier_ratio AND \n C_total < max_inlier_accept_cost) then (Accepted by Strict Inlier Criteria)
-    :Mark Localization Succeeded;
-    :Update Position & Velocity EMA;
-    :Reset lost_frame_count = 0;
-  else (Rejected)
-    :Increment lost_frame_count;
-    if (lost_frame_count >= lost_count_thresh) then (Lost Limit Exceeded)
-      :Trigger Top-K Global Recovery Search;
-      partition "Top-K Global Search (3D + 2D Integrated)" {
-        :Evaluate Full Field Coarse Grid (3D + 2D Composite Cost);
-        :Copy Coarse Cost Buffer to Host;
-        :Extract Top-K Candidates (K=4) via NMS;
-        :(Distance >= 1.0m OR Angle >= 0.5rad);
-        :Execute Local Fine Refinement on Each Candidate;
-        :Select Best Candidate Meeting Strict Acceptance Gate;
-      }
-    else (Transient Drop)
-      :Dead Reckoning with IMU & Velocity Extrapolation;
-    endif
-  endif
+package "1. Per-Point Robust Residual Evaluation (`evaluateESDFKernel`)" #E3F2FD {
+    rectangle "**Coordinate Transformation (`base_link` -> `map`)**\nFor candidate pose $P_k = (r_x, r_y, r_{\\text{yaw}})$:\n$w_x = \\cos(r_{\\text{yaw}}) l_x - \\sin(r_{\\text{yaw}}) l_y + r_x$\n$w_y = \\sin(r_{\\text{yaw}}) l_x + \\cos(r_{\\text{yaw}}) l_y + r_y$\n$w_z = l_z$" as TF_EQ
+
+    rectangle "**Hardware Trilinear ESDF Lookup (`tex3D`) & Outlier Clipping**\n$d_i = \\text{tex3D}(u, v, w)$\n$c_i = \\min(d_i,\\; d_{\\max})$ if $(w_x, w_y) \\in \\text{FieldBounds}$, else $d_{\\max}$\nwhere $d_{\\max} = \\text{max\\_dist\\_thresh} = 0.25\\text{ m}$" as CLIP_EQ
+
+    TF_EQ -down-> CLIP_EQ
 }
 
-stop
+package "2. Independent 3D & 2D Mean Residuals and Dynamic Weighting" #E8F5E9 {
+    rectangle "**3D LiDAR Mean Residual ($N_{3D}$ points, index $i < N_{3D}$)**\n$\\text{cost}_{3D}(P_k) = \\frac{1}{N_{3D}} \\sum_{i=0}^{N_{3D}-1} c_i$\n\n**3D Wall Inliers ($d_i < \\text{inlier\\_dist\\_thresh} = 0.08\\text{ m}$, strictly $i < N_{3D}$)**\n$N_{\\text{inlier}} = |\\{i < N_{3D} : d_i < 0.08\\text{ m}\\}|,\\quad \\text{cost}_{\\text{inlier}} = \\frac{1}{N_{\\text{inlier}}} \\sum_{d_i < 0.08} d_i$" as COST_3D
+
+    rectangle "**2D LiDAR Mean Residual ($N_{2D}$ points, index $i \\ge N_{3D}$)**\n$\\text{cost}_{2D}(P_k) = \\frac{1}{N_{2D}} \\sum_{i=N_{3D}}^{N_{3D}+N_{2D}-1} c_i$\n\n**FoV-Scaled 2D Weight (`computeEffectiveWeight2D`)**\n$s_{\\text{fov}} = \\min\\left(1.0,\\; \\frac{N_{2D}}{\\text{target\\_2d\\_points (200)}}\\right)$\n$w_{2D} = \\text{weight\\_2d\\_lidar (0.40)} \\times s_{\\text{fov}}$" as COST_2D
+
+    rectangle "**Composite Objective Function Minimized Across Candidate Grid**\n$\\text{cost}_{\\text{total}}(P_k) = (1 - w_{2D}) \\cdot \\text{cost}_{3D}(P_k) + w_{2D} \\cdot \\text{cost}_{2D}(P_k)$\n$P^* = \\arg\\min_{P_k} \\text{cost}_{\\text{total}}(P_k)$" as COMP_EQ
+
+    COST_3D -down-> COMP_EQ
+    COST_2D -down-> COMP_EQ
+}
+
+CLIP_EQ -down-> COST_3D
+CLIP_EQ -down-> COST_2D
+
+package "3. Oscillation-Free Bidirectional Fallback State Machine (`PoseSolver::matchObstacleCloud`)" #FFF3E0 {
+    rectangle "**Step A: Combined 3D + 2D Match ($w_{2D} = 0.40 \\cdot s_{\\text{fov}}$)**\nEvaluate $\\text{cost}_{3D}$, $\\text{cost}_{2D}$, $N_{\\text{inlier}}$, $\\text{cost}_{\\text{inlier}}$ at $P_{\\text{comb}}^*$" as STEP_A
+
+    rectangle "**Guard 1: Hysteresis Deadband on 2D Detachment**\nTrigger 3D-only retry **ONLY IF**:\n  `!pass_3d` (2D pulled 3D out of acceptance)\n  **OR** $\\text{cost}_{2D} \\ge 2.0 \\times \\text{cost\\_threshold\\_2d} = 0.16\\text{ m}$ (Severe 2D spike)\n*(Deadband $[0.08, 0.16)\\text{ m}$ when `pass_3d == true` prevents weight chattering!)*" as GUARD_1
+
+    rectangle "**Step B: 3D-Only Fallback ($w_{2D} = 0.0$)**\nRe-run local search using **only 3D LiDAR points** over full search window\n($\\pm 0.30\\text{ m}, \\pm 0.15\\text{ rad}$) -> $P_{3D}^*$" as STEP_B
+
+    rectangle "**Guard 2: Tight Continuity Window for 2D-Only Fallback**\nIf 3D-only also fails (`!pass_3d`) while $N_{3D} \\ge 50$:\nRun **2D-Only ($w_{2D} = 1.0$)** restricted to a **tight local neighborhood**\naround `search_base_pose`: $\\pm 2 \\cdot \\text{step}_{xy} = \\pm 0.10\\text{ m},\\; \\pm 2 \\cdot \\text{step}_{\\text{yaw}} = \\pm 0.06\\text{ rad}$.\n*(Prevents 2D-only from jumping to distant false walls & oscillating with 3D!)*" as STEP_C
+
+    STEP_A -down-> GUARD_1
+    GUARD_1 -down-> STEP_B : Triggered
+    STEP_B -down-> STEP_C : If `!pass_3d`
+}
+
+COMP_EQ -down-> STEP_A
+
+package "4. Final Match Acceptance (`MatchingParams::isMatchAccepted`)" #FCE4EC {
+    rectangle "**Accepted (`true`) iff `pass_3d || pass_2d`**:\n* **`pass_3d`** ($N_{3D} \\ge 50$): $\\text{cost}_{3D} < 0.22\\text{ m}$ **OR** ($N_{\\text{inlier}} \\ge 400 \\land \\text{cost}_{\\text{inlier}} < 0.035\\text{ m} \\land \\frac{N_{\\text{inlier}}}{N_{3D}} \\ge 0.28 \\land \\text{cost}_{3D} < 0.22\\text{ m}$)\n* **`pass_2d`** ($N_{2D} \\ge 30$): $\\text{cost}_{2D} < 0.08\\text{ m}$" as FINAL_ACCEPT
+}
+
+STEP_A -down-> FINAL_ACCEPT : Normal (`pass_3d` & no 2D spike)
+STEP_B -down-> FINAL_ACCEPT : 3D-Only Passed
+STEP_C -down-> FINAL_ACCEPT : 2D-Only Evaluated
 
 @enduml

@@ -9,14 +9,14 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 def generate_launch_description():
-    # パッケージの share ディレクトリを取得
+    # Resolve package share directory
     pkg_dir = get_package_share_directory('gn10_pointcloud_localization')
     
-    # デフォルトのパラメータファイルパス
+    # Default parameter file paths
     common_param_file = os.path.join(pkg_dir, 'config', 'common_params.yaml')
     default_param_file = os.path.join(pkg_dir, 'config', 'blue_params.yaml')
 
-    # Launch 引数の定義
+    # Launch argument declarations
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
@@ -29,7 +29,7 @@ def generate_launch_description():
         description='Full path to the ROS2 parameters file to use'
     )
 
-    # ノードの設定
+    # Localization node configuration
     localization_node = Node(
         package='gn10_pointcloud_localization',
         executable='gn10_pointcloud_localization_node',
@@ -40,7 +40,7 @@ def generate_launch_description():
             LaunchConfiguration('localization_params_file'),
             {'use_sim_time': LaunchConfiguration('use_sim_time')}
         ],
-        # 必要に応じてトピックのリマップを追加
+        # Add topic remappings here if needed
         # remapping=[
         #     ('/livox/lidar', '/custom/lidar'),
         # ]

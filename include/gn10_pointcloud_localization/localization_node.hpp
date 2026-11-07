@@ -41,7 +41,7 @@ public:
     ~LocalizationNode() override = default;
 
 private:
-    // 初期化ヘルパー
+    // Initialization helpers
     void declareAndGetParameters();
     void setupMapData();
     void configureESDFBounds();
@@ -57,7 +57,7 @@ private:
     void scan2dCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
     void fusedPriorCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
 
-    // パイプライン分離ヘルパー関数
+    // Pipeline stage helper functions
     bool getTransformAsArray(
         const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
     );
@@ -83,7 +83,7 @@ private:
     void publishFieldMapMarkers();
 
     /**
-     * @brief 読み込み済みの ESDF マップを RViz2 表示用 PointCloud2 としてパブリッシュする
+     * @brief Publishes the loaded 3D ESDF map as a PointCloud2 topic for RViz2 visualization.
      */
     void publishESDFMap();
 

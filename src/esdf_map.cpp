@@ -77,7 +77,7 @@ bool ESDFMap::buildFromPoints(
         float z = points_xyz[i * 3 + 2];
         if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
 
-        // 床面フィルタ: ground_z_thresh 以下の点は床とみなして障害物から除外
+        // Floor filter: exclude points at or below ground_z_thresh from the obstacle cloud
         if (std::isfinite(ground_z_thresh) && z <= ground_z_thresh) {
             filtered_ground_pts++;
             continue;
@@ -117,7 +117,7 @@ bool ESDFMap::buildFromPoints(
         min_z = crop_bounds.min_z;
         max_z = crop_bounds.max_z;
     } else {
-        // マージン付与 (max_dist 分外側まで拡張)
+        // Expand bounding box outward by max_dist margin
         min_x -= max_dist;
         max_x += max_dist;
         min_y -= max_dist;
@@ -142,11 +142,11 @@ bool ESDFMap::buildFromPoints(
     size_t total_voxels = static_cast<size_t>(nx) * ny * nz;
     grid_.assign(total_voxels, max_dist);
 
-    // 高速化: PCL KdTreeFLANN を利用して点群から各ボクセルへの最近傍探索を行う
+    // Accelerate nearest-neighbor distance queries from voxel centers using PCL KdTreeFLANN
     pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
     kdtree.setInputCloud(cloud);
 
-// OpenMP 並列化で各スライス (Z) を並行処理
+// Parallelize across Z slices using OpenMP
 #pragma omp parallel for schedule(dynamic)
     for (int z = 0; z < nz; ++z) {
         float wz = min_z + (z + 0.5f) * resolution;
@@ -159,7 +159,7 @@ bool ESDFMap::buildFromPoints(
                 float wx = min_x + (x + 0.5f) * resolution;
                 pcl::PointXYZ searchPoint(wx, wy, wz);
 
-                // 半径 max_dist 以内の最近傍探索
+                // Query nearest neighbor within radius max_dist
                 if (kdtree.radiusSearch(
                         searchPoint, max_dist, pointIdxNKNSearch, pointNKNSquaredDistance, 1
                     ) > 0) {
@@ -200,7 +200,7 @@ bool ESDFMap::buildFromPCD(
     return buildFromPoints(pts, resolution, max_dist, crop_bounds, ground_z_thresh);
 }
 
-// 3D BOX (直方体) 表面までの最短距離計算
+// Shortest Euclidean distance to a 3D axis-aligned box surface
 static inline float distToBoxSurface3D_Host(
     float px,
     float py,
@@ -230,7 +230,7 @@ static inline float distToBoxSurface3D_Host(
     return std::fabs(outside_dist + inside_dist);
 }
 
-// 3D CYLINDER (高さ制限あり円柱) 表面までの最短距離計算
+// Shortest Euclidean distance to a finite-height 3D cylinder surface
 static inline float distToCylinder3D_Host(
     float px, float py, float pz, float cx, float cy, float cz_min, float cz_max, float radius
 )
@@ -295,7 +295,7 @@ bool ESDFMap::buildFromFieldObjects(
                 for (const auto& obj : objects) {
                     if (obj.type == VISUAL_BOX) continue;
 
-                    // AABB（軸並行バウンディングボックス）拡張範囲による事前フィルタリング
+                    // Pre-filter using axis-aligned bounding box (AABB) expanded by max_dist
                     float bound_x = (obj.type == BOX) ? obj.param1 : obj.param1;
                     float bound_y = (obj.type == BOX) ? obj.param2 : obj.param1;
 
@@ -385,13 +385,14 @@ float ESDFMap::getDistance(float wx, float wy, float wz) const
 }
 
 /**
- * @brief 可視化用のボクセル点群を抽出する
+ * @brief Extracts voxel center points from the 3D ESDF for visualization.
  *
- * 指定された最大距離閾値未満のボクセルをワールド座標系における点群として抽出します。
+ * Extracts voxels whose distance is strictly less than the specified threshold as world-frame
+ * points.
  *
- * @param max_distance_m 抽出する最大距離[m] (負値の場合は header_.max_dist_thresh 未満)
- * @param stride ボクセルの間引きステップ (1以上の整数)
- * @return std::vector<ESDFMap::ESDFVoxelPoint> 抽出されたボクセル点群
+ * @param max_distance_m Maximum distance threshold [m] (if negative, uses header_.max_dist_thresh)
+ * @param stride Voxel subsampling stride (integer >= 1)
+ * @return std::vector<ESDFMap::ESDFVoxelPoint> Extracted voxel points
  */
 std::vector<ESDFMap::ESDFVoxelPoint> ESDFMap::extractVoxelPoints(
     float max_distance_m, int stride
@@ -402,13 +403,13 @@ std::vector<ESDFMap::ESDFVoxelPoint> ESDFMap::extractVoxelPoints(
         return voxel_points;
     }
 
-    // 間引きステップの正規化
+    // Clamp subsampling stride to at least 1
     int effective_stride = stride;
     if (effective_stride < 1) {
         effective_stride = 1;
     }
 
-    // 抽出距離しきい値の決定
+    // Determine effective distance threshold
     float distance_threshold_m = header_.max_dist_thresh;
     if (max_distance_m >= 0.0f && max_distance_m < header_.max_dist_thresh) {
         distance_threshold_m = max_distance_m;
@@ -422,7 +423,7 @@ std::vector<ESDFMap::ESDFVoxelPoint> ESDFMap::extractVoxelPoints(
     const float min_y_m      = header_.min_y;
     const float min_z_m      = header_.min_z;
 
-    // ボクセル配列を走査してしきい値内の点群を抽出
+    // Traverse the 3D voxel array and collect points within the distance threshold
     for (int z_index = 0; z_index < size_z; z_index += effective_stride) {
         const float world_z_m = min_z_m + (static_cast<float>(z_index) + 0.5f) * resolution_m;
         const size_t z_offset = static_cast<size_t>(z_index) * size_x * size_y;
@@ -435,7 +436,7 @@ std::vector<ESDFMap::ESDFVoxelPoint> ESDFMap::extractVoxelPoints(
                 const size_t voxel_index = static_cast<size_t>(x_index) + y_offset + z_offset;
                 const float distance_m   = grid_[voxel_index];
 
-                // 未観測・クリップ上限（何もない空間）を除外し、障害物表面近傍のみ抽出
+                // Exclude clipped free-space voxels and retain only voxels near obstacle surfaces
                 if (distance_m < distance_threshold_m && distance_m >= 0.0f) {
                     const float world_x_m =
                         min_x_m + (static_cast<float>(x_index) + 0.5f) * resolution_m;

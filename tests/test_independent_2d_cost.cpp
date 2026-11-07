@@ -381,6 +381,104 @@ void testESDFMatcherWeightedResidual()
         solved_inlier_cost
     ));
 
+    // 4) Anti-oscillation Guard 1 (Hysteresis deadband near cost_threshold_2d):
+    // When 3D is valid (pass_3d == true) and 2D has a mild offset (x = 0.09m, between
+    // cost_threshold_2d = 0.08m and 2.0 * cost_threshold_2d = 0.16m), the solver must NOT
+    // abruptly drop 2D weight to 0.0, preventing chattering at the 0.08m boundary.
+    std::vector<float> mild_offset_2d;
+    for (int i = 0; i < num_2d; ++i) {
+        mild_offset_2d.push_back(0.09f);
+        mild_offset_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
+        mild_offset_2d.push_back(0.2f);
+    }
+    bool ok_deadband = solver.processPointCloud(
+        cloud_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &mild_offset_2d,
+        false
+    );
+    assert(ok_deadband);
+    assert(solver.lastWeight2D() > 0.0f);
+    assert(std::abs(solved_pose.x) < 0.06f);
+
+    // 5) Anti-oscillation Guard 2 (Tight local continuity window on 2D-only fallback):
+    // 5a) When 3D has points (num_3d = 200 >= 50) but fails, and 2D is within the tight
+    //     continuity window (x = 0.08m <= 2 * step_xy = 0.10m), 2D-only fallback succeeds smoothly.
+    std::vector<float> near_2d;
+    for (int i = 0; i < num_2d; ++i) {
+        near_2d.push_back(0.08f);
+        near_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
+        near_2d.push_back(0.2f);
+    }
+    bool ok_near_2d = solver.processPointCloud(
+        bad_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &near_2d,
+        false
+    );
+    assert(ok_near_2d);
+    assert(solver.lastWeight2D() == 1.0f);
+    assert(std::abs(solved_pose.x - (-0.08f)) < 0.06f);
+    assert(solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
+
+    // 5b) When 3D has points (num_3d = 200 >= 50) but fails, and 2D has a distant false wall
+    //     at x = 0.25m (outside 2 * step_xy = 0.10m from base_pose = 0.0m), the 2D-only fallback
+    //     window is clamped to +/- 0.10m so it cannot reach x = -0.25m and is safely rejected.
+    std::vector<float> distant_2d;
+    for (int i = 0; i < num_2d; ++i) {
+        distant_2d.push_back(0.25f);
+        distant_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
+        distant_2d.push_back(0.2f);
+    }
+    bool ok_anti_jump = solver.processPointCloud(
+        bad_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &distant_2d,
+        false
+    );
+    assert(ok_anti_jump);
+    assert(solver.lastWeight2D() == 0.0f);
+    assert(solver.lastCost2D() >= solver_params.cost_threshold_2d);
+    assert(!solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
+
     cudaFree(d_cloud);
     cudaStreamDestroy(stream);
     freeESDFMapFromGPU();

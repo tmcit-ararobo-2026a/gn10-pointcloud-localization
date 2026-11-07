@@ -220,6 +220,8 @@ bool PoseSolver::matchObstacleCloud(
                                    int active_3d_count,
                                    int active_2d_count,
                                    float weight_2d,
+                                   float search_range_xy,
+                                   float search_range_yaw,
                                    float* out_c3d,
                                    float* out_c2d) -> bool {
             out_dynamic_pts.clear();
@@ -250,10 +252,10 @@ bool PoseSolver::matchObstacleCloud(
                     d_obs_ptr,
                     active_total_count,
                     search_base_pose,
-                    match_params.range_xy,
-                    match_params.range_xy,
+                    search_range_xy,
+                    search_range_xy,
                     match_params.step_xy,
-                    match_params.range_yaw,
+                    search_range_yaw,
                     match_params.step_yaw,
                     match_params.max_dist_thresh,
                     match_params.dynamic_dist_thresh,
@@ -282,10 +284,10 @@ bool PoseSolver::matchObstacleCloud(
                     d_obs_ptr,
                     active_total_count,
                     search_base_pose,
-                    match_params.range_xy,
-                    match_params.range_xy,
+                    search_range_xy,
+                    search_range_xy,
                     match_params.step_xy,
-                    match_params.range_yaw,
+                    search_range_yaw,
                     match_params.step_yaw,
                     match_params.max_dist_thresh,
                     match_params.dynamic_dist_thresh,
@@ -393,13 +395,6 @@ bool PoseSolver::matchObstacleCloud(
             return (c3d < match_params.cost_threshold_3d) || inlier_ok;
         };
 
-        auto is_2d_passed = [&](float c2d) -> bool {
-            if (num_2d_obstacles_ < match_params.min_2d_points) {
-                return false;
-            }
-            return c2d < match_params.cost_threshold_2d;
-        };
-
         if (num_3d_obstacles_ >= match_params.min_3d_points) {
             pose_matched = run_local_match(
                 d_obstacle_,
@@ -407,6 +402,8 @@ bool PoseSolver::matchObstacleCloud(
                 num_3d_obstacles_,
                 num_2d_obstacles_,
                 effective_weight_2d,
+                match_params.range_xy,
+                match_params.range_yaw,
                 &last_cost_3d_,
                 &last_cost_2d_
             );
@@ -414,11 +411,16 @@ bool PoseSolver::matchObstacleCloud(
             if (use_esdf_ && pose_matched && effective_weight_2d > 0.0f &&
                 num_2d_obstacles_ >= match_params.min_2d_points) {
                 bool pass_3d = is_3d_passed(last_cost_3d_, local_inliers, local_inlier_cost);
-                const bool pass_2d = is_2d_passed(last_cost_2d_);
+                // Anti-oscillation deadband (Guard 1):
+                // When the combined match already satisfies 3D acceptance (pass_3d == true),
+                // do not detach 2D at the normal acceptance threshold (cost_threshold_2d).
+                // Only detach 2D and re-run 3D-only if 3D acceptance failed (!pass_3d) OR
+                // if 2D cost exhibits a severe anomaly (>= 2.0 * cost_threshold_2d).
+                // This prevents frame-to-frame weight chattering near cost_threshold_2d.
+                const bool severe_2d_anomaly =
+                    (last_cost_2d_ >= 2.0f * match_params.cost_threshold_2d);
 
-                if (!pass_2d) {
-                    // 2D LiDAR failed its threshold: re-run with 3D LiDAR only so corrupted
-                    // 2D scans or unmapped 2D obstacles cannot pull the 3D pose off-course.
+                if (!pass_3d || severe_2d_anomaly) {
                     last_weight_2d_ = 0.0f;
                     pose_matched = run_local_match(
                         d_obstacle_,
@@ -426,6 +428,8 @@ bool PoseSolver::matchObstacleCloud(
                         num_3d_obstacles_,
                         0,
                         0.0f,
+                        match_params.range_xy,
+                        match_params.range_yaw,
                         &last_cost_3d_,
                         nullptr
                     );
@@ -434,22 +438,50 @@ bool PoseSolver::matchObstacleCloud(
                 }
 
                 if (!pass_3d) {
-                    // 3D LiDAR failed its threshold: re-run with 2D LiDAR only so occluded
-                    // or degraded 3D scans cannot pull the valid 2D pose off-course.
+                    // Anti-jump continuity window (Guard 2):
+                    // When 3D LiDAR has points (num_3d_obstacles_ >= min_3d_points) but fails
+                    // acceptance, restrict the 2D-only fallback search around search_base_pose
+                    // to at most 2 * step_xy and 2 * step_yaw. This maintains local tracking
+                    // continuity while preventing 2D-only from jumping to a distant wall and
+                    // oscillating against 3D on subsequent frames.
+                    const PoseCandidate saved_3d_pose = out_best_pose;
+                    const float saved_3d_cost = out_best_cost;
+                    const int saved_3d_inliers = local_inliers;
+                    const float saved_3d_inlier_cost = local_inlier_cost;
+                    const std::vector<float> saved_3d_dynamic = out_dynamic_pts;
+
+                    const float fallback_range_xy =
+                        std::min(match_params.range_xy, 2.0f * match_params.step_xy);
+                    const float fallback_range_yaw =
+                        std::min(match_params.range_yaw, 2.0f * match_params.step_yaw);
+
                     last_weight_2d_ = 1.0f;
-                    pose_matched = run_local_match(
+                    const bool matched_2d_only = run_local_match(
                         d_obstacle_ + num_3d_obstacles_ * 3,
                         num_2d_obstacles_,
                         0,
                         num_2d_obstacles_,
                         1.0f,
+                        fallback_range_xy,
+                        fallback_range_yaw,
                         nullptr,
                         &last_cost_2d_
                     );
+                    if (!matched_2d_only || last_cost_2d_ >= match_params.cost_threshold_2d) {
+                        // Neither 3D nor tight 2D fallback passed; restore 3D-only state
+                        out_best_pose = saved_3d_pose;
+                        out_best_cost = saved_3d_cost;
+                        local_inliers = saved_3d_inliers;
+                        local_inlier_cost = saved_3d_inlier_cost;
+                        out_dynamic_pts = saved_3d_dynamic;
+                        last_weight_2d_ = 0.0f;
+                    } else {
+                        pose_matched = true;
+                    }
                 }
             }
         } else {
-            // Only 2D LiDAR has sufficient obstacle points
+            // Only 2D LiDAR has sufficient obstacle points (< min_3d_points)
             last_cost_3d_ = match_params.max_dist_thresh;
             last_weight_2d_ = 1.0f;
             pose_matched = run_local_match(
@@ -458,6 +490,8 @@ bool PoseSolver::matchObstacleCloud(
                 0,
                 num_2d_obstacles_,
                 1.0f,
+                match_params.range_xy,
+                match_params.range_yaw,
                 nullptr,
                 &last_cost_2d_
             );

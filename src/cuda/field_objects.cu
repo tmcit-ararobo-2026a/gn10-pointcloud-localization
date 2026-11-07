@@ -96,7 +96,7 @@ __global__ void evaluateFieldSDFKernel(
         float ly = cloud[i * 3 + 1];
         float lz = cloud[i * 3 + 2];
 
-        // map 座標系へ変換
+        // Transform point from base_link to map frame
         float wx = cos_y * lx - sin_y * ly + rx;
         float wy = sin_y * lx + cos_y * ly + ry;
         float wz = lz;
@@ -172,12 +172,12 @@ __global__ void filterDynamicPointsKernel(
     float ly = cloud[i * 3 + 1];
     float lz = cloud[i * 3 + 2];
 
-    // map 座標系へ変換
+    // Transform point from base_link to map frame
     float wx = cos_y * lx - sin_y * ly + rx;
     float wy = sin_y * lx + cos_y * ly + ry;
     float wz = lz;
 
-    // フィールド境界外の点は動的障害物としても扱わない
+    // Points outside the field boundaries are not treated as dynamic obstacles
     if (wx < field_min_x || wx > field_max_x || wy < field_min_y || wy > field_max_y) {
         out_is_dynamic[i] = 0;
         return;
@@ -403,7 +403,7 @@ bool launchFieldSDFMatcher(
     out_best_cost = h_argmin.value;
     out_best_pose = grid.indexToPose(best_idx);
 
-    // Inlier メトリクスの計算（要求されている場合）
+    // Compute inlier metrics (when requested)
     if (out_inlier_count || out_inlier_cost) {
         cudaMemsetAsync(d_inlier_count, 0, sizeof(int), stream);
         cudaMemsetAsync(d_inlier_dist_sum, 0, sizeof(float), stream);
@@ -435,7 +435,7 @@ bool launchFieldSDFMatcher(
             *out_inlier_cost = (h_count > 0) ? (h_dist_sum / static_cast<float>(h_count)) : 1.0f;
     }
 
-    // 動的点群のフィルタリング(GPU)
+    // Filter dynamic obstacle points on GPU
     out_dynamic_pts.clear();
 
     if (extract_dynamic) {

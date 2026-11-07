@@ -7,7 +7,7 @@
 #include <cstdint>
 
 /**
- * @brief タイムスタンプ付き点構造体
+ * @brief Point structure with per-point nanosecond timestamp for deskewing.
  */
 struct TimedScanPoint {
     float x;
@@ -17,7 +17,7 @@ struct TimedScanPoint {
 };
 
 /**
- * @brief IMUの角度積分サンプル構造体
+ * @brief Integrated IMU yaw sample structure for GPU binary-search interpolation.
  */
 struct IMUSample {
     int64_t stamp_ns;
@@ -26,7 +26,7 @@ struct IMUSample {
 };
 
 /**
- * @brief 点群の歪み補正(Deskew)パラメータ
+ * @brief Point cloud motion-distortion compensation (deskew) parameters.
  */
 struct DeskewParams {
     bool enabled{true};
@@ -39,7 +39,7 @@ struct DeskewParams {
 };
 
 /**
- * @brief 従来のGround Filterカーネル起動関数
+ * @brief Launches the standard CUDA ground and footprint filter kernel.
  */
 void launchGroundFilter(
     cudaStream_t stream,
@@ -60,7 +60,8 @@ void launchGroundFilter(
 );
 
 /**
- * @brief Deskew 座標変換と Ground Filter を統合した CUDA カーネル起動関数
+ * @brief Launches the fused CUDA kernel that performs static TF transform, IMU rotational +
+ *        velocity translational deskew, self-filter, and ground/obstacle classification.
  */
 void launchGroundFilterWithDeskew(
     cudaStream_t stream,
