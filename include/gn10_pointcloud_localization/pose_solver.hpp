@@ -91,7 +91,7 @@ struct MatchingParams {
             pass_2d = (cost_2d < cost_threshold_2d);
         }
 
-        return pass_3d && pass_2d;
+        return pass_3d || pass_2d;
     }
 
     /**
