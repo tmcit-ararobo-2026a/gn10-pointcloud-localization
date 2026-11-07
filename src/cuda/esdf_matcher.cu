@@ -677,13 +677,13 @@ bool launchESDFMatcher(
             *out_cost_2d = (actual_2d > 0) ? (h_cost_2d_sum / static_cast<float>(actual_2d)) : 0.0f;
     }
 
-    // 動的点群抽出
+    // 動的点群抽出 (2D LiDAR 点群を除いた 3D LiDAR 障害物点群のみを対象とする)
     out_dynamic_pts.clear();
-    if (extract_dynamic) {
+    if (extract_dynamic && actual_3d > 0) {
         extractDynamicPointsGPU(
             stream,
             d_obstacle_cloud,
-            num_points,
+            actual_3d,
             out_best_pose,
             dynamic_dist_thresh,
             field_min_x,
