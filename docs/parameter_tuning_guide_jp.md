@@ -1,4 +1,4 @@
-# GN10 点群自己位置推定 パラメータチューニングガイド
+# gn10-pointcloud-localization パラメータチューニングガイド
 
 [English Version](./parameter_tuning_guide.md)
 
