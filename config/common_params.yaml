@@ -64,8 +64,8 @@
       fine_refine: true
       fine_refine_levels: 2
       max_dist_thresh: 0.25
-      cost_threshold: 0.25
-      cost_threshold_3d: 0.25
+      cost_threshold: 0.22
+      cost_threshold_3d: 0.22
       cost_threshold_2d: 0.08
       dynamic_dist_thresh: 0.15
       field_min_x: -5.5

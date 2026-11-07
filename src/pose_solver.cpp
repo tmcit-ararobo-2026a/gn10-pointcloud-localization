@@ -330,164 +330,202 @@ bool PoseSolver::matchObstacleCloud(
     out_dynamic_pts.clear();
     bool pose_matched = false;
     auto t_match_start = std::chrono::high_resolution_clock::now();
-    if (h_obstacle_count > match_params.min_3d_points) {
+    if (h_obstacle_count > match_params.min_3d_points ||
+        num_2d_obstacles_ >= match_params.min_2d_points) {
         // Compute dynamic 2D LiDAR weighting based on active point count and FoV coverage
         const float effective_weight_2d = computeEffectiveWeight2D(match_params);
         last_weight_2d_ = effective_weight_2d;
 
-        PoseCandidate coarse_pose{};
-        float coarse_cost = std::numeric_limits<float>::max();
-        std::vector<float> ignored_dynamic;
+        auto run_local_match = [&](int active_total_count,
+                                   int active_3d_count,
+                                   int active_2d_count,
+                                   float weight_2d,
+                                   float* out_c3d,
+                                   float* out_c2d) -> bool {
+            out_dynamic_pts.clear();
+            PoseCandidate coarse_pose{};
+            float coarse_cost = std::numeric_limits<float>::max();
+            std::vector<float> ignored_dynamic;
 
-        int* step_inlier_count = nullptr;
-        float* step_inlier_cost = nullptr;
-        bool output_coarse_dynamic = false;
-        int coarse_point_stride = computeCoarsePointStride();
-        if (!match_params.fine_refine) {
-            step_inlier_count = out_inlier_count;
-            step_inlier_cost = out_inlier_cost;
-            output_coarse_dynamic = extract_dynamic;
-            coarse_point_stride = 1;
-        }
+            int* step_inlier_count = nullptr;
+            float* step_inlier_cost = nullptr;
+            bool output_coarse_dynamic = false;
+            int coarse_point_stride = computeCoarsePointStride();
+            if (!match_params.fine_refine) {
+                step_inlier_count = out_inlier_count;
+                step_inlier_cost = out_inlier_cost;
+                output_coarse_dynamic = extract_dynamic;
+                coarse_point_stride = 1;
+            }
 
-        std::vector<float>& target_dynamic_buf = output_coarse_dynamic ? out_dynamic_pts : ignored_dynamic;
+            std::vector<float>& target_dynamic_buf =
+                output_coarse_dynamic ? out_dynamic_pts : ignored_dynamic;
 
-        if (use_esdf_) {
-            pose_matched = launchESDFMatcher(
-                stream_,
-                d_obstacle_,
-                h_obstacle_count,
-                search_base_pose,
-                match_params.range_xy,
-                match_params.range_xy,
-                match_params.step_xy,
-                match_params.range_yaw,
-                match_params.step_yaw,
-                match_params.max_dist_thresh,
-                match_params.dynamic_dist_thresh,
-                match_params.field_min_x,
-                match_params.field_max_x,
-                match_params.field_min_y,
-                match_params.field_max_y,
-                coarse_pose,
-                coarse_cost,
-                target_dynamic_buf,
-                output_coarse_dynamic,
-                step_inlier_count,
-                step_inlier_cost,
-                match_params.inlier_dist_thresh,
-                num_3d_obstacles_,
-                num_2d_obstacles_,
-                effective_weight_2d,
-                (!match_params.fine_refine) ? &last_cost_3d_ : nullptr,
-                (!match_params.fine_refine) ? &last_cost_2d_ : nullptr,
-                nullptr,
-                coarse_point_stride
-            );
-        } else {
-            pose_matched = launchFieldSDFMatcher(
-                stream_,
-                d_obstacle_,
-                h_obstacle_count,
-                search_base_pose,
-                match_params.range_xy,
-                match_params.range_xy,
-                match_params.step_xy,
-                match_params.range_yaw,
-                match_params.step_yaw,
-                match_params.max_dist_thresh,
-                match_params.dynamic_dist_thresh,
-                match_params.field_min_x,
-                match_params.field_max_x,
-                match_params.field_min_y,
-                match_params.field_max_y,
-                coarse_pose,
-                coarse_cost,
-                target_dynamic_buf,
-                output_coarse_dynamic,
-                step_inlier_count,
-                step_inlier_cost,
-                match_params.inlier_dist_thresh,
-                nullptr,
-                coarse_point_stride
-            );
-        }
-        out_best_pose = coarse_pose;
-        out_best_cost = coarse_cost;
-        if (pose_matched && match_params.fine_refine) {
-            float fine_xy = match_params.step_xy;
-            float fine_yaw = match_params.step_yaw;
-            for (int level = 0; level < match_params.fine_refine_levels && pose_matched; ++level) {
-                fine_xy /= 5.0f;
-                fine_yaw /= 5.0f;
-                const PoseCandidate center = out_best_pose;
-                const bool is_final_level = (level + 1 == match_params.fine_refine_levels);
-                const bool extract_level_dynamic = is_final_level && extract_dynamic;
+            bool matched = false;
+            if (use_esdf_) {
+                matched = launchESDFMatcher(
+                    stream_,
+                    d_obstacle_,
+                    active_total_count,
+                    search_base_pose,
+                    match_params.range_xy,
+                    match_params.range_xy,
+                    match_params.step_xy,
+                    match_params.range_yaw,
+                    match_params.step_yaw,
+                    match_params.max_dist_thresh,
+                    match_params.dynamic_dist_thresh,
+                    match_params.field_min_x,
+                    match_params.field_max_x,
+                    match_params.field_min_y,
+                    match_params.field_max_y,
+                    coarse_pose,
+                    coarse_cost,
+                    target_dynamic_buf,
+                    output_coarse_dynamic,
+                    step_inlier_count,
+                    step_inlier_cost,
+                    match_params.inlier_dist_thresh,
+                    active_3d_count,
+                    active_2d_count,
+                    weight_2d,
+                    (!match_params.fine_refine) ? out_c3d : nullptr,
+                    (!match_params.fine_refine) ? out_c2d : nullptr,
+                    nullptr,
+                    coarse_point_stride
+                );
+            } else {
+                matched = launchFieldSDFMatcher(
+                    stream_,
+                    d_obstacle_,
+                    active_total_count,
+                    search_base_pose,
+                    match_params.range_xy,
+                    match_params.range_xy,
+                    match_params.step_xy,
+                    match_params.range_yaw,
+                    match_params.step_yaw,
+                    match_params.max_dist_thresh,
+                    match_params.dynamic_dist_thresh,
+                    match_params.field_min_x,
+                    match_params.field_max_x,
+                    match_params.field_min_y,
+                    match_params.field_max_y,
+                    coarse_pose,
+                    coarse_cost,
+                    target_dynamic_buf,
+                    output_coarse_dynamic,
+                    step_inlier_count,
+                    step_inlier_cost,
+                    match_params.inlier_dist_thresh,
+                    nullptr,
+                    coarse_point_stride
+                );
+            }
+            out_best_pose = coarse_pose;
+            out_best_cost = coarse_cost;
+            if (matched && match_params.fine_refine) {
+                float fine_xy = match_params.step_xy;
+                float fine_yaw = match_params.step_yaw;
+                for (int level = 0; level < match_params.fine_refine_levels && matched; ++level) {
+                    fine_xy /= 5.0f;
+                    fine_yaw /= 5.0f;
+                    const PoseCandidate center = out_best_pose;
+                    const bool is_final_level = (level + 1 == match_params.fine_refine_levels);
+                    const bool extract_level_dynamic = is_final_level && extract_dynamic;
 
-                int* fine_inlier_count = nullptr;
-                float* fine_inlier_cost = nullptr;
-                if (is_final_level) {
-                    fine_inlier_count = out_inlier_count;
-                    fine_inlier_cost = out_inlier_cost;
-                }
+                    int* fine_inlier_count = nullptr;
+                    float* fine_inlier_cost = nullptr;
+                    if (is_final_level) {
+                        fine_inlier_count = out_inlier_count;
+                        fine_inlier_cost = out_inlier_cost;
+                    }
 
-                if (use_esdf_) {
-                    pose_matched = launchESDFMatcher(
-                        stream_,
-                        d_obstacle_,
-                        h_obstacle_count,
-                        center,
-                        2.0f * fine_xy,
-                        2.0f * fine_xy,
-                        fine_xy,
-                        2.0f * fine_yaw,
-                        fine_yaw,
-                        match_params.max_dist_thresh,
-                        match_params.dynamic_dist_thresh,
-                        match_params.field_min_x,
-                        match_params.field_max_x,
-                        match_params.field_min_y,
-                        match_params.field_max_y,
-                        out_best_pose,
-                        out_best_cost,
-                        out_dynamic_pts,
-                        extract_level_dynamic,
-                        fine_inlier_count,
-                        fine_inlier_cost,
-                        match_params.inlier_dist_thresh,
-                        num_3d_obstacles_,
-                        num_2d_obstacles_,
-                        effective_weight_2d,
-                        is_final_level ? &last_cost_3d_ : nullptr,
-                        is_final_level ? &last_cost_2d_ : nullptr
-                    );
-                } else {
-                    pose_matched = launchFieldSDFMatcher(
-                        stream_,
-                        d_obstacle_,
-                        h_obstacle_count,
-                        center,
-                        2.0f * fine_xy,
-                        2.0f * fine_xy,
-                        fine_xy,
-                        2.0f * fine_yaw,
-                        fine_yaw,
-                        match_params.max_dist_thresh,
-                        match_params.dynamic_dist_thresh,
-                        match_params.field_min_x,
-                        match_params.field_max_x,
-                        match_params.field_min_y,
-                        match_params.field_max_y,
-                        out_best_pose,
-                        out_best_cost,
-                        out_dynamic_pts,
-                        extract_level_dynamic,
-                        fine_inlier_count,
-                        fine_inlier_cost,
-                        match_params.inlier_dist_thresh
-                    );
+                    if (use_esdf_) {
+                        matched = launchESDFMatcher(
+                            stream_,
+                            d_obstacle_,
+                            active_total_count,
+                            center,
+                            2.0f * fine_xy,
+                            2.0f * fine_xy,
+                            fine_xy,
+                            2.0f * fine_yaw,
+                            fine_yaw,
+                            match_params.max_dist_thresh,
+                            match_params.dynamic_dist_thresh,
+                            match_params.field_min_x,
+                            match_params.field_max_x,
+                            match_params.field_min_y,
+                            match_params.field_max_y,
+                            out_best_pose,
+                            out_best_cost,
+                            out_dynamic_pts,
+                            extract_level_dynamic,
+                            fine_inlier_count,
+                            fine_inlier_cost,
+                            match_params.inlier_dist_thresh,
+                            active_3d_count,
+                            active_2d_count,
+                            weight_2d,
+                            is_final_level ? out_c3d : nullptr,
+                            is_final_level ? out_c2d : nullptr
+                        );
+                    } else {
+                        matched = launchFieldSDFMatcher(
+                            stream_,
+                            d_obstacle_,
+                            active_total_count,
+                            center,
+                            2.0f * fine_xy,
+                            2.0f * fine_xy,
+                            fine_xy,
+                            2.0f * fine_yaw,
+                            fine_yaw,
+                            match_params.max_dist_thresh,
+                            match_params.dynamic_dist_thresh,
+                            match_params.field_min_x,
+                            match_params.field_max_x,
+                            match_params.field_min_y,
+                            match_params.field_max_y,
+                            out_best_pose,
+                            out_best_cost,
+                            out_dynamic_pts,
+                            extract_level_dynamic,
+                            fine_inlier_count,
+                            fine_inlier_cost,
+                            match_params.inlier_dist_thresh
+                        );
+                    }
                 }
             }
+            return matched;
+        };
+
+        pose_matched = run_local_match(
+            h_obstacle_count,
+            num_3d_obstacles_,
+            num_2d_obstacles_,
+            effective_weight_2d,
+            &last_cost_3d_,
+            &last_cost_2d_
+        );
+
+        if (use_esdf_ && pose_matched && effective_weight_2d > 0.0f &&
+            num_3d_obstacles_ >= match_params.min_3d_points &&
+            num_2d_obstacles_ >= match_params.min_2d_points &&
+            last_cost_2d_ >= match_params.cost_threshold_2d) {
+            // 2D LiDAR cost spiked above threshold: re-run local matching with 3D LiDAR only
+            // so corrupted 2D scans or unmapped 2D obstacles cannot pull the 3D pose off-course.
+            last_weight_2d_ = 0.0f;
+            pose_matched = run_local_match(
+                num_3d_obstacles_,
+                num_3d_obstacles_,
+                0,
+                0.0f,
+                &last_cost_3d_,
+                nullptr
+            );
         }
     } else {
         out_best_cost = std::numeric_limits<float>::max();

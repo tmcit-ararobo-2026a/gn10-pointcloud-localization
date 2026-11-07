@@ -829,13 +829,34 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             is_lost_         = true;
         }
     }
-    if (!scan_accumulator_.append(timed_points, reference_ns)) {
-        publishLocalizationSuccess(false);
-        return;
-    }
-
+    const bool window_ready        = scan_accumulator_.append(timed_points, reference_ns);
     const auto& accumulated_points = scan_accumulator_.points();
-    if (accumulated_points.size() < 150) {
+    if ((!window_ready && accumulated_points.size() < 1000) || accumulated_points.size() < 150) {
+        PoseCandidate pred_to_pub{};
+        bool should_pub_pred = false;
+        {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            if (!is_lost_ && last_match_stamp_.nanoseconds() > 0) {
+                const double dt =
+                    (reference_stamp.nanoseconds() - last_match_stamp_.nanoseconds()) * 1e-9;
+                if (dt > 0.0 && dt < 0.5) {
+                    pred_to_pub    = last_known_pose_;
+                    double rot_inc = 0.0;
+                    if (imu_initialized_ &&
+                        yaw_history_.delta(last_match_stamp_.nanoseconds(), reference_ns, rot_inc)) {
+                        pred_to_pub.yaw = normalizeAngle(pred_to_pub.yaw + static_cast<float>(rot_inc));
+                    }
+                    if (velocity_estimation_enable_ && has_velocity_ && dt < velocity_max_dt_sec_) {
+                        pred_to_pub.x += velocity_x_ * static_cast<float>(dt);
+                        pred_to_pub.y += velocity_y_ * static_cast<float>(dt);
+                    }
+                    should_pub_pred = true;
+                }
+            }
+        }
+        if (should_pub_pred) {
+            publishPoseAndTransform(reference_stamp, pred_to_pub, true);
+        }
         publishLocalizationSuccess(false);
         return;
     }
@@ -889,6 +910,13 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
         search_base_pose.yaw = normalizeAngle(search_base_pose.yaw);
         predicted_pose_      = search_base_pose;
+        if (imu_initialized_ && last_imu_stamp_.nanoseconds() > reference_ns) {
+            double rot_to_latest_imu = 0.0;
+            if (imu_snapshot.delta(reference_ns, last_imu_stamp_.nanoseconds(), rot_to_latest_imu)) {
+                predicted_pose_.yaw =
+                    normalizeAngle(search_base_pose.yaw + static_cast<float>(rot_to_latest_imu));
+            }
+        }
         current_omega_z      = latest_omega_z_.load();
 
         if (velocity_estimation_enable_ && has_velocity_ && !is_lost_ &&
@@ -1130,6 +1158,18 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             // Estimate translation over a fixed time interval rather than
             // differentiating alternating 50 ms scan noise into fake velocity.
             if (velocity_estimation_enable_) {
+                if (!velocity_history_.empty()) {
+                    const auto& prev_entry = velocity_history_.back();
+                    const double step_dt =
+                        (reference_stamp.nanoseconds() - prev_entry.stamp.nanoseconds()) * 1e-9;
+                    const float step_dist =
+                        std::hypot(best_pose.x - prev_entry.pose.x, best_pose.y - prev_entry.pose.y);
+                    if (step_dt <= 1e-3 ||
+                        (step_dist / static_cast<float>(step_dt)) > velocity_max_linear_) {
+                        velocity_history_.clear();
+                        has_velocity_ = false;
+                    }
+                }
                 velocity_history_.push_back({reference_stamp, best_pose});
                 while (velocity_history_.size() > 2 &&
                        (reference_stamp.nanoseconds() - velocity_history_[1].stamp.nanoseconds()) *
@@ -1665,6 +1705,15 @@ void LocalizationNode::publishPoseAndTransform(
         std::lock_guard<std::mutex> lock(pose_mutex_);
         last_known_pose_ = pose;
         predicted_pose_  = pose;
+        if (imu_initialized_ && last_imu_stamp_.nanoseconds() > stamp.nanoseconds()) {
+            double rot_to_latest_imu = 0.0;
+            if (yaw_history_.delta(
+                    stamp.nanoseconds(), last_imu_stamp_.nanoseconds(), rot_to_latest_imu
+                )) {
+                predicted_pose_.yaw =
+                    normalizeAngle(pose.yaw + static_cast<float>(rot_to_latest_imu));
+            }
+        }
     }
 
     tf2::Quaternion q;

@@ -229,17 +229,19 @@ void testESDFMatcherWeightedResidual()
     // Accepted when inlier count, inlier cost, inlier ratio (>= 0.35), and max_inlier_accept_cost (< 0.22) all pass
     assert(accept_params.isMatchAccepted(0.19f, 400, 0.03f, 1000));
 
-    // Test independent 3D and 2D thresholds:
+    // Test independent 3D and 2D thresholds (pass_3d || pass_2d with inactive-sensor guards):
     // Case A: 3D cost passes (< 0.185), 2D cost passes (< 0.080) -> Accepted
     assert(accept_params.isMatchAccepted(0.175f, 0.020f, 500, 100, 200, 0.03f));
     // Case B: 3D cost passes (< 0.185), 2D is absent (count < 30) -> Accepted (3D alone passes)
     assert(accept_params.isMatchAccepted(0.175f, 0.0f, 500, 0, 200, 0.03f));
-    // Case C: 3D cost fails (> 0.185 and inliers low), 2D is good (0.020) -> Rejected (2D cannot mask bad 3D)
-    assert(!accept_params.isMatchAccepted(0.240f, 0.020f, 500, 100, 10, 0.07f));
-    // Case D: 3D cost fails (> 0.185) but 3D inlier criteria pass, 2D passes -> Accepted
-    assert(accept_params.isMatchAccepted(0.195f, 0.020f, 500, 100, 200, 0.03f));
-    // Case E: 3D cost passes (< 0.185) but 2D cost exceeds threshold (> 0.080) -> Rejected
-    assert(!accept_params.isMatchAccepted(0.175f, 0.120f, 500, 100, 200, 0.03f));
+    // Case C: 3D cost fails (> 0.185 and inliers low), 2D is absent (count < 30) -> Rejected
+    assert(!accept_params.isMatchAccepted(0.240f, 0.0f, 500, 0, 10, 0.07f));
+    // Case D: Both 3D and 2D fail their thresholds -> Rejected
+    assert(!accept_params.isMatchAccepted(0.240f, 0.120f, 500, 100, 10, 0.07f));
+    // Case E: 3D cost passes (< 0.185) while 2D spikes (> 0.080) -> Accepted via 3D fallback
+    assert(accept_params.isMatchAccepted(0.175f, 0.120f, 500, 100, 200, 0.03f));
+    // Case F: 3D is insufficient (< 50 pts) and 2D fails (> 0.080) -> Rejected
+    assert(!accept_params.isMatchAccepted(0.0f, 0.120f, 10, 100, 0, 1.0f));
 
     cudaFree(d_cloud);
     cudaStreamDestroy(stream);
