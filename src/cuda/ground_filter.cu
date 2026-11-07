@@ -7,7 +7,7 @@
 #include <cmath>
 
 /**
- * @brief 従来のGround Filter CUDA カーネル
+ * @brief Standard Ground Filter CUDA kernel (without per-point deskew).
  */
 __global__ void filterGroundKernel(
     const float* in_cloud,
@@ -29,30 +29,30 @@ __global__ void filterGroundKernel(
         return;
     }
 
-    // センサ（livox_frame）座標系の点
+    // Point coordinates in sensor frame (livox_frame)
     float xs = in_cloud[point_index * 3 + 0];
     float ys = in_cloud[point_index * 3 + 1];
     float zs = in_cloud[point_index * 3 + 2];
 
-    // base_link 座標系へのアフィン変換
+    // Affine transformation into base_link frame
     float xb = transform[0] * xs + transform[1] * ys + transform[2] * zs + transform[3];
     float yb = transform[4] * xs + transform[5] * ys + transform[6] * zs + transform[7];
     float zb = transform[8] * xs + transform[9] * ys + transform[10] * zs + transform[11];
 
-    // 最大検出範囲外（base_link 原点からの水平距離）を無視
+    // Reject points beyond max horizontal detection range from base_link origin
     float dist_sq = xb * xb + yb * yb;
     if (dist_sq > range_max * range_max) {
         return;
     }
 
-    // ロボット本体の除去 (半径 robot_radius かつ 高さ robot_height_min ~ robot_height_max 領域)
+    // Remove robot self-returns (cylinder of radius robot_radius and height [robot_height_min, robot_height_max])
     if (dist_sq <= robot_radius * robot_radius) {
         if (zb >= robot_height_min && zb <= robot_height_max) {
             return;
         }
     }
 
-    // 地面 / 障害物の分離 (base_link 基準の Z 閾値)
+    // Classify ground vs. obstacle points based on base_link Z threshold
     if (zb <= ground_z_thresh) {
         int g_idx = atomicAdd(ground_count, 1);
         out_ground[g_idx * 3 + 0] = xb;
@@ -67,12 +67,12 @@ __global__ void filterGroundKernel(
 }
 
 /**
- * @brief GPU側でIMUサンプルから特定時刻のYaw角を評価するデバイス関数
- * @param target_stamp_ns 対象時刻[ns]
- * @param samples IMUサンプル配列
- * @param num_samples サンプル数
- * @param ref_angle 基準時刻におけるIMU角度[rad]
- * @return 基準時刻からの相対Yaw角[rad]
+ * @brief Device function to evaluate the relative yaw angle at target_stamp_ns from IMU samples.
+ * @param target_stamp_ns Target point timestamp [ns]
+ * @param samples Buffered IMU sample array in device memory
+ * @param num_samples Number of IMU samples
+ * @param ref_angle Integrated IMU yaw angle at the scan reference timestamp [rad]
+ * @return Relative yaw rotation angle from the reference timestamp [rad]
  */
 __device__ inline float evaluateYawDevice(
     int64_t target_stamp_ns,
@@ -88,7 +88,7 @@ __device__ inline float evaluateYawDevice(
     const IMUSample& first = samples[0];
     const IMUSample& last = samples[num_samples - 1];
 
-    // 時刻範囲外の線形外挿処理 (最大 ±100ms にクランプして暴走を防止)
+    // Linear extrapolation outside sample bounds (clamped to +/- 100 ms to prevent runaway rotation)
     if (target_stamp_ns < first.stamp_ns) {
         float time_diff_s = static_cast<float>(target_stamp_ns - first.stamp_ns) * 1e-9f;
         time_diff_s = fmaxf(-0.10f, fminf(0.10f, time_diff_s));
@@ -102,7 +102,7 @@ __device__ inline float evaluateYawDevice(
         return calculated_angle - ref_angle;
     }
 
-    // 二分探索による近傍サンプルの特定
+    // Binary search for the bracketing IMU sample interval
     int index_low = 0;
     int index_high = num_samples - 1;
     while (index_low < index_high - 1) {
@@ -114,7 +114,7 @@ __device__ inline float evaluateYawDevice(
         }
     }
 
-    // 区分2次補間による角度計算
+    // Piecewise quadratic (trapezoidal angular velocity) interpolation
     const IMUSample& sample_low = samples[index_low];
     const IMUSample& sample_high = samples[index_high];
     float dt_s = static_cast<float>(target_stamp_ns - sample_low.stamp_ns) * 1e-9f;
@@ -131,7 +131,8 @@ __device__ inline float evaluateYawDevice(
 }
 
 /**
- * @brief Deskew 座標変換と Ground Filter を統合した CUDA カーネル
+ * @brief Fused CUDA kernel combining static TF transform, IMU rotational + translational deskew,
+ *        self-filter, and ground/obstacle classification.
  */
 __global__ void filterGroundWithDeskewKernel(
     const TimedScanPoint* in_cloud,
@@ -160,12 +161,12 @@ __global__ void filterGroundWithDeskewKernel(
 
     const TimedScanPoint& point = in_cloud[point_index];
 
-    // 非数(NaN)および無限大(Inf)の除去
+    // Reject NaN and Inf coordinates
     if (!isfinite(point.x) || !isfinite(point.y) || !isfinite(point.z)) {
         return;
     }
 
-    // タイムスタンプ有効範囲の判定
+    // Validate point timestamp range against the active accumulation window
     if (deskew.enabled) {
         if (point.stamp_ns > deskew.reference_ns) {
             return;
@@ -175,7 +176,7 @@ __global__ void filterGroundWithDeskewKernel(
         }
     }
 
-    // 1. センサ（livox_frame）座標系から base_link 座標系への静的アフィン変換
+    // 1. Static affine transform from sensor frame (livox_frame) to base_link frame
     float xs = point.x;
     float ys = point.y;
     float zs = point.z;
@@ -184,12 +185,12 @@ __global__ void filterGroundWithDeskewKernel(
     float yb = transform[4] * xs + transform[5] * ys + transform[6] * zs + transform[7];
     float zb = transform[8] * xs + transform[9] * ys + transform[10] * zs + transform[11];
 
-    // 2. IMU およびロボット並進速度に基づく歪み補正 (Deskew)
+    // 2. Motion-distortion compensation (deskew) using IMU yaw integration and linear velocity
     if (deskew.enabled && point.stamp_ns != deskew.reference_ns) {
-        // IMU サンプル列に基づく相対 Yaw 回転角の補間
+        // Interpolate relative yaw rotation angle from IMU samples
         float delta_yaw = evaluateYawDevice(point.stamp_ns, imu_samples, num_imu_samples, deskew.ref_imu_angle);
 
-        // 並進速度に基づく変位補正
+        // Compute translational displacement in base_link frame
         float dt_sec = static_cast<float>(point.stamp_ns - deskew.reference_ns) * 1e-9f;
         float cos_ref_yaw = cosf(deskew.ref_yaw);
         float sin_ref_yaw = sinf(deskew.ref_yaw);
@@ -198,7 +199,7 @@ __global__ void filterGroundWithDeskewKernel(
         float dx = vx_local * dt_sec;
         float dy = vy_local * dt_sec;
 
-        // 座標回転および並進加算
+        // Apply rotational and translational deskew
         float cos_delta = cosf(delta_yaw);
         float sin_delta = sinf(delta_yaw);
         float x_deskewed = cos_delta * xb - sin_delta * yb + dx;
@@ -208,20 +209,20 @@ __global__ void filterGroundWithDeskewKernel(
         yb = y_deskewed;
     }
 
-    // 3. 最大検出範囲外の除去
+    // 3. Reject points outside maximum horizontal detection range
     float dist_sq = xb * xb + yb * yb;
     if (dist_sq > range_max * range_max) {
         return;
     }
 
-    // 4. ロボット本体の除去
+    // 4. Reject points inside the robot body footprint cylinder
     if (dist_sq <= robot_radius * robot_radius) {
         if (zb >= robot_height_min && zb <= robot_height_max) {
             return;
         }
     }
 
-    // 5. 地面点と障害物点の分離
+    // 5. Partition into ground and obstacle point clouds
     if (zb <= ground_z_thresh) {
         int ground_index = atomicAdd(ground_count, 1);
         out_ground[ground_index * 3 + 0] = xb;

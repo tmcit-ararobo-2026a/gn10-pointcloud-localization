@@ -1,62 +1,64 @@
-# コーディング規約
+# Coding Rules
 
-本規約はこのリポジトリ内のコードに適用されます。
+[English](coding-rules.md) | [日本語 (Japanese)](coding-rules_jp.md)
 
-## 目次
+These coding standards apply to all source code, configuration files, and documentation in this repository.
 
-1. [命名規則](#1-命名規則)
-2. [制約](#2-制約)
-3. [ドキュメント規約](#3-ドキュメント規約)
+## Table of Contents
 
-## 1. 命名規則
+1. [Naming Conventions](#1-naming-conventions)
+2. [Implementation Constraints](#2-implementation-constraints)
+3. [Comment & Documentation Standards](#3-comment--documentation-standards)
 
-### 1.1 基本
+## 1. Naming Conventions
 
-- 名前と処理が一致していることを確認する。
-- ループイテレータが２文字以上になる場合、`i`, `j`, `k` ではなく `motor_id`, `device_number` 等の意味のある名前を使用する。
-- 単位を含める（例: `length_m`, `time_ms`)
-- 誤解されない名前を選ぶ。複数の意味を持つ単語には要注意。
-- リポジトリ名は英小文字＋ハイフンで構成すること。
-- ファイル名は英小文字＋アンダーバーで構成すること。
+### 1.1 General Principles
 
-### 1.2 スタイル
+- Ensure every identifier accurately reflects its behavior and role.
+- When loop iterators span nested or non-trivial loops, prefer descriptive names such as `point_index`, `voxel_index`, or `sample_index` over single-letter names.
+- Include physical units in variable and parameter names where applicable (e.g., `distance_m`, `window_sec`, `stamp_ns`).
+- Choose unambiguous names and avoid words with conflicting interpretations.
+- Repository names must use lowercase letters and hyphens (`kebab-case`).
+- File names must use lowercase letters and underscores (`snake_case`).
 
-| 対象 | 規則 | 例 |
+### 1.2 Identifier Styles
+
+| Target | Convention | Example |
 | :--- | :--- | :--- |
-| クラス / 構造体 | PascalCase | `SpeedMsg`, `BatteryStatus` |
-| 関数 / 変数 | snake_case | `get_id()`, `target_velocity` |
-| 定数 / 列挙値 | ALL_CAPS | `BATTERY_LOW` |
-| プライベート変数 | 末尾にアンダースコア `_` | `speed_`, `voltage_` |
+| Classes / Structs | `PascalCase` | `PoseSolver`, `ESDFMap`, `YawHistory` |
+| Functions / Variables | `snake_case` / `camelCase` (match module convention) | `get_angle_at()`, `target_velocity` |
+| Constants / Enumerators | `ALL_CAPS` | `CYLINDER`, `VISUAL_BOX` |
+| Private Member Variables | Trailing underscore `_` | `last_known_pose_`, `is_lost_` |
 
-### 1.3 省略の許可と禁止
+### 1.3 Abbreviations
 
-- 独自の短縮形は厳禁: `pos`, `cnt`, `mgr` 等は禁止する。
-- 誤解を生まず、広く知られる略語は許可する。 `PWM`, `ID`, `CAN`, `IMU`, `PID`, `LED`, `USB`, `IP`, `GPIO`, `UART`, `SPI`, `I2C`
-- クラス名の場合は `Can` や `Pid` とはせず、`CAN` や `PID` のようにすべて大文字とする。
+- Ad-hoc abbreviations (`pos`, `cnt`, `mgr`) are discouraged in new interfaces.
+- Standard domain acronyms are permitted: `ESDF`, `SDF`, `IMU`, `TF`, `PCD`, `NMS`, `CUDA`, `GPU`, `FOV`, `EMA`, `PID`.
+- Keep acronyms capitalized in class and type names (e.g., `ESDFMap`, `IMUSample`).
 
-## 2. 制約
+## 2. Implementation Constraints
 
-### 2.1 共通
+### 2.1 Common C++ Rules
 
-- 原則としてGoogle C++ Style Guideに準拠する。
-- 三項演算子、do-while文、goto文の使用は禁止する。
+- Follow the Google C++ Style Guide as the baseline standard.
+- Avoid `do-while` and `goto` statements.
+- Use `constexpr` for compile-time constants.
 
-### 2.2 組み込みシステム（STM32/ESP32 等）
+### 2.2 Embedded Systems (STM32 / ESP32)
 
-- 動的メモリの禁止: `new`, `malloc`, `std::vector`, `std::string` 等の使用を禁止する。`std::array` や固定長配列を使用する。
-- コールバック内はフラグ操作のみに留める。
-- オーバーヘッド回避のため、`try-catch` は使用しない。
-- 定数には `constexpr` を使用する。
+- Dynamic heap allocation (`new`, `malloc`, `std::vector`, `std::string`) is prohibited; use `std::array` or fixed-size buffers.
+- Keep interrupt/hardware callbacks minimal.
+- Do not use `try-catch` exceptions on microcontrollers.
 
-### 2.3 ROS2 / PC側（Linux）
+### 2.3 ROS 2 / Linux Host & Jetson GPU
 
-- `std::unique_ptr` 等のスマートポインタを積極的に使用する。
-- 名前空間に入れ、グローバル汚染を防ぐ。
-- リソース管理はデストラクタに任せ、例外安全性を確保する。
-- **ログ出力:** `std::cout` ではなく、`RCLCPP_INFO` 等のROSロガーを使用する。
+- Use RAII and smart pointers (`std::unique_ptr`, `std::shared_ptr`) for host resource management, and manage CUDA device/pinned buffers deterministically in constructors and destructors.
+- Prevent global namespace pollution.
+- **Logging:** Use ROS 2 loggers (`RCLCPP_INFO`, `RCLCPP_WARN`, `RCLCPP_ERROR`) inside ROS 2 nodes rather than `std::cout`.
 
-## 3. ドキュメント規約
+## 3. Comment & Documentation Standards
 
-- 全ての関数にDoxygen形式のコメントを追加する。
-- 5行以上の処理が続く場合にブロック分けを行い、要約コメントを1行追加する。
-- 主要な機能追加や変更時に、READMEを最新の状態に保つ。
+- **All source code, header, CUDA kernel, launch, test, and YAML config comments in `gn10-pointcloud-localization` MUST be written in English.**
+- Provide Doxygen-style comments (`@brief`, `@param`, `@return`) on public functions and kernels so the localization algorithm and parameter effects are clear directly from the code.
+- Separate logical stages of multi-step functions with concise single-line summary comments.
+- **Bilingual Documentation:** Important documents (`README.md` / `README_jp.md`, `docs/parameter_tuning_guide.md` / `docs/parameter_tuning_guide_jp.md`, `docs/coding-rules.md` / `docs/coding-rules_jp.md`, and PlantUML `.pu` diagrams) must be maintained in both English and Japanese in separate files and kept synchronized whenever algorithms or parameters change.

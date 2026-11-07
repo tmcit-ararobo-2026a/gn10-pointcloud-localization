@@ -68,7 +68,7 @@ include_directories(
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
-# CUDA ライブラリ
+# CUDA library
 add_library(gn10_cuda_lib
   src/cuda/ground_filter.cu
   src/cuda/field_objects.cu
@@ -78,12 +78,12 @@ set_target_properties(gn10_cuda_lib PROPERTIES
   CUDA_SEPARABLE_COMPILATION OFF
 )
 
-# nvcc 内部で生成されるコードの -Wpedantic 警告を抑制
+# Suppress -Wpedantic warnings in nvcc-generated host code
 target_compile_options(gn10_cuda_lib PRIVATE
   $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-pedantic>
 )
 
-# 共通 ESDF ライブラリ
+# Shared ESDF map library
 add_library(gn10_esdf_lib
   src/esdf_map.cpp
 )
@@ -92,7 +92,7 @@ target_link_libraries(gn10_esdf_lib
   OpenMP::OpenMP_CXX
 )
 
-# C++ ノードのビルド
+# Main C++ localization node executable
 add_executable(gn10_pointcloud_localization_node
   src/map_loader.cpp
   src/pose_solver.cpp
@@ -101,7 +101,7 @@ add_executable(gn10_pointcloud_localization_node
   src/main.cpp
 )
 
-# C++ (g++) 側のみにコンパイルオプションを適用
+# Apply strict warning flags only to C++ (g++) compilation units
 target_compile_options(gn10_pointcloud_localization_node PRIVATE
   $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>
 )
@@ -118,7 +118,7 @@ target_link_libraries(gn10_pointcloud_localization_node
   CUDA::cudart
 )
 
-# PCD -> ESDF 変換 CLI ツール
+# PCD -> ESDF conversion CLI tool
 add_executable(pcd_to_esdf_converter
   src/pcd_to_esdf_converter.cpp
 )
@@ -127,7 +127,7 @@ target_link_libraries(pcd_to_esdf_converter
   ${PCL_LIBRARIES}
 )
 
-# ESDF -> 2D Costmap 変換 CLI ツール
+# ESDF -> 2D Costmap conversion CLI tool
 add_executable(esdf_to_costmap
   src/esdf_to_costmap.cpp
 )
@@ -151,7 +151,7 @@ ament_target_dependencies(gn10_pointcloud_localization_node
   nlohmann_json
 )
 
-# インストール設定 (Launch, Config, Node, Libraries)
+# Install targets (Launch, Config, Node, Libraries)
 install(TARGETS 
   gn10_cuda_lib
   gn10_esdf_lib
@@ -188,7 +188,10 @@ if(BUILD_TESTING)
   target_compile_options(scan_2d_deskew_test PRIVATE -UNDEBUG)
   add_test(NAME scan_2d_deskew COMMAND scan_2d_deskew_test)
 
-  add_executable(independent_2d_cost_test tests/test_independent_2d_cost.cpp)
+  add_executable(independent_2d_cost_test
+    tests/test_independent_2d_cost.cpp
+    src/pose_solver.cpp
+  )
   target_include_directories(independent_2d_cost_test PRIVATE include)
   target_link_libraries(independent_2d_cost_test gn10_cuda_lib gn10_esdf_lib CUDA::cudart)
   ament_target_dependencies(independent_2d_cost_test rclcpp)
@@ -197,7 +200,7 @@ if(BUILD_TESTING)
   set_tests_properties(independent_2d_cost PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
-# 他のノードや環境変数のためにライブラリをエクスポート
+# Export libraries for downstream packages
 ament_export_libraries(gn10_cuda_lib gn10_esdf_lib)
 
 endif()

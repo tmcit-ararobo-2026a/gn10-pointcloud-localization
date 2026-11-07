@@ -15,7 +15,7 @@ struct FieldObject {
     float z_min, z_max;
     float param1, param2;
 
-    // 分かりやすいアクセサ
+    // Convenience accessors for cylinder radius and box half-extents
     __host__ __device__ float radius() const { return param1; }
     __host__ __device__ float half_x() const { return param1; }
     __host__ __device__ float half_y() const { return param2; }
@@ -129,7 +129,7 @@ bool launchFieldSDFMatcher(
     PoseCandidate& out_best_pose,
     float& out_best_cost,
     std::vector<float>& out_dynamic_pts,
-    bool extract_dynamic     = true,  // false の場合は動的点群抽出カーネルとD2H転送を一切実行しない
+    bool extract_dynamic     = true,  // If false, skips the dynamic point extraction kernel and D2H copy
     int* out_inlier_count    = nullptr,
     float* out_inlier_cost   = nullptr,
     float inlier_dist_thresh = 0.08f,

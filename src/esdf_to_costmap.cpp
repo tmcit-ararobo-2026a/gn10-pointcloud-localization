@@ -64,7 +64,7 @@ int main(int argc, char** argv)
     std::cout << "[ESDF->Costmap] 2D Costmap generated: " << width << " x " << height << " cells."
               << std::endl;
 
-    // 1. PGM 画像ファイルの保存 (P5 binary, 0=黒(占有/100), 254=白(自由/0))
+    // 1. Save PGM image file (P5 binary: 0=black (occupied/100), 254=white (free/0))
     std::string pgm_path = output_prefix + ".pgm";
     std::ofstream pgm_file(pgm_path, std::ios::binary);
     if (!pgm_file.is_open()) {
@@ -73,19 +73,19 @@ int main(int argc, char** argv)
     }
 
     pgm_file << "P5\n" << width << " " << height << "\n255\n";
-    // ROS Map の仕様では Y 軸反転（下から上ではなく上から下）で格納される
+    // ROS map server convention stores rows from top to bottom (Y axis inverted)
     for (int y = height - 1; y >= 0; --y) {
         for (int x = 0; x < width; ++x) {
             int8_t c = costmap_data[static_cast<size_t>(y) * width + x];
             uint8_t pixel;
             if (c < 0) {
-                pixel = 205;  // 未知 (グレー)
+                pixel = 205;  // Unknown (gray)
             } else if (c == 0) {
-                pixel = 254;  // 自由空間 (白)
+                pixel = 254;  // Free space (white)
             } else if (c >= 100) {
-                pixel = 0;  // 不可侵障害物 (黒)
+                pixel = 0;  // Lethal obstacle (black)
             } else {
-                // 波及コスト 1..99 -> グレー階調 253..1
+                // Inflated cost 1..99 -> grayscale 253..1
                 pixel = static_cast<uint8_t>(std::clamp(254 - (c * 254 / 100), 1, 253));
             }
             pgm_file.put(static_cast<char>(pixel));
@@ -94,7 +94,7 @@ int main(int argc, char** argv)
     pgm_file.close();
     std::cout << "[ESDF->Costmap] Saved map image to " << pgm_path << std::endl;
 
-    // 2. YAML メタデータファイルの保存
+    // 2. Save YAML metadata file
     std::string yaml_path = output_prefix + ".yaml";
     std::ofstream yaml_file(yaml_path);
     if (!yaml_file.is_open()) {

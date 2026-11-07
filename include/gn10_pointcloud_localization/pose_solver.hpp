@@ -81,12 +81,9 @@ struct MatchingParams {
                  min_inlier_ratio) &&
                 (cost_3d < max_inlier_accept_cost);
             pass_3d = (cost_3d < cost_threshold_3d) || inlier_accepted;
-        } else if (count_2d >= min_2d_points) {
-            // Fall back to 2D LiDAR when 3D LiDAR point count is insufficient
-            pass_3d = true;
         }
 
-        bool pass_2d = true;
+        bool pass_2d = false;
         if (count_2d >= min_2d_points) {
             pass_2d = (cost_2d < cost_threshold_2d);
         }
