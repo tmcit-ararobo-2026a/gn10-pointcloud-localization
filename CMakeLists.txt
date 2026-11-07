@@ -172,7 +172,10 @@ if(BUILD_TESTING)
   add_test(NAME dynamic_filter COMMAND dynamic_filter_test)
   set_tests_properties(dynamic_filter PROPERTIES SKIP_RETURN_CODE 77)
 
-  add_executable(angle_and_imu_bounds_test tests/test_angle_and_imu_bounds.cpp)
+  add_executable(angle_and_imu_bounds_test
+    tests/test_angle_and_imu_bounds.cpp
+    src/pose_solver.cpp
+  )
   target_include_directories(angle_and_imu_bounds_test PRIVATE include)
   target_link_libraries(angle_and_imu_bounds_test gn10_cuda_lib gn10_esdf_lib CUDA::cudart)
   target_compile_options(angle_and_imu_bounds_test PRIVATE -UNDEBUG)

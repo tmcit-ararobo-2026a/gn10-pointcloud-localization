@@ -125,6 +125,8 @@ struct MatchingParams {
 class PoseSolver
 {
 public:
+    static constexpr int kMaxImuSamples = 2048;
+
     explicit PoseSolver(int max_points = 200000);
     ~PoseSolver();
 

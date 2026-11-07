@@ -19,7 +19,7 @@ PoseSolver::PoseSolver(int max_points) : max_points_(max_points)
 
     cudaMalloc(&d_in_, max_points_ * 3 * sizeof(float));
     cudaMalloc(&d_timed_in_, max_points_ * sizeof(TimedScanPoint));
-    cudaMalloc(&d_imu_samples_, 256 * sizeof(IMUSample));
+    cudaMalloc(&d_imu_samples_, kMaxImuSamples * sizeof(IMUSample));
     cudaMalloc(&d_ground_, max_points_ * 3 * sizeof(float));
     cudaMalloc(&d_obstacle_, max_points_ * 3 * sizeof(float));
     cudaMalloc(&d_ground_count_, sizeof(int));
@@ -207,13 +207,17 @@ bool PoseSolver::processPointCloud(
     );
     cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
 
-    int num_samples = static_cast<int>(imu_samples.size());
-    if (num_samples > 256) {
-        num_samples = 256;
-    }
+    const size_t total_samples = imu_samples.size();
+    const int num_samples =
+        static_cast<int>(std::min(total_samples, static_cast<size_t>(kMaxImuSamples)));
+    const size_t start_offset = total_samples - static_cast<size_t>(num_samples);
     if (num_samples > 0) {
         cudaMemcpyAsync(
-            d_imu_samples_, imu_samples.data(), num_samples * sizeof(IMUSample), cudaMemcpyHostToDevice, stream_
+            d_imu_samples_,
+            imu_samples.data() + start_offset,
+            num_samples * sizeof(IMUSample),
+            cudaMemcpyHostToDevice,
+            stream_
         );
     }
 
@@ -537,13 +541,17 @@ int PoseSolver::prepareObstacleCloud(
     );
     cudaMemcpyAsync(d_transform_, h_transform, 12 * sizeof(float), cudaMemcpyHostToDevice, stream_);
 
-    int num_samples = static_cast<int>(imu_samples.size());
-    if (num_samples > 256) {
-        num_samples = 256;
-    }
+    const size_t total_samples = imu_samples.size();
+    const int num_samples =
+        static_cast<int>(std::min(total_samples, static_cast<size_t>(kMaxImuSamples)));
+    const size_t start_offset = total_samples - static_cast<size_t>(num_samples);
     if (num_samples > 0) {
         cudaMemcpyAsync(
-            d_imu_samples_, imu_samples.data(), num_samples * sizeof(IMUSample), cudaMemcpyHostToDevice, stream_
+            d_imu_samples_,
+            imu_samples.data() + start_offset,
+            num_samples * sizeof(IMUSample),
+            cudaMemcpyHostToDevice,
+            stream_
         );
     }
 

@@ -88,14 +88,16 @@ __device__ inline float evaluateYawDevice(
     const IMUSample& first = samples[0];
     const IMUSample& last = samples[num_samples - 1];
 
-    // 時刻範囲外の線形外挿処理
+    // 時刻範囲外の線形外挿処理 (最大 ±100ms にクランプして暴走を防止)
     if (target_stamp_ns < first.stamp_ns) {
         float time_diff_s = static_cast<float>(target_stamp_ns - first.stamp_ns) * 1e-9f;
+        time_diff_s = fmaxf(-0.10f, fminf(0.10f, time_diff_s));
         float calculated_angle = first.angle + first.rate * time_diff_s;
         return calculated_angle - ref_angle;
     }
     if (target_stamp_ns >= last.stamp_ns) {
         float time_diff_s = static_cast<float>(target_stamp_ns - last.stamp_ns) * 1e-9f;
+        time_diff_s = fmaxf(-0.10f, fminf(0.10f, time_diff_s));
         float calculated_angle = last.angle + last.rate * time_diff_s;
         return calculated_angle - ref_angle;
     }
@@ -183,7 +185,7 @@ __global__ void filterGroundWithDeskewKernel(
     float zb = transform[8] * xs + transform[9] * ys + transform[10] * zs + transform[11];
 
     // 2. IMU およびロボット並進速度に基づく歪み補正 (Deskew)
-    if (deskew.enabled) {
+    if (deskew.enabled && point.stamp_ns != deskew.reference_ns) {
         // IMU サンプル列に基づく相対 Yaw 回転角の補間
         float delta_yaw = evaluateYawDevice(point.stamp_ns, imu_samples, num_imu_samples, deskew.ref_imu_angle);
 
