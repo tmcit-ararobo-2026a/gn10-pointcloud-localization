@@ -75,6 +75,7 @@ def _create_localization_node(context):
     # 3. Sensor integrations
     _override_bool('lidar_2d', 'lidar_2d.enable')
     _override_bool('lidar_2d_deskew', 'lidar_2d.deskew')
+    _override_float('lidar_2d_time_offset_sec', 'lidar_2d.time_offset_sec')
 
     # 4. Initial pose overrides
     _override_bool('initial_local_search', 'initial_pose.use_for_local_search')
@@ -175,6 +176,12 @@ def generate_launch_description():
         description='Enable 2D LiDAR deskew distortion correction (true/false)'
     )
 
+    declare_lidar_2d_time_offset_sec = DeclareLaunchArgument(
+        'lidar_2d_time_offset_sec',
+        default_value='',
+        description='Time offset [s] to add to 2D LiDAR timestamps'
+    )
+
     declare_weight_2d_lidar = DeclareLaunchArgument(
         'weight_2d_lidar',
         default_value='',
@@ -272,6 +279,7 @@ def generate_launch_description():
         declare_dynamic_dist_thresh,
         declare_lidar_2d,
         declare_lidar_2d_deskew,
+        declare_lidar_2d_time_offset_sec,
         declare_weight_2d_lidar,
         declare_lakibeam_tf,
         declare_initial_local_search,

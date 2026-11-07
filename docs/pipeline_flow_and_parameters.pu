@@ -38,7 +38,8 @@ note over Stage2
   **filter_params.max_points** (200000): Capacity limit for GPU allocation
   -- 2D LiDAR --
   **lidar_2d.enable** (true)
-  **lidar_2d.deskew** (true): Angular beam deskew using IMU integration
+  **lidar_2d.deskew** (true): Angular + translational beam deskew & 3D time alignment
+  **lidar_2d.time_offset_sec** (0.0s): Hardware/transport timestamp offset
   **lidar_2d.tf_wait_sec** (0.05s): Transform lookup timeout
   **lidar_2d.frame_id** ("lakibeam_frame"): Fallback sensor frame
 end note
