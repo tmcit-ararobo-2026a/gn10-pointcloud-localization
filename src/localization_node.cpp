@@ -991,10 +991,10 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     // Adaptively expand translational search window up to 1.5x during high-speed movement (>= 2.0
     // m/s)
-    if (velocity_estimation_enable_ && has_velocity_ && !is_lost_) {
+    if (velocity_estimation_enable_ && has_vel_current && !is_lost_) {
         constexpr float HIGH_SPEED_THRESHOLD_MPS = 2.0f;
         constexpr float MAX_XY_EXPANSION_FACTOR  = 1.5f;
-        const float current_speed                = std::hypot(velocity_x_, velocity_y_);
+        const float current_speed                = std::hypot(vx_world_current, vy_world_current);
         if (current_speed >= HIGH_SPEED_THRESHOLD_MPS) {
             const float speed_span =
                 std::max(0.1f, velocity_max_linear_ - HIGH_SPEED_THRESHOLD_MPS);
@@ -1036,6 +1036,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         const bool accepted =
             matched && isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
         if (accepted) {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
             is_lost_          = false;
             lost_frame_count_ = 0;
             matched           = true;
@@ -1077,13 +1078,16 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                            isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
 
         if (global_recovered) {
-            is_lost_          = false;
-            lost_frame_count_ = 0;
-            matched           = true;
-            has_velocity_     = false;
-            velocity_history_.clear();
-            velocity_history_.push_back({reference_stamp, best_pose});
-            last_match_stamp_ = reference_stamp;
+            {
+                std::lock_guard<std::mutex> lock(pose_mutex_);
+                is_lost_          = false;
+                lost_frame_count_ = 0;
+                matched           = true;
+                has_velocity_     = false;
+                velocity_history_.clear();
+                velocity_history_.push_back({reference_stamp, best_pose});
+                last_match_stamp_ = reference_stamp;
+            }
             RCLCPP_INFO(
                 this->get_logger(),
                 "[GlobalSearch] Successfully recovered from lost state. (cost: %.4f, inliers: %d, inlier_cost: %.4f)",
@@ -1118,6 +1122,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             matched && isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
 
         if (match_accepted) {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
             matched           = true;
             lost_frame_count_ = 0;
             is_lost_          = false;
@@ -1160,11 +1165,19 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             last_match_stamp_ = reference_stamp;
         } else {
             matched = false;
-            lost_frame_count_++;
-            if (lost_frame_count_ >= lost_threshold_count_) {
-                is_lost_      = true;
-                has_velocity_ = false;
-                velocity_history_.clear();
+            dynamic_pts.clear();
+            bool became_lost = false;
+            {
+                std::lock_guard<std::mutex> lock(pose_mutex_);
+                lost_frame_count_++;
+                if (lost_frame_count_ >= lost_threshold_count_) {
+                    is_lost_      = true;
+                    has_velocity_ = false;
+                    velocity_history_.clear();
+                    became_lost = true;
+                }
+            }
+            if (became_lost) {
                 RCLCPP_WARN(
                     this->get_logger(),
                     "Localization lost! (best_cost: %.4f, inliers: %d, inlier_cost: %.4f, 3D: %.4f [%d pts, th: %.3f], 2D: %.4f [%d pts, th: %.3f], w_2d: %.2f)",
@@ -1197,9 +1210,14 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     } else {
         // is_lost_ 時でも、IMUが健全かつ直前のマッチから短時間（0.5秒未満）であれば
         // IMU予測姿勢でTFを継続配信し、TF途絶による下流のフリーズやタイムスタンプ不整合を防止する
-        if (imu_initialized_ && last_match_stamp_.nanoseconds() > 0) {
+        int64_t last_match_ns = 0;
+        {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            last_match_ns = last_match_stamp_.nanoseconds();
+        }
+        if (imu_initialized_ && last_match_ns > 0) {
             const double time_since_last_match =
-                (reference_stamp.nanoseconds() - last_match_stamp_.nanoseconds()) * 1e-9;
+                (reference_stamp.nanoseconds() - last_match_ns) * 1e-9;
             if (time_since_last_match > 0.0 && time_since_last_match < 0.5) {
                 publishPoseAndTransform(reference_stamp, search_base_pose, true);
                 tf_published = true;
@@ -1239,6 +1257,20 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             return v;
         };
 
+        float tel_vx      = 0.0f;
+        float tel_vy      = 0.0f;
+        int tel_lost_cnt  = 0;
+        bool tel_is_lost  = false;
+        {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            if (has_velocity_) {
+                tel_vx = velocity_x_;
+                tel_vy = velocity_y_;
+            }
+            tel_lost_cnt = lost_frame_count_;
+            tel_is_lost  = is_lost_;
+        }
+
         telemetry.best_cost   = sanitize_float(best_cost);
         telemetry.cost_3d     = sanitize_float(solver_->lastCost3D());
         telemetry.cost_2d     = sanitize_float(solver_->lastCost2D());
@@ -1253,15 +1285,15 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         telemetry.obstacle_count_2d    = solver_->obstacleCount2D();
         telemetry.obstacle_count_total = total_obs;
 
-        telemetry.linear_speed     = sanitize_float(std::hypot(velocity_x_, velocity_y_));
-        telemetry.velocity_x       = sanitize_float(velocity_x_);
-        telemetry.velocity_y       = sanitize_float(velocity_y_);
+        telemetry.linear_speed     = sanitize_float(std::hypot(tel_vx, tel_vy));
+        telemetry.velocity_x       = sanitize_float(tel_vx);
+        telemetry.velocity_y       = sanitize_float(tel_vy);
         telemetry.search_range_xy  = sanitize_float(active_match_params.range_xy);
         telemetry.search_range_yaw = sanitize_float(active_match_params.range_yaw);
 
-        telemetry.match_accepted   = matched && !is_lost_;
-        telemetry.is_lost          = is_lost_;
-        telemetry.lost_frame_count = lost_frame_count_;
+        telemetry.match_accepted   = matched && !tel_is_lost;
+        telemetry.is_lost          = tel_is_lost;
+        telemetry.lost_frame_count = tel_lost_cnt;
         telemetry.global_recovered = global_recovered;
 
         pub_telemetry_->publish(telemetry);
