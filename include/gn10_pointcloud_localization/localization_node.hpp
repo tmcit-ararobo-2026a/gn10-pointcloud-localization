@@ -10,6 +10,8 @@
 #include <tf2_ros/transform_listener.h>
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <Eigen/Dense>
+#include <atomic>
 #include <memory>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -67,7 +69,7 @@ private:
     );
     void updateLostState(bool matched, float best_cost);
     bool isPoseMatchAccepted(
-        const MatchingParams& params, float best_cost, int inlier_count, float inlier_cost
+        const MatchingParams& params, int inlier_count, float inlier_cost
     ) const;
     void publishPoseAndTransform(
         const rclcpp::Time& stamp, const PoseCandidate& pose, bool is_predicted = false
@@ -114,6 +116,8 @@ private:
     int global_downsample_stride_{2};
     int global_top_k_candidates_{4};
     int lost_threshold_count_{5};
+    double global_search_interval_sec_{0.5};
+    rclcpp::Time last_global_search_stamp_;
     bool publish_tf_{true};
     bool use_fused_prior_{false};
     double prior_max_age_s_{0.25};
@@ -126,10 +130,12 @@ private:
     PoseCandidate last_known_pose_;
     PoseCandidate predicted_pose_;
     rclcpp::Time last_imu_stamp_;
-    bool imu_initialized_{false};
-    bool is_lost_{true};
+    std::atomic<bool> imu_initialized_{false};
+    std::atomic<bool> is_lost_{true};
     int lost_frame_count_{0};
-    float latest_omega_z_{0.0f};
+    std::atomic<float> latest_omega_z_{0.0f};
+    Eigen::Matrix3d R_base_imu_{Eigen::Matrix3d::Identity()};
+    bool imu_tf_initialized_{false};
 
     // Velocity & Motion Prediction
     bool velocity_estimation_enable_{true};
@@ -139,7 +145,7 @@ private:
     float velocity_max_linear_{4.0f};
     float velocity_x_{0.0f};
     float velocity_y_{0.0f};
-    bool has_velocity_{false};
+    std::atomic<bool> has_velocity_{false};
     rclcpp::Time last_match_stamp_;
     YawHistory yaw_history_;
     ScanAccumulator scan_accumulator_;
@@ -164,7 +170,10 @@ private:
     rclcpp::Time latest_2d_stamp_;
 
     // Callback Groups for Thread Isolation
-    rclcpp::CallbackGroup::SharedPtr cb_group_localization_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_cloud_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_imu_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_2d_lidar_;
+    rclcpp::CallbackGroup::SharedPtr cb_group_prior_;
     rclcpp::CallbackGroup::SharedPtr cb_group_timers_;
 
     // ROS 2 Interfaces

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iostream>
 #include <vector>
+#include <rclcpp/rclcpp.hpp>
 
 #include "gn10_pointcloud_localization/cuda/esdf_matcher.cuh"
 #include "gn10_pointcloud_localization/esdf_map.hpp"
@@ -212,18 +213,33 @@ void testESDFMatcherWeightedResidual()
 
     // Test strict inlier acceptance criteria (Task 1)
     MatchingParams accept_params;
-    accept_params.cost_threshold = 0.165f;
+    accept_params.cost_threshold = 0.185f;
+    accept_params.cost_threshold_3d = 0.185f;
+    accept_params.cost_threshold_2d = 0.080f;
     accept_params.min_inliers = 60;
     accept_params.inlier_cost_thresh = 0.05f;
     accept_params.min_inlier_ratio = 0.35f;
     accept_params.max_inlier_accept_cost = 0.22f;
 
-    // Rejected when only 60 out of 1000 points are inliers (ratio = 0.06 < 0.35)
-    assert(!accept_params.isMatchAccepted(0.18f, 60, 0.03f, 1000));
+    // Test legacy overload:
+    // Rejected when only 60 out of 1000 points are inliers (ratio = 0.06 < 0.35) and cost >= threshold (0.19 >= 0.185)
+    assert(!accept_params.isMatchAccepted(0.19f, 60, 0.03f, 1000));
     // Rejected when best_cost >= max_inlier_accept_cost (0.25 >= 0.22)
     assert(!accept_params.isMatchAccepted(0.25f, 500, 0.03f, 1000));
     // Accepted when inlier count, inlier cost, inlier ratio (>= 0.35), and max_inlier_accept_cost (< 0.22) all pass
     assert(accept_params.isMatchAccepted(0.19f, 400, 0.03f, 1000));
+
+    // Test independent 3D and 2D thresholds:
+    // Case A: 3D cost passes (< 0.185), 2D cost passes (< 0.080) -> Accepted
+    assert(accept_params.isMatchAccepted(0.175f, 0.020f, 500, 100, 200, 0.03f));
+    // Case B: 3D cost passes (< 0.185), 2D is absent (count < 30) -> Accepted (3D alone passes)
+    assert(accept_params.isMatchAccepted(0.175f, 0.0f, 500, 0, 200, 0.03f));
+    // Case C: 3D cost fails (> 0.185 and inliers low), 2D is good (0.020) -> Rejected (2D cannot mask bad 3D)
+    assert(!accept_params.isMatchAccepted(0.240f, 0.020f, 500, 100, 10, 0.07f));
+    // Case D: 3D cost fails (> 0.185) but 3D inlier criteria pass, 2D passes -> Accepted
+    assert(accept_params.isMatchAccepted(0.195f, 0.020f, 500, 100, 200, 0.03f));
+    // Case E: 3D cost passes (< 0.185) but 2D cost exceeds threshold (> 0.080) -> Rejected
+    assert(!accept_params.isMatchAccepted(0.175f, 0.120f, 500, 100, 200, 0.03f));
 
     cudaFree(d_cloud);
     cudaStreamDestroy(stream);
@@ -232,8 +248,34 @@ void testESDFMatcherWeightedResidual()
     std::cout << "[Test] testESDFMatcherWeightedResidual PASSED!" << std::endl;
 }
 
+void testTimeSourceSafety()
+{
+    std::cout << "[Test] testTimeSourceSafety starting..." << std::endl;
+
+    // Simulate RCL_ROS_TIME (source 1) vs RCL_SYSTEM_TIME (source 2)
+    rclcpp::Time ros_time(1000000000LL, RCL_ROS_TIME);
+    rclcpp::Time sys_time_uninit(0LL, RCL_SYSTEM_TIME);
+
+    // Standard ROS 2 time subtraction throws runtime_error across different time sources
+    bool threw_exception = false;
+    try {
+        [[maybe_unused]] auto dt = (ros_time - sys_time_uninit).seconds();
+    } catch (const std::runtime_error&) {
+        threw_exception = true;
+    }
+    assert(threw_exception);
+
+    // Guarding with nanoseconds() > 0 and computing with nanoseconds arithmetic never throws
+    assert(sys_time_uninit.nanoseconds() == 0);
+    double safe_dt = (ros_time.nanoseconds() - sys_time_uninit.nanoseconds()) * 1e-9;
+    assert(std::abs(safe_dt - 1.0) < 1e-6);
+
+    std::cout << "[Test] testTimeSourceSafety PASSED!" << std::endl;
+}
+
 int main()
 {
+    testTimeSourceSafety();
     testFoVWeightingLogic();
 
     int devices = 0;

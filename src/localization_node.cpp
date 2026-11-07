@@ -13,13 +13,19 @@
 #include <filesystem>
 #include <limits>
 #include <random>
-#include <unordered_set>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <unordered_set>
 
 LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
 {
+    last_match_stamp_         = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    latest_2d_stamp_          = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    prior_stamp_              = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    last_imu_stamp_           = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    last_global_search_stamp_ = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+
     declareAndGetParameters();
 
     solver_ =
@@ -114,7 +120,9 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.fine_refine", true);
     this->declare_parameter("matching_params.fine_refine_levels", 2);
     this->declare_parameter("matching_params.max_dist_thresh", 0.20);
-    this->declare_parameter("matching_params.cost_threshold", 0.165);
+    this->declare_parameter("matching_params.cost_threshold", 0.185);
+    this->declare_parameter("matching_params.cost_threshold_3d", 0.185);
+    this->declare_parameter("matching_params.cost_threshold_2d", 0.080);
     this->declare_parameter("matching_params.dynamic_dist_thresh", 0.15);
     this->declare_parameter("matching_params.field_min_x", -5.5);
     this->declare_parameter("matching_params.field_max_x", 5.5);
@@ -123,8 +131,8 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.use_map_bounds", true);
     this->declare_parameter("matching_params.inlier_dist_thresh", 0.08);
     this->declare_parameter("matching_params.min_inliers", 60);
-    this->declare_parameter("matching_params.inlier_cost_thresh", 0.05);
-    this->declare_parameter("matching_params.min_inlier_ratio", 0.35);
+    this->declare_parameter("matching_params.inlier_cost_thresh", 0.040);
+    this->declare_parameter("matching_params.min_inlier_ratio", 0.30);
     this->declare_parameter("matching_params.max_inlier_accept_cost", 0.22);
     this->declare_parameter("matching_params.weight_2d_lidar", 0.40);
     this->declare_parameter("matching_params.min_2d_points", 30);
@@ -158,6 +166,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("global_search.downsample_stride", 2);
     this->declare_parameter("global_search.top_k_candidates", 4);
     this->declare_parameter("global_search.lost_count_thresh", 5);
+    this->declare_parameter("global_search.interval_sec", 0.5);
 
     this->declare_parameter("initial_pose.x", -4.0);
     this->declare_parameter("initial_pose.y", -4.0);
@@ -199,6 +208,13 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("matching_params.max_dist_thresh").as_double());
     match_params_.cost_threshold =
         static_cast<float>(this->get_parameter("matching_params.cost_threshold").as_double());
+    match_params_.cost_threshold_3d =
+        static_cast<float>(this->get_parameter("matching_params.cost_threshold_3d").as_double());
+    match_params_.cost_threshold_2d =
+        static_cast<float>(this->get_parameter("matching_params.cost_threshold_2d").as_double());
+    if (match_params_.cost_threshold != 0.185f && match_params_.cost_threshold_3d == 0.185f) {
+        match_params_.cost_threshold_3d = match_params_.cost_threshold;
+    }
     match_params_.dynamic_dist_thresh =
         static_cast<float>(this->get_parameter("matching_params.dynamic_dist_thresh").as_double());
     match_params_.field_min_x =
@@ -222,18 +238,26 @@ void LocalizationNode::declareAndGetParameters()
     match_params_.weight_2d_lidar =
         static_cast<float>(this->get_parameter("matching_params.weight_2d_lidar").as_double());
     match_params_.min_2d_points = this->get_parameter("matching_params.min_2d_points").as_int();
-    match_params_.target_2d_points = this->get_parameter("matching_params.target_2d_points").as_int();
+    match_params_.target_2d_points =
+        this->get_parameter("matching_params.target_2d_points").as_int();
     match_params_.min_3d_points = this->get_parameter("matching_params.min_3d_points").as_int();
     dynamic_yaw_expansion_ = this->get_parameter("matching_params.dynamic_yaw_expansion").as_bool();
-    dynamic_yaw_omega_thresh_ = static_cast<float>(this->get_parameter("matching_params.dynamic_yaw_omega_thresh").as_double());
-    dynamic_yaw_factor_ = static_cast<float>(this->get_parameter("matching_params.dynamic_yaw_factor").as_double());
-    dynamic_yaw_max_range_ = static_cast<float>(this->get_parameter("matching_params.dynamic_yaw_max_range").as_double());
+    dynamic_yaw_omega_thresh_ = static_cast<float>(
+        this->get_parameter("matching_params.dynamic_yaw_omega_thresh").as_double()
+    );
+    dynamic_yaw_factor_ =
+        static_cast<float>(this->get_parameter("matching_params.dynamic_yaw_factor").as_double());
+    dynamic_yaw_max_range_ = static_cast<float>(
+        this->get_parameter("matching_params.dynamic_yaw_max_range").as_double()
+    );
 
     velocity_estimation_enable_ = this->get_parameter("velocity_estimation.enable").as_bool();
-    velocity_window_sec_ = this->get_parameter("velocity_estimation.window_sec").as_double();
-    velocity_min_dt_sec_ = this->get_parameter("velocity_estimation.min_dt_sec").as_double();
-    velocity_max_dt_sec_ = this->get_parameter("velocity_estimation.max_dt_sec").as_double();
-    velocity_max_linear_ = static_cast<float>(this->get_parameter("velocity_estimation.max_linear_velocity").as_double());
+    velocity_window_sec_        = this->get_parameter("velocity_estimation.window_sec").as_double();
+    velocity_min_dt_sec_        = this->get_parameter("velocity_estimation.min_dt_sec").as_double();
+    velocity_max_dt_sec_        = this->get_parameter("velocity_estimation.max_dt_sec").as_double();
+    velocity_max_linear_        = static_cast<float>(
+        this->get_parameter("velocity_estimation.max_linear_velocity").as_double()
+    );
 
     use_2d_lidar_         = this->get_parameter("lidar_2d.enable").as_bool();
     use_2d_lidar_deskew_  = this->get_parameter("lidar_2d.deskew").as_bool();
@@ -262,6 +286,8 @@ void LocalizationNode::declareAndGetParameters()
         1, static_cast<int>(this->get_parameter("global_search.top_k_candidates").as_int())
     );
     lost_threshold_count_ = this->get_parameter("global_search.lost_count_thresh").as_int();
+    global_search_interval_sec_ =
+        std::max(0.1, this->get_parameter("global_search.interval_sec").as_double());
     publish_tf_           = this->get_parameter("publish_tf").as_bool();
     topic_telemetry_      = this->get_parameter("topics.output_telemetry").as_string();
     telemetry_enable_     = this->get_parameter("telemetry.enable").as_bool();
@@ -321,16 +347,34 @@ void LocalizationNode::declareAndGetParameters()
 
     RCLCPP_INFO(
         this->get_logger(),
-        "Parameters initialized: 3D matching (xy_range=%.2fm, yaw_range=%.2frad, cost_thresh=%.3f, min_3d_pts=%d), "
+        "Parameters initialized: 3D matching (xy_range=%.2fm, yaw_range=%.2frad, cost_th_3d=%.3f, cost_th_2d=%.3f, min_3d_pts=%d), "
         "2D LiDAR (enable=%s, deskew=%s, weight=%.2f, min_2d_pts=%d, tf_wait=%.3fs), "
         "Dynamic yaw expansion (enable=%s, omega_thresh=%.2frad/s, factor=%.2fs, max=%.2frad), "
         "Velocity estimation (enable=%s, window=%.2fs, min_dt=%.2fs, max_dt=%.2fs, max_v=%.1fm/s), "
         "Global search (step_xy=%.2fm, step_yaw=%.2frad, downsample=%d, lost_thresh=%d)",
-        match_params_.range_xy, match_params_.range_yaw, match_params_.cost_threshold, match_params_.min_3d_points,
-        use_2d_lidar_ ? "true" : "false", use_2d_lidar_deskew_ ? "true" : "false", match_params_.weight_2d_lidar, match_params_.min_2d_points, lidar_2d_tf_wait_sec_,
-        dynamic_yaw_expansion_ ? "true" : "false", dynamic_yaw_omega_thresh_, dynamic_yaw_factor_, dynamic_yaw_max_range_,
-        velocity_estimation_enable_ ? "true" : "false", velocity_window_sec_, velocity_min_dt_sec_, velocity_max_dt_sec_, velocity_max_linear_,
-        global_step_xy_, global_step_yaw_, global_downsample_stride_, lost_threshold_count_
+        match_params_.range_xy,
+        match_params_.range_yaw,
+        match_params_.cost_threshold_3d,
+        match_params_.cost_threshold_2d,
+        match_params_.min_3d_points,
+        use_2d_lidar_ ? "true" : "false",
+        use_2d_lidar_deskew_ ? "true" : "false",
+        match_params_.weight_2d_lidar,
+        match_params_.min_2d_points,
+        lidar_2d_tf_wait_sec_,
+        dynamic_yaw_expansion_ ? "true" : "false",
+        dynamic_yaw_omega_thresh_,
+        dynamic_yaw_factor_,
+        dynamic_yaw_max_range_,
+        velocity_estimation_enable_ ? "true" : "false",
+        velocity_window_sec_,
+        velocity_min_dt_sec_,
+        velocity_max_dt_sec_,
+        velocity_max_linear_,
+        global_step_xy_,
+        global_step_yaw_,
+        global_downsample_stride_,
+        lost_threshold_count_
     );
 }
 
@@ -359,7 +403,9 @@ void LocalizationNode::setupMapData()
 
         // 拡張子から map_source_type を自動推論
         std::string ext = p.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return std::tolower(c); });
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+            return std::tolower(c);
+        });
         if (ext == ".pcd" && map_source != "pcd") {
             map_source = "pcd";
         } else if (ext == ".esdf" && map_source != "esdf") {
@@ -549,14 +595,17 @@ void LocalizationNode::setupROSInterfaces()
     tf_listener_    = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-    cb_group_localization_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-    cb_group_timers_       = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_cloud_    = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_imu_      = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_2d_lidar_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_prior_    = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    cb_group_timers_   = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
-    rclcpp::SubscriptionOptions loc_sub_opts;
-    loc_sub_opts.callback_group = cb_group_localization_;
+    rclcpp::SubscriptionOptions cloud_sub_opts;
+    cloud_sub_opts.callback_group = cb_group_cloud_;
 
     std::string topic_cloud = this->get_parameter("topics.input_cloud").as_string();
-    sub_cloud_filter_.subscribe(this, topic_cloud, rmw_qos_profile_sensor_data, loc_sub_opts);
+    sub_cloud_filter_.subscribe(this, topic_cloud, rmw_qos_profile_sensor_data, cloud_sub_opts);
     tf_filter_ = std::make_shared<tf2_ros::MessageFilter<sensor_msgs::msg::PointCloud2>>(
         sub_cloud_filter_,
         *tf_buffer_,
@@ -568,19 +617,24 @@ void LocalizationNode::setupROSInterfaces()
     );
     tf_filter_->registerCallback(&LocalizationNode::cloudCallback, this);
 
+    rclcpp::SubscriptionOptions imu_sub_opts;
+    imu_sub_opts.callback_group = cb_group_imu_;
+
     std::string topic_imu = this->get_parameter("topics.input_imu").as_string();
     sub_imu_              = this->create_subscription<sensor_msgs::msg::Imu>(
         topic_imu,
         rclcpp::SensorDataQoS().keep_last(200),
         std::bind(&LocalizationNode::imuCallback, this, std::placeholders::_1),
-        loc_sub_opts
+        imu_sub_opts
     );
     if (use_fused_prior_) {
+        rclcpp::SubscriptionOptions prior_sub_opts;
+        prior_sub_opts.callback_group = cb_group_prior_;
         sub_fused_prior_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
             this->get_parameter("topics.fused_prior").as_string(),
             20,
             std::bind(&LocalizationNode::fusedPriorCallback, this, std::placeholders::_1),
-            loc_sub_opts
+            prior_sub_opts
         );
     }
 
@@ -608,22 +662,26 @@ void LocalizationNode::setupROSInterfaces()
         );
     }
     if (telemetry_enable_) {
-        pub_telemetry_ = this->create_publisher<gn10_pointcloud_localization::msg::LocalizationTelemetry>(
-            topic_telemetry_, 10
+        pub_telemetry_ =
+            this->create_publisher<gn10_pointcloud_localization::msg::LocalizationTelemetry>(
+                topic_telemetry_, 10
+            );
+        RCLCPP_INFO(
+            this->get_logger(), "Publishing localization telemetry on: %s", topic_telemetry_.c_str()
         );
-        RCLCPP_INFO(this->get_logger(), "Publishing localization telemetry on: %s", topic_telemetry_.c_str());
     }
 
     if (use_2d_lidar_) {
-        sub_2d_lidar_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
+        rclcpp::SubscriptionOptions lidar_2d_sub_opts;
+        lidar_2d_sub_opts.callback_group = cb_group_2d_lidar_;
+        sub_2d_lidar_                    = this->create_subscription<sensor_msgs::msg::LaserScan>(
             topic_2d_lidar_,
             rclcpp::SensorDataQoS(),
             std::bind(&LocalizationNode::scan2dCallback, this, std::placeholders::_1),
-            loc_sub_opts
+            lidar_2d_sub_opts
         );
-        pub_2d_deskewed_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-            topic_2d_deskewed_, 10
-        );
+        pub_2d_deskewed_ =
+            this->create_publisher<sensor_msgs::msg::PointCloud2>(topic_2d_deskewed_, 10);
         RCLCPP_INFO(
             this->get_logger(),
             "Subscribed to 2D LiDAR on topic: %s (deskew: %s, debug_pub: %s)",
@@ -634,8 +692,9 @@ void LocalizationNode::setupROSInterfaces()
     }
 
     using namespace std::chrono_literals;
-    map_timer_ =
-        this->create_wall_timer(1s, std::bind(&LocalizationNode::publishFieldMapMarkers, this), cb_group_timers_);
+    map_timer_ = this->create_wall_timer(
+        1s, std::bind(&LocalizationNode::publishFieldMapMarkers, this), cb_group_timers_
+    );
 
     param_callback_handle_ = this->add_on_set_parameters_callback(
         std::bind(&LocalizationNode::onParametersChange, this, std::placeholders::_1)
@@ -644,7 +703,8 @@ void LocalizationNode::setupROSInterfaces()
 
 void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
 {
-    const std::string frame_id = !msg->header.frame_id.empty() ? msg->header.frame_id : lidar_2d_frame_;
+    const std::string frame_id =
+        !msg->header.frame_id.empty() ? msg->header.frame_id : lidar_2d_frame_;
     geometry_msgs::msg::TransformStamped tf_stamped;
     try {
         tf_stamped = tf_buffer_->lookupTransform(
@@ -655,8 +715,7 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
         );
     } catch (const tf2::TransformException&) {
         try {
-            tf_stamped =
-                tf_buffer_->lookupTransform(base_frame_, frame_id, tf2::TimePointZero);
+            tf_stamped = tf_buffer_->lookupTransform(base_frame_, frame_id, tf2::TimePointZero);
         } catch (const tf2::TransformException& ex) {
             RCLCPP_WARN_THROTTLE(
                 this->get_logger(),
@@ -700,7 +759,7 @@ void LocalizationNode::scan2dCallback(const sensor_msgs::msg::LaserScan::SharedP
     deskew_cfg.range_max_limit = active_filter.range_max;
     deskew_cfg.robot_radius    = active_filter.robot_radius;
 
-    int64_t ref_stamp_ns = 0;
+    int64_t ref_stamp_ns      = 0;
     std::vector<float> points = gn10_pointcloud_localization::deskewLaserScan(
         *msg, tx, ty, tz, tf_yaw, imu_snapshot, deskew_cfg, ref_stamp_ns
     );
@@ -732,7 +791,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     }
 
     int64_t reference_ns = 0;
-    auto timed_points = extractRawTimedPoints(*msg, reference_ns);
+    auto timed_points    = extractRawTimedPoints(*msg, reference_ns);
     if (timed_points.empty()) {
         publishLocalizationSuccess(false);
         return;
@@ -740,11 +799,14 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     const rclcpp::Time reference_stamp(reference_ns, this->get_clock()->get_clock_type());
     if (scan_accumulator_.backwards(reference_ns)) {
         scan_accumulator_.clear();
-        yaw_history_.clear();
         velocity_history_.clear();
-        imu_initialized_ = false;
-        has_velocity_    = false;
-        is_lost_         = true;
+        {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            yaw_history_.clear();
+            imu_initialized_ = false;
+            has_velocity_    = false;
+            is_lost_         = true;
+        }
     }
     if (!scan_accumulator_.append(timed_points, reference_ns)) {
         publishLocalizationSuccess(false);
@@ -759,17 +821,18 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     std::vector<float> ground_pts, obstacle_pts, dynamic_pts;
     PoseCandidate best_pose;
-    float best_cost      = std::numeric_limits<float>::infinity();
-    bool matched         = false;
+    float best_cost       = std::numeric_limits<float>::infinity();
+    bool matched          = false;
     bool global_recovered = false;
 
     // 2D LiDAR (Lakibeam 1) の点群を取得
     std::vector<float> extra_2d_points;
     if (use_2d_lidar_) {
         std::lock_guard<std::mutex> lock(lidar_2d_mutex_);
-        if (!latest_2d_points_.empty()) {
-            const double age = (reference_stamp - latest_2d_stamp_).seconds();
-            if (std::abs(age) < 0.20) {
+        if (!latest_2d_points_.empty() && latest_2d_stamp_.nanoseconds() > 0) {
+            const double age =
+                std::abs((reference_stamp.nanoseconds() - latest_2d_stamp_.nanoseconds()) * 1e-9);
+            if (age < 0.20) {
                 extra_2d_points = latest_2d_points_;
             }
         }
@@ -779,38 +842,44 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     PoseCandidate search_base_pose;
     bool has_fresh_prior  = false;
     float current_omega_z = 0.0f;
+    YawHistory imu_snapshot;
     {
         std::lock_guard<std::mutex> lock(pose_mutex_);
         search_base_pose = last_known_pose_;
+        imu_snapshot     = yaw_history_;
         double rotation  = 0;
         if (imu_initialized_ && last_match_stamp_.nanoseconds() > 0) {
-            const double dt = (reference_stamp - last_match_stamp_).seconds();
+            const double dt =
+                (reference_stamp.nanoseconds() - last_match_stamp_.nanoseconds()) * 1e-9;
             if (dt > 0.0 && dt < 1.0 &&
-                yaw_history_.delta(last_match_stamp_.nanoseconds(), reference_ns, rotation)) {
+                imu_snapshot.delta(last_match_stamp_.nanoseconds(), reference_ns, rotation)) {
                 search_base_pose.yaw += float(rotation);
             }
         }
         search_base_pose.yaw = normalizeAngle(search_base_pose.yaw);
         predicted_pose_      = search_base_pose;
-        current_omega_z      = latest_omega_z_;
+        current_omega_z      = latest_omega_z_.load();
 
-        if (velocity_estimation_enable_ && has_velocity_ && !is_lost_) {
-            const double dt = (reference_stamp - last_match_stamp_).seconds();
+        if (velocity_estimation_enable_ && has_velocity_ && !is_lost_ &&
+            last_match_stamp_.nanoseconds() > 0) {
+            const double dt =
+                (reference_stamp.nanoseconds() - last_match_stamp_.nanoseconds()) * 1e-9;
             if (dt > 0.0 && dt < velocity_max_dt_sec_) {
                 search_base_pose.x = last_known_pose_.x + velocity_x_ * static_cast<float>(dt);
                 search_base_pose.y = last_known_pose_.y + velocity_y_ * static_cast<float>(dt);
             }
         }
-        if (use_fused_prior_ && prior_received_) {
-            const double age = (reference_stamp - prior_stamp_).seconds();
-            if (std::abs(age) <= prior_max_age_s_) {
+        if (use_fused_prior_ && prior_received_ && prior_stamp_.nanoseconds() > 0) {
+            const double age =
+                std::abs((reference_stamp.nanoseconds() - prior_stamp_.nanoseconds()) * 1e-9);
+            if (age <= prior_max_age_s_) {
                 search_base_pose = fused_prior_;
                 has_fresh_prior  = true;
             }
         }
     }
 
-    bool fully_deskewed = scan_accumulator_.is_fully_covered(reference_ns, yaw_history_);
+    bool fully_deskewed = scan_accumulator_.is_fully_covered(reference_ns, imu_snapshot);
     if (!fully_deskewed) {
         RCLCPP_WARN_THROTTLE(
             this->get_logger(),
@@ -822,7 +891,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
     // GPU Deskew 用パラメータの構築
     DeskewParams deskew_params;
-    deskew_params.enabled = true;
+    deskew_params.enabled      = true;
     deskew_params.reference_ns = reference_ns;
     if (fully_deskewed) {
         deskew_params.min_stamp_ns = 0;
@@ -838,14 +907,17 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         deskew_params.vy_world = 0.0f;
     }
     double ref_angle = 0.0;
-    yaw_history_.get_angle_at(reference_ns, ref_angle);
+    imu_snapshot.get_angle_at(reference_ns, ref_angle);
     deskew_params.ref_imu_angle = static_cast<float>(ref_angle);
 
     std::vector<IMUSample> imu_samples;
-    yaw_history_.get_imu_samples(imu_samples);
+    imu_snapshot.get_imu_samples(imu_samples);
 
-    size_t max_points_param = static_cast<size_t>(this->get_parameter("filter_params.max_points").as_int());
-    int stride = static_cast<int>(std::max(size_t(1), (accumulated_points.size() + max_points_param - 1) / max_points_param));
+    size_t max_points_param =
+        static_cast<size_t>(this->get_parameter("filter_params.max_points").as_int());
+    int stride = static_cast<int>(
+        std::max(size_t(1), (accumulated_points.size() + max_points_param - 1) / max_points_param)
+    );
 
     auto t_deskew_end = std::chrono::high_resolution_clock::now();
     double time_deskew_ms =
@@ -860,32 +932,30 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     }
     const float abs_omega = std::abs(current_omega_z);
     if (dynamic_yaw_expansion_ && abs_omega > dynamic_yaw_omega_thresh_) {
-        const float max_yaw_range =
-            std::max(active_match_params.range_yaw, dynamic_yaw_max_range_);
+        const float max_yaw_range = std::max(active_match_params.range_yaw, dynamic_yaw_max_range_);
         active_match_params.range_yaw = std::min(
-            max_yaw_range,
-            std::max(active_match_params.range_yaw, abs_omega * dynamic_yaw_factor_)
+            max_yaw_range, std::max(active_match_params.range_yaw, abs_omega * dynamic_yaw_factor_)
         );
     }
 
-    // Adaptively expand translational search window up to 1.5x during high-speed movement (>= 2.0 m/s)
+    // Adaptively expand translational search window up to 1.5x during high-speed movement (>= 2.0
+    // m/s)
     if (velocity_estimation_enable_ && has_velocity_ && !is_lost_) {
         constexpr float HIGH_SPEED_THRESHOLD_MPS = 2.0f;
         constexpr float MAX_XY_EXPANSION_FACTOR  = 1.5f;
-        const float current_speed = std::hypot(velocity_x_, velocity_y_);
+        const float current_speed                = std::hypot(velocity_x_, velocity_y_);
         if (current_speed >= HIGH_SPEED_THRESHOLD_MPS) {
             const float speed_span =
                 std::max(0.1f, velocity_max_linear_ - HIGH_SPEED_THRESHOLD_MPS);
             const float speed_ratio =
                 std::min(1.0f, (current_speed - HIGH_SPEED_THRESHOLD_MPS) / speed_span);
-            const float scale_xy =
-                std::min(MAX_XY_EXPANSION_FACTOR, 1.0f + 0.5f * speed_ratio);
+            const float scale_xy = std::min(MAX_XY_EXPANSION_FACTOR, 1.0f + 0.5f * speed_ratio);
             active_match_params.range_xy *= scale_xy;
         }
     }
 
-    int inlier_count  = -1;
-    float inlier_cost = std::numeric_limits<float>::infinity();
+    int inlier_count        = -1;
+    float inlier_cost       = std::numeric_limits<float>::infinity();
     const bool need_dynamic = pub_dynamic_->get_subscription_count() > 0;
 
     const std::vector<float>* extra_pts_ptr = nullptr;
@@ -913,7 +983,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             need_dynamic
         );
         const bool accepted =
-            matched && isPoseMatchAccepted(active_match_params, best_cost, inlier_count, inlier_cost);
+            matched && isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
         if (accepted) {
             is_lost_          = false;
             lost_frame_count_ = 0;
@@ -925,8 +995,14 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     }
 
-    if (is_lost_ && !matched) {
-        float current_prior_yaw = search_base_pose.yaw;
+    const bool can_run_global_search =
+        (last_global_search_stamp_.nanoseconds() == 0) ||
+        ((reference_stamp.nanoseconds() - last_global_search_stamp_.nanoseconds()) * 1e-9 >=
+         global_search_interval_sec_);
+
+    if (is_lost_ && !matched && can_run_global_search) {
+        last_global_search_stamp_ = reference_stamp;
+        float current_prior_yaw   = search_base_pose.yaw;
 
         best_pose = global_searcher_->search(
             *solver_,
@@ -945,8 +1021,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             extra_pts_ptr
         );
 
-        global_recovered =
-            isPoseMatchAccepted(active_match_params, best_cost, inlier_count, inlier_cost);
+        global_recovered = std::isfinite(best_cost) &&
+                           (best_cost < std::numeric_limits<float>::max() / 2.0f) &&
+                           isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
 
         if (global_recovered) {
             is_lost_          = false;
@@ -987,7 +1064,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         // Accept when total cost is below cost_threshold, OR when inlier count, inlier cost,
         // inlier ratio against total obstacles, and upper total cost guard are all satisfied.
         const bool match_accepted =
-            matched && isPoseMatchAccepted(active_match_params, best_cost, inlier_count, inlier_cost);
+            matched && isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
 
         if (match_accepted) {
             matched           = true;
@@ -999,22 +1076,26 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             if (velocity_estimation_enable_) {
                 velocity_history_.push_back({reference_stamp, best_pose});
                 while (velocity_history_.size() > 2 &&
-                       (reference_stamp - velocity_history_[1].stamp).seconds() > velocity_window_sec_) {
+                       (reference_stamp.nanoseconds() - velocity_history_[1].stamp.nanoseconds()) *
+                               1e-9 >
+                           velocity_window_sec_) {
                     velocity_history_.pop_front();
                 }
                 const auto& oldest = velocity_history_.front();
-                const double dt    = (reference_stamp - oldest.stamp).seconds();
+                const double dt =
+                    (reference_stamp.nanoseconds() - oldest.stamp.nanoseconds()) * 1e-9;
                 if (dt >= velocity_min_dt_sec_ && dt < velocity_max_dt_sec_) {
                     const float vx = (best_pose.x - oldest.pose.x) / float(dt);
                     const float vy = (best_pose.y - oldest.pose.y) / float(dt);
                     if (std::hypot(vx, vy) < velocity_max_linear_) {
-                        // Apply exponential moving average (EMA) to suppress single-frame velocity spikes
+                        // Apply exponential moving average (EMA) to suppress single-frame velocity
+                        // spikes
                         constexpr float VELOCITY_EMA_ALPHA = 0.6f;
                         if (has_velocity_) {
-                            velocity_x_ = VELOCITY_EMA_ALPHA * vx +
-                                          (1.0f - VELOCITY_EMA_ALPHA) * velocity_x_;
-                            velocity_y_ = VELOCITY_EMA_ALPHA * vy +
-                                          (1.0f - VELOCITY_EMA_ALPHA) * velocity_y_;
+                            velocity_x_ =
+                                VELOCITY_EMA_ALPHA * vx + (1.0f - VELOCITY_EMA_ALPHA) * velocity_x_;
+                            velocity_y_ =
+                                VELOCITY_EMA_ALPHA * vy + (1.0f - VELOCITY_EMA_ALPHA) * velocity_y_;
                         } else {
                             velocity_x_   = vx;
                             velocity_y_   = vy;
@@ -1035,14 +1116,16 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                 velocity_history_.clear();
                 RCLCPP_WARN(
                     this->get_logger(),
-                    "Localization lost! (best_cost: %.4f, inliers: %d, inlier_cost: %.4f, 3D: %.4f [%d pts], 2D: %.4f [%d pts], w_2d: %.2f)",
+                    "Localization lost! (best_cost: %.4f, inliers: %d, inlier_cost: %.4f, 3D: %.4f [%d pts, th: %.3f], 2D: %.4f [%d pts, th: %.3f], w_2d: %.2f)",
                     best_cost,
                     inlier_count,
                     inlier_cost,
                     solver_->lastCost3D(),
                     solver_->obstacleCount3D(),
+                    active_match_params.cost_threshold_3d,
                     solver_->lastCost2D(),
                     solver_->obstacleCount2D(),
+                    active_match_params.cost_threshold_2d,
                     solver_->lastWeight2D()
                 );
             }
@@ -1063,10 +1146,13 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     } else {
         // is_lost_ 時でも、IMUが健全かつ直前のマッチから短時間（0.5秒未満）であれば
         // IMU予測姿勢でTFを継続配信し、TF途絶による下流のフリーズやタイムスタンプ不整合を防止する
-        const double time_since_last_match = (reference_stamp - last_match_stamp_).seconds();
-        if (imu_initialized_ && time_since_last_match > 0.0 && time_since_last_match < 0.5) {
-            publishPoseAndTransform(reference_stamp, search_base_pose, true);
-            tf_published = true;
+        if (imu_initialized_ && last_match_stamp_.nanoseconds() > 0) {
+            const double time_since_last_match =
+                (reference_stamp.nanoseconds() - last_match_stamp_.nanoseconds()) * 1e-9;
+            if (time_since_last_match > 0.0 && time_since_last_match < 0.5) {
+                publishPoseAndTransform(reference_stamp, search_base_pose, true);
+                tf_published = true;
+            }
         }
     }
     publishLocalizationSuccess(matched && !is_lost_);
@@ -1110,17 +1196,16 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
         telemetry.inlier_count = inlier_count;
         const int total_obs    = solver_->obstacleCount();
-        telemetry.inlier_ratio = total_obs > 0
-            ? static_cast<float>(inlier_count) / static_cast<float>(total_obs)
-            : 0.0f;
+        telemetry.inlier_ratio =
+            total_obs > 0 ? static_cast<float>(inlier_count) / static_cast<float>(total_obs) : 0.0f;
         telemetry.obstacle_count_3d    = solver_->obstacleCount3D();
         telemetry.obstacle_count_2d    = solver_->obstacleCount2D();
         telemetry.obstacle_count_total = total_obs;
 
-        telemetry.linear_speed    = sanitize_float(std::hypot(velocity_x_, velocity_y_));
-        telemetry.velocity_x      = sanitize_float(velocity_x_);
-        telemetry.velocity_y      = sanitize_float(velocity_y_);
-        telemetry.search_range_xy = sanitize_float(active_match_params.range_xy);
+        telemetry.linear_speed     = sanitize_float(std::hypot(velocity_x_, velocity_y_));
+        telemetry.velocity_x       = sanitize_float(velocity_x_);
+        telemetry.velocity_y       = sanitize_float(velocity_y_);
+        telemetry.search_range_xy  = sanitize_float(active_match_params.range_xy);
         telemetry.search_range_yaw = sanitize_float(active_match_params.range_yaw);
 
         telemetry.match_accepted   = matched && !is_lost_;
@@ -1177,16 +1262,13 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
     std::lock_guard<std::mutex> lock(pose_mutex_);
 
-    static Eigen::Matrix3d R_base_imu = Eigen::Matrix3d::Identity();
-    static bool tf_initialized        = false;
-
-    if (!tf_initialized) {
+    if (!imu_tf_initialized_) {
         try {
             geometry_msgs::msg::TransformStamped transform_stamped =
                 tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id, tf2::TimePointZero);
             const Eigen::Affine3d eigen_tf = tf2::transformToEigen(transform_stamped);
-            R_base_imu                     = eigen_tf.rotation();
-            tf_initialized                 = true;
+            R_base_imu_                    = eigen_tf.rotation();
+            imu_tf_initialized_            = true;
         } catch (const tf2::TransformException&) {
             return;
         }
@@ -1195,18 +1277,17 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
     const Eigen::Vector3d omega_imu(
         msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z
     );
-    const Eigen::Vector3d omega_base = R_base_imu * omega_imu;
+    const Eigen::Vector3d omega_base = R_base_imu_ * omega_imu;
     const rclcpp::Time stamp(msg->header.stamp);
-    if (imu_initialized_ && stamp < last_imu_stamp_) {
+    if (imu_initialized_ && last_imu_stamp_.nanoseconds() > 0 && stamp < last_imu_stamp_) {
         yaw_history_.clear();
-        scan_accumulator_.clear();
-        velocity_history_.clear();
-        has_velocity_ = false;
-        is_lost_      = true;
+        has_velocity_    = false;
+        is_lost_         = true;
+        imu_initialized_ = false;
     }
     latest_omega_z_ = static_cast<float>(omega_base.z());
-    if (imu_initialized_ && !is_lost_) {
-        const double dt = (stamp - last_imu_stamp_).seconds();
+    if (imu_initialized_ && !is_lost_ && last_imu_stamp_.nanoseconds() > 0) {
+        const double dt = (stamp.nanoseconds() - last_imu_stamp_.nanoseconds()) * 1e-9;
         if (dt > 0.0 && dt < 0.1) {
             predicted_pose_.yaw =
                 normalizeAngle(predicted_pose_.yaw + static_cast<float>(omega_base.z() * dt));
@@ -1261,10 +1342,10 @@ std::vector<TimedScanPoint> LocalizationNode::extractRawTimedPoints(
 {
     const int64_t header_ns                = rclcpp::Time(msg.header.stamp).nanoseconds();
     end_ns                                 = header_ns;
-    const sensor_msgs::msg::PointField *xf = nullptr;
-    const sensor_msgs::msg::PointField *yf = nullptr;
-    const sensor_msgs::msg::PointField *zf = nullptr;
-    const sensor_msgs::msg::PointField *tf = nullptr;
+    const sensor_msgs::msg::PointField* xf = nullptr;
+    const sensor_msgs::msg::PointField* yf = nullptr;
+    const sensor_msgs::msg::PointField* zf = nullptr;
+    const sensor_msgs::msg::PointField* tf = nullptr;
     for (const auto& field : msg.fields) {
         if (field.name == "x") xf = &field;
         if (field.name == "y") yf = &field;
@@ -1316,9 +1397,9 @@ std::vector<TimedScanPoint> LocalizationNode::extractRawTimedPoints(
                 return {};
             }
             const auto* p = msg.data.data() + offset;
-            float x = 0.0f;
-            float y = 0.0f;
-            float z = 0.0f;
+            float x       = 0.0f;
+            float y       = 0.0f;
+            float z       = 0.0f;
             read(p + xf->offset, x);
             read(p + yf->offset, y);
             read(p + zf->offset, z);
@@ -1447,24 +1528,23 @@ std::vector<TimedScanPoint> LocalizationNode::extractTimedBasePoints(
 }
 
 /**
- * @brief Evaluates whether a pose match is accepted using total cost or strict inlier conditions.
+ * @brief Evaluates whether a pose match is accepted using independent 3D and 2D cost thresholds.
  */
 bool LocalizationNode::isPoseMatchAccepted(
-    const MatchingParams& params, float best_cost, int inlier_count, float inlier_cost
+    const MatchingParams& params, int inlier_count, float inlier_cost
 ) const
 {
-    if (!std::isfinite(best_cost) || !solver_) {
+    if (!solver_) {
         return false;
     }
-    const int obstacle_count = solver_->obstacleCount();
-    const bool inlier_accepted =
-        (obstacle_count > 0) &&
-        (inlier_count >= params.min_inliers) &&
-        (inlier_cost < params.inlier_cost_thresh) &&
-        (static_cast<float>(inlier_count) / static_cast<float>(obstacle_count) >=
-         params.min_inlier_ratio) &&
-        (best_cost < params.max_inlier_accept_cost);
-    return (best_cost < params.cost_threshold) || inlier_accepted;
+    return params.isMatchAccepted(
+        solver_->lastCost3D(),
+        solver_->lastCost2D(),
+        solver_->obstacleCount3D(),
+        solver_->obstacleCount2D(),
+        inlier_count,
+        inlier_cost
+    );
 }
 
 void LocalizationNode::updateLostState(bool matched, float best_cost)
@@ -1683,23 +1763,48 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
 
     // 実行時に変更不可なパラメータ
     static const std::unordered_set<std::string> immutable_params = {
-        "map_source_type", "map_file_path", "map_objects",
+        "map_source_type",
+        "map_file_path",
+        "map_objects",
         "filter_params.max_points",
-        "esdf.resolution", "esdf.max_dist", "esdf.crop_enabled",
-        "esdf.crop_min_x", "esdf.crop_max_x", "esdf.crop_min_y", "esdf.crop_max_y",
-        "esdf.min_z", "esdf.max_z", "esdf.publish_map", "esdf.publish_max_distance", "esdf.publish_stride",
-        "frames.map_frame", "frames.base_frame",
-        "topics.input_cloud", "topics.input_imu", "topics.output_dynamic",
-        "topics.output_ground", "topics.output_obstacle", "topics.output_localization_success",
-        "topics.output_pose", "topics.output_markers", "topics.output_esdf_map", "topics.output_telemetry",
+        "esdf.resolution",
+        "esdf.max_dist",
+        "esdf.crop_enabled",
+        "esdf.crop_min_x",
+        "esdf.crop_max_x",
+        "esdf.crop_min_y",
+        "esdf.crop_max_y",
+        "esdf.min_z",
+        "esdf.max_z",
+        "esdf.publish_map",
+        "esdf.publish_max_distance",
+        "esdf.publish_stride",
+        "frames.map_frame",
+        "frames.base_frame",
+        "topics.input_cloud",
+        "topics.input_imu",
+        "topics.output_dynamic",
+        "topics.output_ground",
+        "topics.output_obstacle",
+        "topics.output_localization_success",
+        "topics.output_pose",
+        "topics.output_markers",
+        "topics.output_esdf_map",
+        "topics.output_telemetry",
         "topics.fused_prior",
         "topics.output_2d_deskewed",
-        "scan_accumulation.window_s", "scan_accumulation.timestamp_field",
-        "scan_accumulation.timestamp_scale", "scan_accumulation.timestamp_relative",
+        "scan_accumulation.window_s",
+        "scan_accumulation.timestamp_field",
+        "scan_accumulation.timestamp_scale",
+        "scan_accumulation.timestamp_relative",
         "matching_params.use_map_bounds",
         "lidar_2d.topic",
-        "benchmark.enable", "benchmark.csv_output_path",
-        "initial_pose.x", "initial_pose.y", "initial_pose.yaw", "initial_pose.use_for_local_search"
+        "benchmark.enable",
+        "benchmark.csv_output_path",
+        "initial_pose.x",
+        "initial_pose.y",
+        "initial_pose.yaw",
+        "initial_pose.use_for_local_search"
     };
 
     // 1. パラメータ値の妥当性検証
@@ -1707,7 +1812,8 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         const auto& name = param.get_name();
         if (immutable_params.count(name)) {
             result.successful = false;
-            result.reason = "Parameter '" + name + "' cannot be changed dynamically during runtime.";
+            result.reason =
+                "Parameter '" + name + "' cannot be changed dynamically during runtime.";
             return result;
         }
 
@@ -1715,37 +1821,46 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             int levels = static_cast<int>(param.as_int());
             if (levels < 1 || levels > 3) {
                 result.successful = false;
-                result.reason = "matching_params.fine_refine_levels must be in [1, 3]";
+                result.reason     = "matching_params.fine_refine_levels must be in [1, 3]";
                 return result;
             }
-        } else if (name == "global_search.downsample_stride" || name == "global_search.lost_count_thresh" ||
-                   name == "global_search.top_k_candidates" ||
-                   name == "matching_params.min_3d_points" || name == "matching_params.min_2d_points" ||
-                   name == "matching_params.target_2d_points" || name == "matching_params.min_inliers") {
+        } else if (
+            name == "global_search.downsample_stride" ||
+            name == "global_search.lost_count_thresh" || name == "global_search.top_k_candidates" ||
+            name == "matching_params.min_3d_points" || name == "matching_params.min_2d_points" ||
+            name == "matching_params.target_2d_points" || name == "matching_params.min_inliers"
+        ) {
             if (param.as_int() < 1) {
                 result.successful = false;
-                result.reason = name + " must be >= 1";
+                result.reason     = name + " must be >= 1";
                 return result;
             }
         } else if (name == "matching_params.min_inlier_ratio") {
             const double ratio = param.as_double();
             if (!std::isfinite(ratio) || ratio < 0.0 || ratio > 1.0) {
                 result.successful = false;
-                result.reason = "matching_params.min_inlier_ratio must be in [0.0, 1.0]";
+                result.reason     = "matching_params.min_inlier_ratio must be in [0.0, 1.0]";
                 return result;
             }
-        } else if (name == "matching_params.max_inlier_accept_cost") {
-            const double max_cost = param.as_double();
-            if (!std::isfinite(max_cost) || max_cost <= 0.0) {
+        } else if (
+            name == "matching_params.max_inlier_accept_cost" ||
+            name == "matching_params.cost_threshold" ||
+            name == "matching_params.cost_threshold_3d" ||
+            name == "matching_params.cost_threshold_2d"
+        ) {
+            const double val = param.as_double();
+            if (!std::isfinite(val) || val <= 0.0) {
                 result.successful = false;
-                result.reason = "matching_params.max_inlier_accept_cost must be > 0";
+                result.reason     = name + " must be > 0";
                 return result;
             }
-        } else if (name == "velocity_estimation.min_dt_sec" || name == "velocity_estimation.max_dt_sec" ||
-                   name == "velocity_estimation.window_sec" || name == "lidar_2d.tf_wait_sec") {
+        } else if (
+            name == "velocity_estimation.min_dt_sec" || name == "velocity_estimation.max_dt_sec" ||
+            name == "velocity_estimation.window_sec" || name == "lidar_2d.tf_wait_sec"
+        ) {
             if (param.as_double() <= 0.0) {
                 result.successful = false;
-                result.reason = name + " must be > 0";
+                result.reason     = name + " must be > 0";
                 return result;
             }
         }
@@ -1762,7 +1877,12 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         if (name == "matching_params.max_dist_thresh") {
             match_params_.max_dist_thresh = static_cast<float>(param.as_double());
         } else if (name == "matching_params.cost_threshold") {
-            match_params_.cost_threshold = static_cast<float>(param.as_double());
+            match_params_.cost_threshold    = static_cast<float>(param.as_double());
+            match_params_.cost_threshold_3d = match_params_.cost_threshold;
+        } else if (name == "matching_params.cost_threshold_3d") {
+            match_params_.cost_threshold_3d = static_cast<float>(param.as_double());
+        } else if (name == "matching_params.cost_threshold_2d") {
+            match_params_.cost_threshold_2d = static_cast<float>(param.as_double());
         } else if (name == "matching_params.dynamic_dist_thresh") {
             match_params_.dynamic_dist_thresh = static_cast<float>(param.as_double());
         } else if (name == "matching_params.search_range_xy") {
@@ -1819,7 +1939,7 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
                 telemetry_enable_ ? "true" : "false"
             );
 
-        // --- filter_params ---
+            // --- filter_params ---
         } else if (name == "filter_params.max_range") {
             filter_params_.range_max = static_cast<float>(param.as_double());
         } else if (name == "filter_params.robot_radius") {
@@ -1831,37 +1951,37 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         } else if (name == "filter_params.ground_z_thresh") {
             filter_params_.ground_z_thresh = static_cast<float>(param.as_double());
 
-        // --- global_search ---
+            // --- global_search ---
         } else if (name == "global_search.range_min_x") {
-            global_range_min_x_ = static_cast<float>(param.as_double());
+            global_range_min_x_      = static_cast<float>(param.as_double());
             update_global_search_cfg = true;
         } else if (name == "global_search.range_max_x") {
-            global_range_max_x_ = static_cast<float>(param.as_double());
+            global_range_max_x_      = static_cast<float>(param.as_double());
             update_global_search_cfg = true;
         } else if (name == "global_search.range_min_y") {
-            global_range_min_y_ = static_cast<float>(param.as_double());
+            global_range_min_y_      = static_cast<float>(param.as_double());
             update_global_search_cfg = true;
         } else if (name == "global_search.range_max_y") {
-            global_range_max_y_ = static_cast<float>(param.as_double());
+            global_range_max_y_      = static_cast<float>(param.as_double());
             update_global_search_cfg = true;
         } else if (name == "global_search.range_yaw_diff") {
             global_range_yaw_diff_ = static_cast<float>(param.as_double());
         } else if (name == "global_search.step_xy") {
-            global_step_xy_ = static_cast<float>(param.as_double());
+            global_step_xy_          = static_cast<float>(param.as_double());
             update_global_search_cfg = true;
         } else if (name == "global_search.step_yaw") {
-            global_step_yaw_ = static_cast<float>(param.as_double());
+            global_step_yaw_         = static_cast<float>(param.as_double());
             update_global_search_cfg = true;
         } else if (name == "global_search.downsample_stride") {
             global_downsample_stride_ = static_cast<int>(param.as_int());
-            update_global_search_cfg = true;
+            update_global_search_cfg  = true;
         } else if (name == "global_search.top_k_candidates") {
             global_top_k_candidates_ = static_cast<int>(param.as_int());
             update_global_search_cfg = true;
         } else if (name == "global_search.lost_count_thresh") {
             lost_threshold_count_ = static_cast<int>(param.as_int());
 
-        // --- velocity_estimation ---
+            // --- velocity_estimation ---
         } else if (name == "velocity_estimation.enable") {
             velocity_estimation_enable_ = param.as_bool();
         } else if (name == "velocity_estimation.window_sec") {
@@ -1873,7 +1993,7 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         } else if (name == "velocity_estimation.max_linear_velocity") {
             velocity_max_linear_ = static_cast<float>(param.as_double());
 
-        // --- lidar_2d ---
+            // --- lidar_2d ---
         } else if (name == "lidar_2d.enable") {
             use_2d_lidar_ = param.as_bool();
         } else if (name == "lidar_2d.deskew") {
@@ -1883,7 +2003,7 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         } else if (name == "lidar_2d.tf_wait_sec") {
             lidar_2d_tf_wait_sec_ = param.as_double();
 
-        // --- general / fusion ---
+            // --- general / fusion ---
         } else if (name == "publish_tf") {
             publish_tf_ = param.as_bool();
         } else if (name == "fusion.use_prior") {
@@ -1902,14 +2022,14 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
 
     if (update_global_search_cfg && global_searcher_) {
         GlobalSearchConfig cfg = global_searcher_->getConfig();
-        cfg.range_min_x = global_range_min_x_;
-        cfg.range_max_x = global_range_max_x_;
-        cfg.range_min_y = global_range_min_y_;
-        cfg.range_max_y = global_range_max_y_;
-        cfg.step_xy = global_step_xy_;
-        cfg.step_yaw = global_step_yaw_;
-        cfg.downsample_stride = global_downsample_stride_;
-        cfg.top_k_candidates = global_top_k_candidates_;
+        cfg.range_min_x        = global_range_min_x_;
+        cfg.range_max_x        = global_range_max_x_;
+        cfg.range_min_y        = global_range_min_y_;
+        cfg.range_max_y        = global_range_max_y_;
+        cfg.step_xy            = global_step_xy_;
+        cfg.step_yaw           = global_step_yaw_;
+        cfg.downsample_stride  = global_downsample_stride_;
+        cfg.top_k_candidates   = global_top_k_candidates_;
         global_searcher_->setConfig(cfg);
         RCLCPP_INFO(this->get_logger(), "[DynamicReconfigure] GlobalSearcher config synchronized.");
     }

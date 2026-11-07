@@ -221,11 +221,13 @@ Shared settings are configured in [`config/common_params.yaml`](config/common_pa
 | `matching_params.use_map_bounds` | `true` | Evaluates XY bounds from map headers during PCD/ESDF loading. Set to false to manually restrict bounds. |
 | `matching_params.fine_refine` | `true` | Performs an additional 125 candidate micro-searches around the best solution to achieve sub-voxel precision. |
 | `matching_params.fine_refine_levels` | `2` | Number of micro-search iterations. 2 steps refine an XY step of 0.05m down to 0.002m. |
-| `matching_params.cost_threshold` | `0.165` | Average residual cost acceptance threshold [m]. |
+| `matching_params.cost_threshold` | `0.185` | Baseline 3D residual cost acceptance threshold [m] (equivalent to `cost_threshold_3d`). |
+| `matching_params.cost_threshold_3d` | `0.185` | Independent 3D LiDAR residual acceptance threshold [m]. 3D matches pass when below this value. |
+| `matching_params.cost_threshold_2d` | `0.080` | Independent 2D LiDAR residual acceptance threshold [m]. Evaluated independently when 2D points are present. |
 | `matching_params.inlier_dist_thresh` | `0.08` | Classifies points within 8 cm of the map surface as inliers. |
 | `matching_params.min_inliers` | `60` | Minimum required inlier count for inlier acceptance criteria. |
-| `matching_params.inlier_cost_thresh` | `0.01` | Maximum allowable average inlier distance [m] for inlier acceptance. |
-| `matching_params.min_inlier_ratio` | `0.35` | Minimum ratio of inlier points to total obstacles ($N_{\text{inlier}} / N_{\text{total}}$). Prevents false locking on partial walls. |
+| `matching_params.inlier_cost_thresh` | `0.040` | Maximum allowable average inlier distance [m] for inlier acceptance. |
+| `matching_params.min_inlier_ratio` | `0.30` | Minimum ratio of inlier points to total obstacles ($N_{\text{inlier}} / N_{\text{total}}$). Prevents false locking on partial walls. |
 | `matching_params.max_inlier_accept_cost` | `0.22` | Upper total composite cost guard for inlier fallback acceptance. |
 | `matching_params.weight_2d_lidar` | `0.50` | Maximum weight assigned to 2D LiDAR residual cost. |
 | `matching_params.min_2d_points` | `30` | Minimum 2D obstacle points required to include 2D cost. |

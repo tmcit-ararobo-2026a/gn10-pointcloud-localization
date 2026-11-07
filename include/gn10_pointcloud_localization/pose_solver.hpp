@@ -42,7 +42,9 @@ struct MatchingParams {
     bool fine_refine{true};
     int fine_refine_levels{2};
     float max_dist_thresh{0.20f};
-    float cost_threshold{0.165f};
+    float cost_threshold{0.185f};
+    float cost_threshold_3d{0.185f};
+    float cost_threshold_2d{0.080f};
     float dynamic_dist_thresh{0.15f};
     float field_min_x{-5.5f};
     float field_max_x{5.5f};
@@ -50,8 +52,8 @@ struct MatchingParams {
     float field_max_y{6.0f};
     float inlier_dist_thresh{0.08f};
     int min_inliers{60};
-    float inlier_cost_thresh{0.05f};
-    float min_inlier_ratio{0.35f};
+    float inlier_cost_thresh{0.040f};
+    float min_inlier_ratio{0.30f};
     float max_inlier_accept_cost{0.22f};
     float weight_2d_lidar{0.40f};
     int min_2d_points{30};
@@ -59,7 +61,36 @@ struct MatchingParams {
     int min_3d_points{50};
 
     /**
-     * @brief Evaluates whether a match satisfies the overall cost threshold or strict inlier criteria.
+     * @brief Evaluates whether 3D and 2D LiDAR matching satisfies independent cost thresholds and inlier criteria.
+     */
+    bool isMatchAccepted(
+        float cost_3d, float cost_2d, int count_3d, int count_2d,
+        int inlier_count, float inlier_cost
+    ) const
+    {
+        bool pass_3d = false;
+        if (count_3d >= min_3d_points) {
+            const bool inlier_accepted =
+                (inlier_count >= min_inliers) &&
+                (inlier_cost < inlier_cost_thresh) &&
+                (static_cast<float>(inlier_count) / static_cast<float>(count_3d) >= min_inlier_ratio) &&
+                (cost_3d < max_inlier_accept_cost);
+            pass_3d = (cost_3d < cost_threshold_3d) || inlier_accepted;
+        } else if (count_2d >= min_2d_points) {
+            // Fall back to 2D LiDAR when 3D LiDAR point count is insufficient
+            pass_3d = true;
+        }
+
+        bool pass_2d = true;
+        if (count_2d >= min_2d_points) {
+            pass_2d = (cost_2d < cost_threshold_2d);
+        }
+
+        return pass_3d && pass_2d;
+    }
+
+    /**
+     * @brief Backward-compatible overload evaluating composite cost against cost_threshold.
      */
     bool isMatchAccepted(
         float best_cost, int inlier_count, float inlier_cost, int total_obstacle_count
@@ -68,7 +99,7 @@ struct MatchingParams {
         if (!std::isfinite(best_cost)) {
             return false;
         }
-        if (best_cost < cost_threshold) {
+        if (best_cost < cost_threshold_3d) {
             return true;
         }
         if (total_obstacle_count <= 0) {
@@ -211,6 +242,11 @@ public:
     float lastCost3D() const { return last_cost_3d_; }
     float lastCost2D() const { return last_cost_2d_; }
     float lastWeight2D() const { return last_weight_2d_; }
+    void setLastCosts(float cost_3d, float cost_2d)
+    {
+        last_cost_3d_ = cost_3d;
+        last_cost_2d_ = cost_2d;
+    }
 
 private:
     int max_points_;

@@ -126,10 +126,12 @@ PoseCandidate GlobalSearcher::search(
 
     std::vector<float> dummy_dynamic;
     PoseCandidate best_refined_pose{0.0f, 0.0f, 0.0f};
-    float best_refined_cost       = std::numeric_limits<float>::max();
-    int best_refined_inliers      = 0;
+    float best_refined_cost        = std::numeric_limits<float>::max();
+    float best_cost_3d             = std::numeric_limits<float>::max();
+    float best_cost_2d             = std::numeric_limits<float>::max();
+    int best_refined_inliers       = 0;
     float best_refined_inlier_cost = 1.0f;
-    bool found_accepted           = false;
+    bool found_accepted            = false;
 
     for (const auto& coarse_candidate : top_coarse_poses) {
         PoseCandidate cand_pose{};
@@ -161,7 +163,12 @@ PoseCandidate GlobalSearcher::search(
         cand_pose.yaw = normalizeAngle(cand_pose.yaw);
 
         const bool is_accepted = match_params.isMatchAccepted(
-            cand_cost, cand_inliers, cand_inlier_cost, full_obstacle_count
+            solver.lastCost3D(),
+            solver.lastCost2D(),
+            solver.obstacleCount3D(),
+            solver.obstacleCount2D(),
+            cand_inliers,
+            cand_inlier_cost
         );
         if (is_accepted && cand_cost < best_refined_cost) {
             found_accepted           = true;
@@ -169,6 +176,8 @@ PoseCandidate GlobalSearcher::search(
             best_refined_cost        = cand_cost;
             best_refined_inliers     = cand_inliers;
             best_refined_inlier_cost = cand_inlier_cost;
+            best_cost_3d             = solver.lastCost3D();
+            best_cost_2d             = solver.lastCost2D();
         }
     }
 
@@ -178,6 +187,7 @@ PoseCandidate GlobalSearcher::search(
             "[GlobalSearch] None of the Top-%zu candidates satisfied strict acceptance criteria.",
             top_coarse_poses.size()
         );
+        solver.setLastCosts(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
         out_best_cost = std::numeric_limits<float>::max();
         if (out_inlier_count != nullptr) {
             *out_inlier_count = 0;
@@ -187,6 +197,8 @@ PoseCandidate GlobalSearcher::search(
         }
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
+
+    solver.setLastCosts(best_cost_3d, best_cost_2d);
 
     out_best_cost = best_refined_cost;
     if (out_inlier_count != nullptr) {
@@ -336,6 +348,8 @@ PoseCandidate GlobalSearcher::search(
     std::vector<float> dummy_dynamic;
     PoseCandidate best_refined_pose{0.0f, 0.0f, 0.0f};
     float best_refined_cost        = std::numeric_limits<float>::max();
+    float best_cost_3d             = std::numeric_limits<float>::max();
+    float best_cost_2d             = std::numeric_limits<float>::max();
     int best_refined_inliers       = 0;
     float best_refined_inlier_cost = 1.0f;
     bool found_accepted            = false;
@@ -370,7 +384,12 @@ PoseCandidate GlobalSearcher::search(
         cand_pose.yaw = normalizeAngle(cand_pose.yaw);
 
         const bool is_accepted = match_params.isMatchAccepted(
-            cand_cost, cand_inliers, cand_inlier_cost, full_obstacle_count
+            solver.lastCost3D(),
+            solver.lastCost2D(),
+            solver.obstacleCount3D(),
+            solver.obstacleCount2D(),
+            cand_inliers,
+            cand_inlier_cost
         );
         if (is_accepted && cand_cost < best_refined_cost) {
             found_accepted           = true;
@@ -378,6 +397,8 @@ PoseCandidate GlobalSearcher::search(
             best_refined_cost        = cand_cost;
             best_refined_inliers     = cand_inliers;
             best_refined_inlier_cost = cand_inlier_cost;
+            best_cost_3d             = solver.lastCost3D();
+            best_cost_2d             = solver.lastCost2D();
         }
     }
 
@@ -387,6 +408,7 @@ PoseCandidate GlobalSearcher::search(
             "[GlobalSearch] None of the Top-%zu candidates satisfied strict acceptance criteria.",
             top_coarse_poses.size()
         );
+        solver.setLastCosts(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
         out_best_cost = std::numeric_limits<float>::max();
         if (out_inlier_count != nullptr) {
             *out_inlier_count = 0;
@@ -396,6 +418,8 @@ PoseCandidate GlobalSearcher::search(
         }
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
+
+    solver.setLastCosts(best_cost_3d, best_cost_2d);
 
     out_best_cost = best_refined_cost;
     if (out_inlier_count != nullptr) {
