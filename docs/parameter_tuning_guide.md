@@ -102,7 +102,7 @@ $$\text{scale} = \min\left(1.5,\; 1.0 + 0.5 \times \frac{\|\mathbf{v}\| - 2.0}{v
 | `matching_params.search_step_yaw` | `0.03` | double | Coarse yaw grid step [rad] ($\approx 1.7^\circ$, 11 yaw steps). |
 | `matching_params.dynamic_yaw_expansion` | `true` | bool | Expands `search_range_yaw` proportionally to $|\omega_z|$ during fast turns. |
 | `matching_params.dynamic_yaw_omega_thresh` | `0.50` | double | Angular speed threshold $|\omega_z|$ [rad/s] that triggers yaw window expansion. |
-| `matching_params.dynamic_yaw_factor` | `0.15` | double | Expansion gain [s]: $\text{range\_yaw} = \max(\text{base}, \min(\text{max\_range}, |\omega_z| \times 0.15))$. |
+| `matching_params.dynamic_yaw_factor` | `0.15` | double | Expansion gain [s]: $\text{range\_yaw} = \min(\text{max\_range},\; \text{base} + (|\omega_z| - \omega_{\text{thresh}}) \times 0.15)$. |
 | `matching_params.dynamic_yaw_max_range` | `0.40` | double | Maximum expanded yaw search half-width [rad] ($\approx \pm 22.9^\circ$). |
 | `matching_params.fine_refine` | `true` | bool | Enables hierarchical $5 \times 5 \times 5$ sub-voxel refinement around the coarse optimum. |
 | `matching_params.fine_refine_levels` | `2` | int | Number of refinement stages (`2` levels divide step by $5^2 = 25\times$: `0.05 m` $\to$ `0.002 m`, `0.03 rad` $\to$ `0.0012 rad`). |
@@ -112,7 +112,6 @@ $$\text{scale} = \min\left(1.5,\; 1.0 + 0.5 \times \frac{\|\mathbf{v}\| - 2.0}{v
 | `matching_params.min_2d_points` | `30` | int | Minimum 2D obstacle points ($N_{\text{2D}}$) required to include the 2D residual term. |
 | `matching_params.target_2d_points` | `200` | int | Reference 2D point count for full FoV scaling: $\text{fov\_scale} = \min(1.0, N_{\text{2D}} / 200)$. |
 | `matching_params.min_3d_points` | `50` | int | Minimum 3D obstacle points ($N_{\text{3D}}$). Below this threshold, matching switches directly to 2D-only ($w_{\text{2D}} = 1.0$). |
-| `matching_params.cost_threshold` | `0.22` | double | Legacy alias for `cost_threshold_3d` [m]. |
 | `matching_params.cost_threshold_3d` | `0.22` | double | Independent 3D average residual acceptance threshold [m] (`pass_3d`: $C_{\text{3D}} < 0.22\text{ m}$). |
 | `matching_params.cost_threshold_2d` | `0.08` | double | Independent 2D average residual acceptance threshold [m] (`pass_2d`: $C_{\text{2D}} < 0.08\text{ m}$). |
 | `matching_params.inlier_dist_thresh` | `0.08` | double | Surface distance threshold [m] (`8 cm`) to classify an obstacle point as an inlier. |

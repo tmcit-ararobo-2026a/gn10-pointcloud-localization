@@ -103,7 +103,7 @@ $$\text{scale} = \min\left(1.5,\; 1.0 + 0.5 \times \frac{\|\mathbf{v}\| - 2.0}{v
 | `matching_params.search_step_yaw` | `0.03` | double | ローカル粗探索の Yaw 刻み幅 [rad]（約 $1.7^\circ$、11 ステップ）。 |
 | `matching_params.dynamic_yaw_expansion` | `true` | bool | 急旋回時に角速度 $|\omega_z|$ に比例して Yaw 探索幅を自動拡大します。 |
 | `matching_params.dynamic_yaw_omega_thresh` | `0.50` | double | 動的 Yaw 探索拡大を発動する角速度閾値 $|\omega_z|$ [rad/s]。 |
-| `matching_params.dynamic_yaw_factor` | `0.15` | double | 角速度に乗じる拡大係数 [s]: $\text{range\_yaw} = \max(\text{base}, \min(\text{max\_range}, |\omega_z| \times 0.15))$。 |
+| `matching_params.dynamic_yaw_factor` | `0.15` | double | 角速度に乗じる拡大係数 [s]: $\text{range\_yaw} = \min(\text{max\_range},\; \text{base} + (|\omega_z| - \omega_{\text{thresh}}) \times 0.15)$。 |
 | `matching_params.dynamic_yaw_max_range` | `0.40` | double | 動的 Yaw 探索幅の最大上限値 [rad]（約 $\pm 22.9^\circ$）。 |
 | `matching_params.fine_refine` | `true` | bool | 粗探索の最良姿勢周辺で $5 \times 5 \times 5$ の階層的サブボクセル精密探索を実行します。 |
 | `matching_params.fine_refine_levels` | `2` | int | 精密探索の反復段数（`2` 段でステップ幅を $1/25$ に細分化: `0.05 m` $\to$ `0.002 m`、`0.03 rad` $\to$ `0.0012 rad`）。 |
@@ -113,7 +113,6 @@ $$\text{scale} = \min\left(1.5,\; 1.0 + 0.5 \times \frac{\|\mathbf{v}\| - 2.0}{v
 | `matching_params.min_2d_points` | `30` | int | 2D 残差項を有効化するために必要な最小 2D 障害物点数 ($N_{\text{2D}}$)。 |
 | `matching_params.target_2d_points` | `200` | int | 視野角スケーリングが 100% になる基準 2D 点数: $\text{fov\_scale} = \min(1.0, N_{\text{2D}} / 200)$。 |
 | `matching_params.min_3d_points` | `50` | int | 最小 3D 障害物点数 ($N_{\text{3D}}$)。これ未満の場合は即座に 2D 単独マッチング ($w_{\text{2D}} = 1.0$) に切り替わります。 |
-| `matching_params.cost_threshold` | `0.22` | double | `cost_threshold_3d` の互換エイリアス [m]。 |
 | `matching_params.cost_threshold_3d` | `0.22` | double | 3D LiDAR 独立残差コストの合格閾値 [m] (`pass_3d`: $C_{\text{3D}} < 0.22\text{ m}$)。 |
 | `matching_params.cost_threshold_2d` | `0.08` | double | 2D LiDAR 独立残差コストの合格閾値 [m] (`pass_2d`: $C_{\text{2D}} < 0.08\text{ m}$)。 |
 | `matching_params.inlier_dist_thresh` | `0.08` | double | マップ表面から `0.08 m` (8 cm) 以内の障害物点をインライア（適合点）と判定します。 |

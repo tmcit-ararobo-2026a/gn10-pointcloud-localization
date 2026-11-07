@@ -990,9 +990,10 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     const float abs_omega = std::abs(current_omega_z);
     if (dynamic_yaw_expansion_ && abs_omega > dynamic_yaw_omega_thresh_) {
         const float max_yaw_range = std::max(active_match_params.range_yaw, dynamic_yaw_max_range_);
-        active_match_params.range_yaw = std::min(
-            max_yaw_range, std::max(active_match_params.range_yaw, abs_omega * dynamic_yaw_factor_)
-        );
+        const float expanded_yaw =
+            active_match_params.range_yaw +
+            (abs_omega - dynamic_yaw_omega_thresh_) * dynamic_yaw_factor_;
+        active_match_params.range_yaw = std::min(max_yaw_range, expanded_yaw);
     }
 
     // Adaptively expand translational search window up to 1.5x during high-speed movement (>= 2.0

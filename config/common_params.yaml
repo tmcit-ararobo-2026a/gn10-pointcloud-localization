@@ -78,7 +78,6 @@
       fine_refine: true                 # Enable multi-resolution coarse-to-fine grid refinement
       fine_refine_levels: 2             # Number of 5x refinement levels (2 levels -> 2 mm XY, 0.0012 rad yaw)
       max_dist_thresh: 0.25             # Per-point Huber/L1 residual clipping ceiling [m] (suppresses outliers)
-      cost_threshold: 0.22              # Legacy/default mean residual threshold [m]
       cost_threshold_3d: 0.22           # Independent 3D LiDAR mean residual acceptance threshold [m]
       cost_threshold_2d: 0.08           # Independent 2D LiDAR mean residual acceptance threshold [m]
       dynamic_dist_thresh: 0.15         # Distance threshold [m] above which 3D points are extracted as dynamic_cloud
@@ -91,14 +90,14 @@
       min_inliers: 400                  # Minimum 3D inlier point count for inlier-based acceptance
       inlier_cost_thresh: 0.035         # Maximum mean residual [m] of inlier points for inlier-based acceptance
       min_inlier_ratio: 0.28            # Minimum ratio (inliers / 3D obstacles) for inlier-based acceptance
-      max_inlier_accept_cost: 0.22      # Hard upper bound on 3D cost [m] even when inliers pass
+      max_inlier_accept_cost: 0.22      # Hard upper bound on 3D cost [m] even when inliers pass (set > cost_threshold_3d to enable inlier rescue)
       weight_2d_lidar: 0.40             # Base weight w_2d (0.0..1.0) of 2D LiDAR in composite ESDF cost
       min_2d_points: 30                 # Minimum valid 2D LiDAR points required to activate 2D matching
       target_2d_points: 200             # Reference 2D point count for full FoV scaling (fov_scale = min(1, N_2d/200))
       min_3d_points: 50                 # Minimum 3D obstacle points required to activate 3D matching
       dynamic_yaw_expansion: true       # Dynamically widen search_range_yaw during fast rotation
       dynamic_yaw_omega_thresh: 0.5     # Angular velocity threshold |omega_z| [rad/s] to start yaw window expansion
-      dynamic_yaw_factor: 0.15          # Scaling factor [s]: expanded_yaw = max(range_yaw, |omega_z| * factor)
+      dynamic_yaw_factor: 0.15          # Scaling factor [s]: expanded_yaw = range_yaw + (|omega_z| - omega_thresh) * factor
       dynamic_yaw_max_range: 0.40       # Upper cap [rad] for dynamically expanded yaw search range
 
     # =========================================================================

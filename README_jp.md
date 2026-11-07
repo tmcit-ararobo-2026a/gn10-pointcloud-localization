@@ -181,7 +181,6 @@ ros2 launch gn10_pointcloud_localization blue.launch.py
 | `matching_params.fine_refine` / `levels` | `true` / `2` | 2 段の $5 \times 5 \times 5$ サブボクセル精密探索（`0.05 m` $\to$ `0.002 m`）。 |
 | `matching_params.max_dist_thresh` | `0.25` | マッチング評価時の点ごとの ESDF 残差打ち切り距離 [m]。 |
 | `matching_params.dynamic_dist_thresh` | `0.15` | `/dynamic_cloud` として抽出するマップ表面からの距離閾値 [m]。 |
-| `matching_params.cost_threshold` | `0.22` | `cost_threshold_3d` の互換エイリアス [m]。 |
 | `matching_params.cost_threshold_3d` | `0.22` | 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.22\text{ m}$)。 |
 | `matching_params.cost_threshold_2d` | `0.08` | 2D LiDAR 独立残差合格しきい値 [m] ($C_{\text{2D}} < 0.08\text{ m}$、ヒステリシス切り離しは $2\times = 0.16\text{ m}$)。 |
 | `matching_params.inlier_dist_thresh` | `0.08` | マップ壁面から `0.08 m` (8 cm) 以内の点をインライアと判定。 |

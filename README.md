@@ -182,7 +182,6 @@ Shared parameters are defined in [`config/common_params.yaml`](config/common_par
 | `matching_params.fine_refine` / `levels` | `true` / `2` | 2-level $5 \times 5 \times 5$ sub-voxel refinement (`0.05 m` $\to$ `0.002 m`). |
 | `matching_params.max_dist_thresh` | `0.25` | Per-point ESDF residual truncation distance [m]. |
 | `matching_params.dynamic_dist_thresh` | `0.15` | Surface distance threshold [m] for `/dynamic_cloud` obstacle extraction. |
-| `matching_params.cost_threshold` | `0.22` | Legacy alias for `cost_threshold_3d` [m]. |
 | `matching_params.cost_threshold_3d` | `0.22` | Independent 3D residual acceptance threshold [m] ($C_{\text{3D}} < 0.22\text{ m}$). |
 | `matching_params.cost_threshold_2d` | `0.08` | Independent 2D residual acceptance threshold [m] ($C_{\text{2D}} < 0.08\text{ m}$; hysteresis detachment at $2\times = 0.16\text{ m}$). |
 | `matching_params.inlier_dist_thresh` | `0.08` | Surface distance threshold [m] (`8 cm`) for inlier classification. |
