@@ -78,7 +78,7 @@
       inlier_cost_thresh: 0.035
       min_inlier_ratio: 0.28
       max_inlier_accept_cost: 0.22
-      weight_2d_lidar: 0.50
+      weight_2d_lidar: 0.40
       min_2d_points: 30
       target_2d_points: 200
       min_3d_points: 50
