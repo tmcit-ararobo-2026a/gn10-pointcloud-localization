@@ -95,7 +95,7 @@
       min_2d_points: 30                 # Minimum valid 2D LiDAR points required to activate 2D matching
       target_2d_points: 200             # Reference 2D point count for full FoV scaling (fov_scale = min(1, N_2d/200))
       min_3d_points: 50                 # Minimum 3D obstacle points required to activate 3D matching
-      dynamic_yaw_expansion: true       # Dynamically widen search_range_yaw during fast rotation
+      dynamic_yaw_expansion: false      # Dynamically widen search_range_yaw during fast rotation
       dynamic_yaw_omega_thresh: 0.5     # Angular velocity threshold |omega_z| [rad/s] to start yaw window expansion
       dynamic_yaw_factor: 0.5           # Scaling factor [s]: expanded_yaw = range_yaw + (|omega_z| - omega_thresh) * factor
       dynamic_yaw_max_range: 0.60       # Upper cap [rad] for dynamically expanded yaw search range
