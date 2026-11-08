@@ -1,6 +1,6 @@
 # gn10-pointcloud-localization パラメータチューニングガイド
 
-[English Version](./parameter_tuning_guide.md)
+[English](./parameter_tuning_guide.md)
 
 本ドキュメントでは、`gn10-pointcloud-localization` の全体アーキテクチャ、各処理ステージのアルゴリズム、パラメータの物理的意味と作用、3D/2D 振動防止フォールバック機構、異常時の TF 安全停止設計、およびテレメトリを用いた実践的なチューニング手順を解説します。
 
@@ -22,7 +22,7 @@
 4. **安全出力ゲートと Top-K グローバル復帰探索**:
    - 厳格な合格判定（`pass_cost || pass_inliers`）を通過したフレームのみ姿勢を更新します。
    - **異常時の即時 TF 配信停止（暴走防止）**: マッチング不合格時は予測値による TF 外挿を一切行わず、`map -> base_link` TF および `/platform_constraint` の配信を即座に停止し、`/robot/operation/localization_success` に `false` を出力して下位制御を安全に停止させます。
-   - 連続 `lost_count_thresh = 10` フレーム不合格が続いた場合、`GlobalSearcher` が非同期で全域 GPU 探索＋NMS Top-K 精密化を実行して復帰します。
+   - 連続 `lost_count_thresh = 25` フレーム不合格が続いた場合、`GlobalSearcher` が非同期で全域 GPU 探索＋NMS Top-K 精密化を実行して復帰します。
 
 ### アーキテクチャ図 (PlantUML)
 - **全体パイプラインとパラメータ対応図**:
@@ -103,7 +103,7 @@ $$\text{scale} = \min\left(1.5,\; 1.0 + 0.5 \times \frac{\|\mathbf{v}\| - 2.0}{v
 | `matching_params.search_step_yaw` | `0.03` | double | ローカル粗探索の Yaw 刻み幅 [rad]（約 $1.7^\circ$、11 ステップ）。 |
 | `matching_params.dynamic_yaw_expansion` | `true` | bool | 急旋回時に角速度 $|\omega_z|$ に比例して Yaw 探索幅を自動拡大します。 |
 | `matching_params.dynamic_yaw_omega_thresh` | `0.50` | double | 動的 Yaw 探索拡大を発動する角速度閾値 $|\omega_z|$ [rad/s]。 |
-| `matching_params.dynamic_yaw_factor` | `0.15` | double | 角速度に乗じる拡大係数 [s]: $\text{range\_yaw} = \min(\text{max\_range},\; \text{base} + (|\omega_z| - \omega_{\text{thresh}}) \times 0.15)$。 |
+| `matching_params.dynamic_yaw_factor` | `0.15` | double | 角速度に乗じる拡大係数 [s]: $r_{\psi} = \min(r_{\psi,\max},\; r_{\psi,\text{base}} + (|\omega_z| - \omega_{\text{thresh}}) \cdot 0.15)$。 |
 | `matching_params.dynamic_yaw_max_range` | `0.40` | double | 動的 Yaw 探索幅の最大上限値 [rad]（約 $\pm 22.9^\circ$）。 |
 | `matching_params.fine_refine` | `true` | bool | 粗探索の最良姿勢周辺で $5 \times 5 \times 5$ の階層的サブボクセル精密探索を実行します。 |
 | `matching_params.fine_refine_levels` | `2` | int | 精密探索の反復段数（`2` 段でステップ幅を $1/25$ に細分化: `0.05 m` $\to$ `0.002 m`、`0.03 rad` $\to$ `0.0012 rad`）。 |
@@ -111,46 +111,47 @@ $$\text{scale} = \min\left(1.5,\; 1.0 + 0.5 \times \frac{\|\mathbf{v}\| - 2.0}{v
 | `matching_params.dynamic_dist_thresh` | `0.15` | double | 確定姿勢でのマップ表面距離がこの値 [m] を超える障害物点を `/dynamic_cloud` として抽出します。 |
 | `matching_params.weight_2d_lidar` | `0.40` | double | 3D と 2D の両方が有効な場合の基本 2D 残差重み $w_{\text{2D,base}}$。 |
 | `matching_params.min_2d_points` | `30` | int | 2D 残差項を有効化するために必要な最小 2D 障害物点数 ($N_{\text{2D}}$)。 |
-| `matching_params.target_2d_points` | `200` | int | 視野角スケーリングが 100% になる基準 2D 点数: $\text{fov\_scale} = \min(1.0, N_{\text{2D}} / 200)$。 |
+| `matching_params.target_2d_points` | `200` | int | 視野角スケーリングが 100% になる基準 2D 点数: `fov_scale = min(1.0, N_2d / 200)`。 |
 | `matching_params.min_3d_points` | `50` | int | 最小 3D 障害物点数 ($N_{\text{3D}}$)。これ未満の場合は即座に 2D 単独マッチング ($w_{\text{2D}} = 1.0$) に切り替わります。 |
-| `matching_params.cost_threshold_3d` | `0.22` | double | 3D LiDAR 独立残差コストの合格閾値 [m] (`pass_3d`: $C_{\text{3D}} < 0.22\text{ m}$)。 |
-| `matching_params.cost_threshold_2d` | `0.08` | double | 2D LiDAR 独立残差コストの合格閾値 [m] (`pass_2d`: $C_{\text{2D}} < 0.08\text{ m}$)。 |
+| `matching_params.cost_threshold_3d` | `0.21` | double | 3D LiDAR 独立残差コストの合格閾値 [m] (`pass_3d`: $C_{\text{3D}} < 0.21\text{ m}$)。 |
+| `matching_params.cost_threshold_2d` | `0.04` | double | 2D LiDAR 独立残差コストの合格閾値 [m] (`pass_2d`: $C_{\text{2D}} < 0.04\text{ m}$)。 |
 | `matching_params.inlier_dist_thresh` | `0.08` | double | マップ表面から `0.08 m` (8 cm) 以内の障害物点をインライア（適合点）と判定します。 |
 | `matching_params.min_inliers` | `400` | int | インライア合格条件に必要な最小インライア点数 ($N_{\text{inlier}} \ge 400$)。 |
 | `matching_params.inlier_cost_thresh` | `0.035` | double | インライア合格条件に必要なインライア平均距離上限 [m] ($C_{\text{inlier}} < 0.035\text{ m}$)。 |
 | `matching_params.min_inlier_ratio` | `0.28` | double | 全障害物点に対する最小インライア比率 ($N_{\text{inlier}} / N_{\text{total}} \ge 0.28$)。一部の壁のみの一致による誤ロックを防止します。 |
-| `matching_params.max_inlier_accept_cost` | `0.22` | double | インライア合格判定時の合成コスト上限ガード [m] ($C_{\text{total}} < 0.22\text{ m}$)。 |
+| `matching_params.max_inlier_accept_cost` | `0.25` | double | インライア合格判定時の合成コスト上限ガード [m] ($C_{\text{total}} < 0.25\text{ m}$)。 |
 
 #### 独立 3D / 2D 残差コストの定義
 各候補姿勢について、GPU カーネルは 3D 点群 ($N_{\text{3D}}$) と 2D 点群 ($N_{\text{2D}}$) の打ち切り付き ESDF 距離平均を独立に計算します:
 $$C_{\text{3D}} = \frac{1}{N_{\text{3D}}} \sum_{i=1}^{N_{\text{3D}}} \min(d_i, d_{\max}), \qquad C_{\text{2D}} = \frac{1}{N_{\text{2D}}} \sum_{j=1}^{N_{\text{2D}}} \min(d_j, d_{\max})$$
-$$C_{\text{total}} = (1 - w_{\text{2D}}) \, C_{\text{3D}} + w_{\text{2D}} \, C_{\text{2D}}, \qquad w_{\text{2D}} = w_{\text{2D,base}} \cdot \min\!\left(1.0, \frac{N_{\text{2D}}}{\text{target\_2d\_points}}\right)$$
+$$C_{\text{total}} = (1 - w_{\text{2D}}) \, C_{\text{3D}} + w_{\text{2D}} \, C_{\text{2D}}, \qquad w_{\text{2D}} = w_{\text{2D,base}} \cdot \min\!\left(1.0, \frac{N_{\text{2D}}}{N_{\text{2D,target}}}\right)$$
 
 #### 3D / 2D 間の位置ずれ・振動を防ぐ 2 段ガード機構 (`PoseSolver::matchObstacleCloud`)
-3D LiDAR と 2D LiDAR の両方に十分な点数がある場合（$N_{\text{3D}} \ge 50$ かつ $N_{\text{2D}} \ge 30$）、わずかな外部パラメータ誤差や壁面の見え方の違いがある状態で Combined ($w_{\text{2D}} = 0.40$)、3D 単独 ($w_{\text{2D}} = 0.0$)、2D 単独 ($w_{\text{2D}} = 1.0$) を単純な閾値でハードスイッチすると、フレーム間で推定位置がチャタリング（振動）する恐れがあります。これを防ぐため、以下の **2 つの振動防止ガード** を実装しています:
+3D LiDAR と 2D LiDAR の両方に十分な点数がある場合（$N_{\text{3D}} \ge 50$ かつ $N_{\text{2D}} \ge 30$）、わずかな外部パラメータ誤差や壁面の見え方の違いがある状態で Combined ($w_{\text{2D}} = 0.40$)、3D 単独 ($w_{\text{2D}} = 0.0$)、2D 単独 ($w_{\text{2D}} = 1.0$) を単純な閾値で切り替えると、フレーム間で推定位置が振動する恐れがあります。これを防ぐため、以下の **2 つの振動防止ガード** を実装しています:
 
-1. **ガード 1 — 2D 切り離し判定のヒステリシス不感帯 (`[0.08 m, 0.16 m)`)**:
-   - 初回の Combined マッチング ($w_{\text{2D}} = 0.40 \cdot \text{fov\_scale}$) において 3D コストが合格 (`pass_3d`: $C_{\text{3D}} < 0.22\text{ m}$) している場合、2D コスト $C_{\text{2D}}$ が通常の合格閾値 `cost_threshold_2d` (`0.08 m`) をわずかに超えただけでは 2D を切り離しません。
-   - 2D を切り離して 3D 単独 ($w_{\text{2D}} = 0.0$) で再評価するのは、`!pass_3d` **または** $C_{\text{2D}} \ge 2.0 \times \text{cost\_threshold\_2d}$ (`0.16 m`、2D の明確な異常・遮蔽) の場合のみです。
-   - これにより、$C_{\text{2D}} \in [0.08, 0.16)\text{ m}$ の軽微な 2D ずれ領域では重み $w_{\text{2D}} = 0.40 \cdot \text{fov\_scale}$ が連続的に維持されたまま `pass_3d` により合格となり、閾値境界での $w_{\text{2D}} = 0.40 \leftrightarrow 0.0$ チャタリングを完全に排除します。
+1. **ガード 1 — 2D 切り離し判定のヒステリシス不感帯 (`[0.04 m, 0.08 m)`)**:
+   - 初回の Combined マッチング (`w_2d = 0.40 * fov_scale`) において 3D コストが合格 (`pass_3d`: $C_{\text{3D}} < 0.21\text{ m}$) している場合、2D コスト $C_{\text{2D}}$ が通常の合格閾値 `cost_threshold_2d` (`0.04 m`) をわずかに超えただけでは 2D を切り離しません。
+   - 2D を切り離して 3D 単独 ($w_{\text{2D}} = 0.0$) で再評価するのは、`!pass_3d` **または** $C_{\text{2D}} \ge 2.0 \times$ `cost_threshold_2d` (`0.08 m`、2D の明確な異常・遮蔽) の場合のみです。
+   - これにより、$C_{\text{2D}} \in [0.04, 0.08)\text{ m}$ の軽微な 2D ずれ領域では重み `w_2d = 0.40 * fov_scale` が連続的に維持されたまま `pass_3d` により合格となり、閾値境界での重みチャタリングを防止します。
 2. **ガード 2 — 2D 単独フォールバック時の局所連続性ウィンドウ制限 (`±0.10 m, ±0.06 rad`)**:
    - 万一 3D 単独でも不合格 (`!pass_3d`) となった場合、2D 単独フォールバック ($w_{\text{2D}} = 1.0$) を試行します。
    - ただし 3D 点群が存在する状態 ($N_{\text{3D}} \ge 50$) では、2D LiDAR は高さ $z = 0.08\text{ m}$ の単一平面しか観測できないため、広い探索範囲（$\pm 0.30\text{ m}$）を与えると別の平行壁へ 20〜30 cm ジャンプし、次フレームで 3D が復帰した際に揺り戻し振動を起こす危険があります。
-   - そのため、$N_{\text{3D}} \ge 50$ での 2D 単独フォールバック時は、IMU＋速度予測姿勢 `search_base_pose` の周囲の探索窓を **2 グリッドステップ以内** に厳格制限します:
-     $$\text{range\_xy}_{\text{2D-only}} = \min(\text{range\_xy},\; 2 \cdot \text{step\_xy}) = \pm 0.10\text{ m}, \qquad \text{range\_yaw}_{\text{2D-only}} = \min(\text{range\_yaw},\; 2 \cdot \text{step\_yaw}) = \pm 0.06\text{ rad}$$
-   - これにより、3D が一時的に劣化したフレームでも 2D で滑らかに局所追従を継続しつつ、遠方の誤った極小解へのジャンプと 3D 復帰時の位置振動を防止します（2D 単独でも $C_{\text{2D}} \ge 0.08\text{ m}$ で不合格の場合は 3D 単独の診断状態へ復元して棄却します）。
+   - そのため、$N_{\text{3D}} \ge 50$ での 2D 単独フォールバック時は、IMU＋速度予測姿勢 `search_base_pose` の周囲の探索窓を **2 グリッドステップ以内** に制限します:
+     $$r_{xy,\text{2D-only}} = \min(r_{xy},\; 2 s_{xy}) = \pm 0.10\text{ m}, \qquad r_{\psi,\text{2D-only}} = \min(r_{\psi},\; 2 s_{\psi}) = \pm 0.06\text{ rad}$$
+     （$r_{xy}, s_{xy}$ は `search_range_xy`, `search_step_xy`、$r_{\psi}, s_{\psi}$ は `search_range_yaw`, `search_step_yaw`）
+   - これにより、3D が一時的に劣化したフレームでも 2D で滑らかに局所追従を継続しつつ、遠方の誤った極小解へのジャンプと 3D 復帰時の位置振動を防止します（2D 単独でも $C_{\text{2D}} \ge 0.04\text{ m}$ で不合格の場合は 3D 単独の診断状態へ復元して棄却します）。
 
 #### マッチング合格判定ロジック
 各フレームのマッチングは以下のいずれかを満たした場合にのみ合格 (`match_accepted = true`) となります:
 1. **主コスト判定 (`pass_cost`)**:
-   - Combined モード（$C_{\text{2D}} < 0.16\text{ m}$）: $C_{\text{3D}} < 0.22\text{ m}$
-   - 3D 単独モード（$w_{\text{2D}} = 0.0$）: $C_{\text{3D}} < 0.22\text{ m}$
-   - 2D 単独モード（$w_{\text{2D}} = 1.0$）: $C_{\text{2D}} < 0.08\text{ m}$
+   - Combined モード（$C_{\text{2D}} < 0.08\text{ m}$）: $C_{\text{3D}} < 0.21\text{ m}$
+   - 3D 単独モード（$w_{\text{2D}} = 0.0$）: $C_{\text{3D}} < 0.21\text{ m}$
+   - 2D 単独モード（$w_{\text{2D}} = 1.0$）: $C_{\text{2D}} < 0.04\text{ m}$
 2. **または 副インライア判定 (`pass_inliers`)** — 以下の 4 条件すべてを同時に満たす場合:
    - $N_{\text{inlier}} \ge 400$ (`min_inliers`)
    - $C_{\text{inlier}} < 0.035\text{ m}$ (`inlier_cost_thresh`)
    - $N_{\text{inlier}} / N_{\text{total}} \ge 0.28$ (`min_inlier_ratio`)
-   - $C_{\text{total}} < 0.22\text{ m}$ (`max_inlier_accept_cost`)
+   - $C_{\text{total}} < 0.25\text{ m}$ (`max_inlier_accept_cost`)
 
 ---
 
@@ -176,7 +177,7 @@ $$C_{\text{total}} = (1 - w_{\text{2D}}) \, C_{\text{3D}} + w_{\text{2D}} \, C_{
 | `global_search.step_yaw` | `0.30` | double | グローバル粗探索の Yaw 解像度 [rad]。 |
 | `global_search.downsample_stride` | `2` | int | グローバル粗探索時の障害物点群の間引きストライド。 |
 | `global_search.top_k_candidates` | `4` | int | 非極大抑制（NMS: 距離 $1.0\text{ m}$ 以上または角度 $0.5\text{ rad}$ 以上）で抽出して精密ローカル探索にかける上位候補数。 |
-| `global_search.lost_count_thresh` | `10` | int | グローバル復帰探索を発動するまでの連続失敗フレーム数（50 Hz 時に約 `0.2 s`）。 |
+| `global_search.lost_count_thresh` | `25` | int | グローバル復帰探索を発動するまでの連続失敗フレーム数（50 Hz 時に約 `0.5 s`）。 |
 
 ---
 
@@ -222,7 +223,7 @@ python3 scripts/plot_telemetry.py --csv telemetry.csv --save telemetry_analysis.
 実行中に変更可能なパラメータは `ros2 param set` で即座に反映できます:
 ```bash
 ros2 param set /gn10_pointcloud_localization_node matching_params.weight_2d_lidar 0.40
-ros2 param set /gn10_pointcloud_localization_node matching_params.cost_threshold_3d 0.22
-ros2 param set /gn10_pointcloud_localization_node matching_params.cost_threshold_2d 0.08
+ros2 param set /gn10_pointcloud_localization_node matching_params.cost_threshold_3d 0.21
+ros2 param set /gn10_pointcloud_localization_node matching_params.cost_threshold_2d 0.04
 ```
 トピック名、マップファイルパス、GPU バッファサイズなどの不変（Immutable）パラメータは実行時の変更から安全に保護されており、変更要求時にはエラーを返して拒否します。

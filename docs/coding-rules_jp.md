@@ -1,6 +1,6 @@
 # コーディング規約
 
-[English](coding-rules.md) | [日本語 (Japanese)](coding-rules_jp.md)
+[English](coding-rules.md) | [日本語](coding-rules_jp.md)
 
 本規約はこのリポジトリ内のすべてのソースコード、設定ファイル、およびドキュメントに適用されます。
 

@@ -1,10 +1,10 @@
 # gn10-pointcloud-localization
 
-[Japanese Version / 日本語版](./README_jp.md)
+[Japanese](./README_jp.md)
 
 A real-time GPU-accelerated 3D + 2D LiDAR self-localization ROS 2 package built for the GN10 autonomous robot (Livox MID360 3D LiDAR + Lakibeam 1 2D Planar LiDAR + 6-axis IMU).
 
-It achieves instant global pose recovery (kidnapped robot problem) and sub-centimeter local tracking using only LiDAR point clouds and IMU data—without requiring wheel odometry.
+It achieves global pose recovery (kidnapped robot problem) and sub-centimeter local tracking using LiDAR point clouds and IMU data without requiring wheel odometry.
 
 <img width="814" height="562" alt="image" src="https://github.com/user-attachments/assets/4254e8ba-a133-42b7-86b6-07034116f0f9" />
 
@@ -29,14 +29,14 @@ It achieves instant global pose recovery (kidnapped robot problem) and sub-centi
 
 ## 1. Overview and Key Features
 
-* **$\mathcal{O}(1)$ Ultra-Fast Scan Matching via GPU 3D Texture Memory**:
-  Converts point cloud maps (`.pcd`) or CAD definitions (`.json`) into a **3D ESDF (Euclidean Signed Distance Field)** and binds it to NVIDIA GPU **3D Texture Memory**. Hardware trilinear interpolation evaluates surface distance residuals in constant $\mathcal{O}(1)$ time per point without k-d Tree traversal or branch divergence.
+* **$\mathcal{O}(1)$ Scan Matching via GPU 3D Texture Memory**:
+  Converts point cloud maps (`.pcd`) or CAD definitions (`.json`) into a **3D ESDF (Euclidean Signed Distance Field)** and binds it to NVIDIA GPU **3D Texture Memory**. Hardware trilinear interpolation evaluates surface distance residuals in constant $\mathcal{O}(1)$ time per point without k-d Tree traversal.
 * **Hybrid 3D + 2D LiDAR Fusion with Anti-Oscillation Fallback**:
   Evaluates 3D LiDAR (`Livox MID360`) and 2D planar LiDAR (`Lakibeam 1`) residuals independently in the GPU kernel, combining them with Field-of-View (FoV) scaling and a two-guard anti-oscillation fallback so tracking survives sensor occlusion without pose jumping.
 * **Full Rotational & Translational Deskew + Cross-Sensor Time Sync**:
-  Compensates both 3D accumulated scans (`0.10 s` window) and 2D sweep scans (`time_increment`) for IMU yaw rotation and robot linear velocity ($v_{\text{local}}$), aligning 2D points to the exact 3D scan reference timestamp $t_{\text{3D}}$.
+  Compensates both 3D accumulated scans (`0.10 s` window) and 2D sweep scans (`time_increment`) for IMU yaw rotation and robot linear velocity ($v_{\text{local}}$), aligning 2D points to the 3D scan reference timestamp $t_{\text{3D}}$.
 * **Global Pose Recovery (Top-K NMS Kidnapped Robot Solver)**:
-  Evaluates thousands of candidate poses across the full field in a single GPU pass and refines the Top-K spatially distinct minima (via Non-Maximum Suppression) to recover rapidly from lost states.
+  Evaluates thousands of candidate poses across the full field in a single GPU pass and refines the Top-K spatially distinct minima (via Non-Maximum Suppression) to recover from lost states.
 * **Dynamic Obstacle Extraction**:
   Classifies points exceeding `dynamic_dist_thresh` (`0.15 m`) from static map surfaces in real time and publishes them to `/dynamic_cloud`.
 
@@ -47,9 +47,9 @@ It achieves instant global pose recovery (kidnapped robot problem) and sub-centi
 <img width="1007" height="711" alt="image" src="https://github.com/user-attachments/assets/cd8ddd3f-9a64-45c4-b60e-91cef41f2de9" />
 
 ### Traditional Nearest-Neighbor Search vs. 3D ESDF Texture Fetch
-Querying a k-d Tree directly on a PCD map requires $\mathcal{O}(\log N_{\text{pcd}})$ operations per point and causes severe GPU warp branch divergence. By pre-computing the Euclidean distance to the nearest surface on a `0.05 m` 3D voxel grid and uploading it to a CUDA 3D Texture (`cudaTextureObject_t`):
-1. **Single-Cycle Hardware Trilinear Interpolation**: Dedicated GPU texture units interpolate continuous sub-voxel distances in hardware.
-2. **Zero Warp Divergence**: Every GPU thread executes an identical `tex3D<float>()` instruction, enabling thousands of candidate poses $(x, y, \psi)$ to be evaluated in a few milliseconds on Jetson Orin Nano.
+Querying a k-d Tree directly on a PCD map requires $\mathcal{O}(\log N_{\text{pcd}})$ operations per point and causes GPU warp branch divergence. By pre-computing the Euclidean distance to the nearest surface on a `0.05 m` 3D voxel grid and uploading it to a CUDA 3D Texture (`cudaTextureObject_t`):
+1. **Hardware Trilinear Interpolation**: Dedicated GPU texture units interpolate continuous sub-voxel distances in hardware.
+2. **Uniform Texture Fetch Execution**: Every GPU thread executes an identical `tex3D<float>()` instruction, enabling thousands of candidate poses $(x, y, \psi)$ to be evaluated in a few milliseconds on Jetson Orin Nano.
 
 ---
 
@@ -70,24 +70,24 @@ Querying a k-d Tree directly on a PCD map requires $\mathcal{O}(\log N_{\text{pc
                                                                           ▼ (Accepted)                                      ▼ (Rejected)
                                                          [Publish TF (map -> base_link)]                   [Halt TF & Pose Output Immediately]
                                                          [/platform_constraint & /dynamic_cloud]           [localization_success = false]
-                                                         [localization_success = true]                     [Trigger GlobalSearch after 10 frames]
+                                                         [localization_success = true]                     [Trigger GlobalSearch after 25 frames]
 ```
 
 ### Anti-Oscillation 3D / 2D Bidirectional Fallback
 In [`PoseSolver::matchObstacleCloud`](src/pose_solver.cpp), 3D ($N_{\text{3D}}$) and 2D ($N_{\text{2D}}$) average surface distance costs ($C_{\text{3D}}, C_{\text{2D}}$) are computed independently. To prevent frame-to-frame pose oscillation when switching between Combined (`w_2d = 0.40 * fov_scale`), 3D-only (`w_2d = 0.0`), and 2D-only (`w_2d = 1.0`) modes, two guards are enforced when both sensors have points ($N_{\text{3D}} \ge 50, N_{\text{2D}} \ge 30$):
 
-1. **Guard 1 — Hysteresis Deadband on 2D Detachment (`[0.08 m, 0.16 m)`)**:
-   - When the Combined match satisfies `pass_3d` ($C_{\text{3D}} < 0.22\text{ m}$), 2D is **not** detached if $C_{\text{2D}}$ merely exceeds `cost_threshold_2d` (`0.08 m`).
-   - 2D is detached (`w_2d = 0.0`, re-running 3D-only) **only if** `!pass_3d` **or** $C_{\text{2D}} \ge 2.0 \times \text{cost\_threshold\_2d}$ (`0.16 m`).
-   - Within the `[0.08 m, 0.16 m)` deadband, `w_2d` stays smooth at `0.40 * fov_scale` and `pass_cost` passes via `pass_3d`, preventing weight chattering near `0.08 m`.
+1. **Guard 1 — Hysteresis Deadband on 2D Detachment (`[0.04 m, 0.08 m)`)**:
+   - When the Combined match satisfies `pass_3d` ($C_{\text{3D}} < 0.21\text{ m}$), 2D is **not** detached if $C_{\text{2D}}$ merely exceeds `cost_threshold_2d` (`0.04 m`).
+   - 2D is detached (`w_2d = 0.0`, re-running 3D-only) **only if** `!pass_3d` **or** $C_{\text{2D}} \ge 2.0 \times$ `cost_threshold_2d` (`0.08 m`).
+   - Within the `[0.04 m, 0.08 m)` deadband, `w_2d` stays smooth at `0.40 * fov_scale` and `pass_cost` passes via `pass_3d`, preventing weight chattering near `0.04 m`.
 2. **Guard 2 — Tight Local Continuity Window (`±0.10 m, ±0.06 rad`) on 2D-Only Fallback**:
    - If 3D-only also fails (`!pass_3d`), the solver attempts 2D-only (`w_2d = 1.0`).
-   - Because 3D points are still present ($N_{\text{3D}} \ge 50$), the 2D-only coarse search window around the IMU+velocity predicted `search_base_pose` is clamped to $\min(\text{range\_xy}, 2 \cdot \text{step\_xy}) = \pm 0.10\text{ m}$ and $\min(\text{range\_yaw}, 2 \cdot \text{step\_yaw}) = \pm 0.06\text{ rad}$.
-   - This keeps local tracking alive during brief 3D degradation while making it impossible for 2D-only to jump 20–30 cm to a false parallel wall and oscillate against 3D. (Full `±0.30 m` 2D-only search is used only when $N_{\text{3D}} < 50$, i.e., complete 3D sensor dropout).
+   - Because 3D points are still present ($N_{\text{3D}} \ge 50$), the 2D-only coarse search window around the IMU+velocity predicted `search_base_pose` is clamped to $\min(r_{xy}, 2 s_{xy}) = \pm 0.10\text{ m}$ and $\min(r_{\psi}, 2 s_{\psi}) = \pm 0.06\text{ rad}$ (where $r$ and $s$ are `search_range` and `search_step`).
+   - This keeps local tracking alive during brief 3D degradation while preventing 2D-only from jumping 20–30 cm to a false parallel wall and oscillating against 3D. (Full `±0.30 m` 2D-only search is used only when $N_{\text{3D}} < 50$, i.e., complete 3D sensor dropout).
 
 ### Safety Output Gating (Immediate TF Stoppage on Failure)
 * When a frame fails both `pass_cost` and `pass_inliers`, [`LocalizationNode`](src/localization_node.cpp) **immediately stops publishing** `map -> base_link` TF and `/platform_constraint`, and publishes `false` on `/robot/operation/localization_success`.
-* Unverified IMU/velocity predictions are **never** broadcast as TF, ensuring downstream controllers trigger an immediate safety stop rather than driving blindly on dead-reckoning.
+* Unverified IMU/velocity predictions are not broadcast as TF, ensuring downstream controllers trigger an immediate safety stop rather than driving blindly on dead-reckoning.
 
 ---
 
@@ -182,13 +182,13 @@ Shared parameters are defined in [`config/common_params.yaml`](config/common_par
 | `matching_params.fine_refine` / `levels` | `true` / `2` | 2-level $5 \times 5 \times 5$ sub-voxel refinement (`0.05 m` $\to$ `0.002 m`). |
 | `matching_params.max_dist_thresh` | `0.25` | Per-point ESDF residual truncation distance [m]. |
 | `matching_params.dynamic_dist_thresh` | `0.15` | Surface distance threshold [m] for `/dynamic_cloud` obstacle extraction. |
-| `matching_params.cost_threshold_3d` | `0.22` | Independent 3D residual acceptance threshold [m] ($C_{\text{3D}} < 0.22\text{ m}$). |
-| `matching_params.cost_threshold_2d` | `0.08` | Independent 2D residual acceptance threshold [m] ($C_{\text{2D}} < 0.08\text{ m}$; hysteresis detachment at $2\times = 0.16\text{ m}$). |
+| `matching_params.cost_threshold_3d` | `0.21` | Independent 3D residual acceptance threshold [m] ($C_{\text{3D}} < 0.21\text{ m}$). |
+| `matching_params.cost_threshold_2d` | `0.04` | Independent 2D residual acceptance threshold [m] ($C_{\text{2D}} < 0.04\text{ m}$; hysteresis detachment at $2\times = 0.08\text{ m}$). |
 | `matching_params.inlier_dist_thresh` | `0.08` | Surface distance threshold [m] (`8 cm`) for inlier classification. |
 | `matching_params.min_inliers` | `400` | Minimum inlier count ($N_{\text{inlier}} \ge 400$) for secondary inlier acceptance. |
 | `matching_params.inlier_cost_thresh` | `0.035` | Maximum average inlier distance [m] ($C_{\text{inlier}} < 0.035\text{ m}$). |
 | `matching_params.min_inlier_ratio` | `0.28` | Minimum inlier ratio ($N_{\text{inlier}} / N_{\text{total}} \ge 0.28$). |
-| `matching_params.max_inlier_accept_cost` | `0.22` | Upper total composite cost guard [m] ($C_{\text{total}} < 0.22\text{ m}$) for inlier acceptance. |
+| `matching_params.max_inlier_accept_cost` | `0.25` | Upper total composite cost guard [m] ($C_{\text{total}} < 0.25\text{ m}$) for inlier acceptance. |
 | `matching_params.weight_2d_lidar` | `0.40` | Baseline weight $w_{\text{2D,base}}$ for 2D LiDAR residual in Combined mode. |
 | `matching_params.min_2d_points` / `target_2d_points` | `30` / `200` | Minimum 2D points to activate 2D cost and reference count for 100% FoV scaling. |
 | `matching_params.min_3d_points` | `50` | Minimum 3D points; below this, switches to full-window 2D-only matching ($w_{\text{2D}} = 1.0$). |
@@ -197,7 +197,7 @@ Shared parameters are defined in [`config/common_params.yaml`](config/common_par
 | `lidar_2d.enable` / `deskew` | `true` / `true` | Enables Lakibeam 2D LiDAR with per-beam rotational + translational deskew and 3D time sync. |
 | `lidar_2d.time_offset_sec` | `0.0` | Static timestamp offset [s] for 2D scans. |
 | `global_search.top_k_candidates` | `4` | Number of NMS-separated coarse candidates refined during global recovery. |
-| `global_search.lost_count_thresh` | `10` | Consecutive failed frames before triggering global recovery. |
+| `global_search.lost_count_thresh` | `25` | Consecutive failed frames before triggering global recovery. |
 
 ---
 
@@ -205,7 +205,7 @@ Shared parameters are defined in [`config/common_params.yaml`](config/common_par
 
 All important documents and PlantUML diagrams are maintained in both English and Japanese:
 
-| Document / Diagram | English | Japanese (日本語) |
+| Document / Diagram | English | Japanese |
 | --- | --- | --- |
 | **README** | [README.md](./README.md) | [README_jp.md](./README_jp.md) |
 | **Parameter Tuning & Algorithm Guide** | [docs/parameter_tuning_guide.md](./docs/parameter_tuning_guide.md) | [docs/parameter_tuning_guide_jp.md](./docs/parameter_tuning_guide_jp.md) |

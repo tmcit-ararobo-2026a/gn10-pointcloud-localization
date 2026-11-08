@@ -1,6 +1,6 @@
 # Coding Rules
 
-[English](coding-rules.md) | [日本語 (Japanese)](coding-rules_jp.md)
+[English](coding-rules.md) | [日本語](coding-rules_jp.md)
 
 These coding standards apply to all source code, configuration files, and documentation in this repository.
 
