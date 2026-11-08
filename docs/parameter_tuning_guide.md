@@ -1,6 +1,6 @@
 # GN10 Point Cloud Localization Parameter Tuning Guide
 
-[Japanese Version / 日本語版](./parameter_tuning_guide_jp.md)
+[Japanese](./parameter_tuning_guide_jp.md)
 
 This document explains the architecture, processing stages, parameter effects, anti-oscillation 3D/2D fallback strategy, safety TF gating, and practical tuning procedures for `gn10-pointcloud-localization`.
 
@@ -21,7 +21,7 @@ The localization pipeline consists of:
 4. **Safety Output Gating & Top-K Global Recovery**:
    - Strict match acceptance gating (`pass_cost || pass_inliers`).
    - **Immediate TF & Pose Stoppage on Failure**: When a match is rejected, `map -> base_link` TF and `/platform_constraint` are immediately halted (never extrapolated into an unverified state), and `/robot/operation/localization_success` publishes `false`.
-   - After `lost_count_thresh = 10` consecutive rejected frames, `GlobalSearcher` performs full-field GPU grid evaluation + Non-Maximum Suppression (NMS) Top-K local refinement to recover.
+   - After `lost_count_thresh = 25` consecutive rejected frames, `GlobalSearcher` performs full-field GPU grid evaluation + Non-Maximum Suppression (NMS) Top-K local refinement to recover.
 
 ### Architecture Diagrams (PlantUML)
 - **Pipeline Flow & Parameter Mapping**:
@@ -49,7 +49,7 @@ All shared defaults are defined in [`config/common_params.yaml`](../config/commo
 | `esdf.crop_min_y / max_y` | `-6.0` / `6.0` | double | Y-axis bounding box limits [m] for ESDF generation. |
 | `esdf.min_z / max_z` | `-0.20` / `4.00` | double | Z-axis height limits [m] for ESDF generation. |
 | `esdf.publish_map` | `true` | bool | Publishes the ESDF voxel cloud once at startup on `/esdf_map` (`transient_local` QoS). |
-| `esdf.publish_max_distance` | `-1.0` | double | Maximum voxel distance [m] included in `/esdf_map` (`-1.0` exports all surface voxels $< \text{max\_dist}$). |
+| `esdf.publish_max_distance` | `-1.0` | double | Maximum voxel distance [m] included in `/esdf_map` (`-1.0` exports all surface voxels `< max_dist`). |
 | `esdf.publish_stride` | `1` | int | Voxel decimation stride for `/esdf_map` (`1` = full resolution, `2` = 1/8 voxels). |
 
 ---
@@ -102,7 +102,7 @@ $$\text{scale} = \min\left(1.5,\; 1.0 + 0.5 \times \frac{\|\mathbf{v}\| - 2.0}{v
 | `matching_params.search_step_yaw` | `0.03` | double | Coarse yaw grid step [rad] ($\approx 1.7^\circ$, 11 yaw steps). |
 | `matching_params.dynamic_yaw_expansion` | `true` | bool | Expands `search_range_yaw` proportionally to $|\omega_z|$ during fast turns. |
 | `matching_params.dynamic_yaw_omega_thresh` | `0.50` | double | Angular speed threshold $|\omega_z|$ [rad/s] that triggers yaw window expansion. |
-| `matching_params.dynamic_yaw_factor` | `0.15` | double | Expansion gain [s]: $\text{range\_yaw} = \min(\text{max\_range},\; \text{base} + (|\omega_z| - \omega_{\text{thresh}}) \times 0.15)$. |
+| `matching_params.dynamic_yaw_factor` | `0.15` | double | Expansion gain [s]: $r_{\psi} = \min(r_{\psi,\max},\; r_{\psi,\text{base}} + (|\omega_z| - \omega_{\text{thresh}}) \cdot 0.15)$. |
 | `matching_params.dynamic_yaw_max_range` | `0.40` | double | Maximum expanded yaw search half-width [rad] ($\approx \pm 22.9^\circ$). |
 | `matching_params.fine_refine` | `true` | bool | Enables hierarchical $5 \times 5 \times 5$ sub-voxel refinement around the coarse optimum. |
 | `matching_params.fine_refine_levels` | `2` | int | Number of refinement stages (`2` levels divide step by $5^2 = 25\times$: `0.05 m` $\to$ `0.002 m`, `0.03 rad` $\to$ `0.0012 rad`). |
@@ -110,45 +110,46 @@ $$\text{scale} = \min\left(1.5,\; 1.0 + 0.5 \times \frac{\|\mathbf{v}\| - 2.0}{v
 | `matching_params.dynamic_dist_thresh` | `0.15` | double | Distance threshold [m] above which obstacle points are published to `/dynamic_cloud`. |
 | `matching_params.weight_2d_lidar` | `0.40` | double | Baseline weight $w_{\text{2D,base}}$ for 2D planar LiDAR residual when both 3D and 2D are active. |
 | `matching_params.min_2d_points` | `30` | int | Minimum 2D obstacle points ($N_{\text{2D}}$) required to include the 2D residual term. |
-| `matching_params.target_2d_points` | `200` | int | Reference 2D point count for full FoV scaling: $\text{fov\_scale} = \min(1.0, N_{\text{2D}} / 200)$. |
+| `matching_params.target_2d_points` | `200` | int | Reference 2D point count for full FoV scaling: `fov_scale = min(1.0, N_2d / 200)`. |
 | `matching_params.min_3d_points` | `50` | int | Minimum 3D obstacle points ($N_{\text{3D}}$). Below this threshold, matching switches directly to 2D-only ($w_{\text{2D}} = 1.0$). |
-| `matching_params.cost_threshold_3d` | `0.22` | double | Independent 3D average residual acceptance threshold [m] (`pass_3d`: $C_{\text{3D}} < 0.22\text{ m}$). |
-| `matching_params.cost_threshold_2d` | `0.08` | double | Independent 2D average residual acceptance threshold [m] (`pass_2d`: $C_{\text{2D}} < 0.08\text{ m}$). |
+| `matching_params.cost_threshold_3d` | `0.21` | double | Independent 3D average residual acceptance threshold [m] (`pass_3d`: $C_{\text{3D}} < 0.21\text{ m}$). |
+| `matching_params.cost_threshold_2d` | `0.04` | double | Independent 2D average residual acceptance threshold [m] (`pass_2d`: $C_{\text{2D}} < 0.04\text{ m}$). |
 | `matching_params.inlier_dist_thresh` | `0.08` | double | Surface distance threshold [m] (`8 cm`) to classify an obstacle point as an inlier. |
 | `matching_params.min_inliers` | `400` | int | Minimum inlier point count ($N_{\text{inlier}} \ge 400$) required for secondary inlier acceptance. |
 | `matching_params.inlier_cost_thresh` | `0.035` | double | Maximum average inlier distance [m] ($C_{\text{inlier}} < 0.035\text{ m}$) for inlier acceptance. |
 | `matching_params.min_inlier_ratio` | `0.28` | double | Minimum inlier ratio ($N_{\text{inlier}} / N_{\text{total}} \ge 0.28$). Prevents false locking onto partial walls. |
-| `matching_params.max_inlier_accept_cost` | `0.22` | double | Maximum total composite cost [m] ($C_{\text{total}} < 0.22\text{ m}$) allowed when accepting via inliers. |
+| `matching_params.max_inlier_accept_cost` | `0.25` | double | Maximum total composite cost [m] ($C_{\text{total}} < 0.25\text{ m}$) allowed when accepting via inliers. |
 
 #### Independent 3D/2D Cost Formulation
 For each candidate pose, the GPU kernel separately averages the clamped ESDF distances of 3D points ($N_{\text{3D}}$) and 2D points ($N_{\text{2D}}$):
 $$C_{\text{3D}} = \frac{1}{N_{\text{3D}}} \sum_{i=1}^{N_{\text{3D}}} \min(d_i, d_{\max}), \qquad C_{\text{2D}} = \frac{1}{N_{\text{2D}}} \sum_{j=1}^{N_{\text{2D}}} \min(d_j, d_{\max})$$
-$$C_{\text{total}} = (1 - w_{\text{2D}}) \, C_{\text{3D}} + w_{\text{2D}} \, C_{\text{2D}}, \qquad w_{\text{2D}} = w_{\text{2D,base}} \cdot \min\!\left(1.0, \frac{N_{\text{2D}}}{\text{target\_2d\_points}}\right)$$
+$$C_{\text{total}} = (1 - w_{\text{2D}}) \, C_{\text{3D}} + w_{\text{2D}} \, C_{\text{2D}}, \qquad w_{\text{2D}} = w_{\text{2D,base}} \cdot \min\!\left(1.0, \frac{N_{\text{2D}}}{N_{\text{2D,target}}}\right)$$
 
 #### Anti-Oscillation Bidirectional 3D / 2D Fallback (`PoseSolver::matchObstacleCloud`)
-When both 3D and 2D LiDARs have sufficient points ($N_{\text{3D}} \ge 50$ and $N_{\text{2D}} \ge 30$), a naive hard switch between Combined ($w_{\text{2D}} = 0.40$), 3D-only ($w_{\text{2D}} = 0.0$), and 2D-only ($w_{\text{2D}} = 1.0$) could cause frame-to-frame pose oscillation if the two sensors have slight extrinsic/map discrepancies or if 2D-only jumps to a distant wall. Two guards prevent this:
+When both 3D and 2D LiDARs have sufficient points ($N_{\text{3D}} \ge 50$ and $N_{\text{2D}} \ge 30$), switching between Combined ($w_{\text{2D}} = 0.40$), 3D-only ($w_{\text{2D}} = 0.0$), and 2D-only ($w_{\text{2D}} = 1.0$) modes could cause frame-to-frame pose oscillation if the two sensors have slight extrinsic discrepancies or if 2D-only jumps to a distant wall. Two guards prevent this:
 
-1. **Guard 1 — Hysteresis Deadband on 2D Detachment (`[0.08 m, 0.16 m)`)**:
-   - After the initial Combined match ($w_{\text{2D}} = 0.40 \cdot \text{fov\_scale}$), if `pass_3d` ($C_{\text{3D}} < 0.22\text{ m}$) already holds, 2D is **not** detached when $C_{\text{2D}}$ merely crosses `cost_threshold_2d` (`0.08 m`).
-   - Instead, 2D is detached (`w_2d = 0.0`, re-running 3D-only) **only if** `!pass_3d` **or** $C_{\text{2D}} \ge 2.0 \times \text{cost\_threshold\_2d}$ (`0.16 m`, severe 2D corruption/occlusion).
-   - For mild 2D offsets in $[0.08, 0.16)\text{ m}$ where 3D is still healthy, the pose remains continuously weighted at $w_{\text{2D}} = 0.40 \cdot \text{fov\_scale}$ and `pass_cost` succeeds via `pass_3d`, eliminating threshold-boundary weight chattering.
+1. **Guard 1 — Hysteresis Deadband on 2D Detachment (`[0.04 m, 0.08 m)`)**:
+   - After the initial Combined match (`w_2d = 0.40 * fov_scale`), if `pass_3d` ($C_{\text{3D}} < 0.21\text{ m}$) holds, 2D is not detached when $C_{\text{2D}}$ merely crosses `cost_threshold_2d` (`0.04 m`).
+   - Instead, 2D is detached (`w_2d = 0.0`, re-running 3D-only) **only if** `!pass_3d` **or** $C_{\text{2D}} \ge 2.0 \times$ `cost_threshold_2d` (`0.08 m`).
+   - For mild 2D offsets in $[0.04, 0.08)\text{ m}$ where 3D is still healthy, the pose remains continuously weighted at `w_2d = 0.40 * fov_scale` and `pass_cost` succeeds via `pass_3d`, eliminating threshold-boundary weight chattering near `0.04 m`.
 2. **Guard 2 — Tight Local Continuity Window (`±0.10 m, ±0.06 rad`) on 2D-Only Fallback**:
    - If 3D-only also fails (`!pass_3d`), the solver attempts 2D-only fallback ($w_{\text{2D}} = 1.0$).
    - Because 3D points are still present ($N_{\text{3D}} \ge 50$), the 2D-only coarse search window around the IMU+velocity predicted `search_base_pose` is restricted to:
-     $$\text{range\_xy}_{\text{2D-only}} = \min(\text{range\_xy},\; 2 \cdot \text{step\_xy}) = \pm 0.10\text{ m}, \qquad \text{range\_yaw}_{\text{2D-only}} = \min(\text{range\_yaw},\; 2 \cdot \text{step\_yaw}) = \pm 0.06\text{ rad}$$
-   - This allows 2D LiDAR to maintain smooth local tracking when 3D is momentarily degraded, while preventing 2D-only from jumping 20–30 cm to a parallel wall and oscillating against 3D on the next frame. If 2D-only also fails ($C_{\text{2D}} \ge 0.08\text{ m}$), the 3D-only diagnostic state is restored.
+     $$r_{xy,\text{2D-only}} = \min(r_{xy},\; 2 s_{xy}) = \pm 0.10\text{ m}, \qquad r_{\psi,\text{2D-only}} = \min(r_{\psi},\; 2 s_{\psi}) = \pm 0.06\text{ rad}$$
+     where $r_{xy}, s_{xy}$ are `search_range_xy`, `search_step_xy` and $r_{\psi}, s_{\psi}$ are `search_range_yaw`, `search_step_yaw`.
+   - This allows 2D LiDAR to maintain smooth local tracking when 3D is degraded, while preventing 2D-only from jumping 20–30 cm to a parallel wall and oscillating against 3D on subsequent frames. If 2D-only also fails ($C_{\text{2D}} \ge 0.04\text{ m}$), the 3D-only diagnostic state is restored.
 
 #### Match Acceptance Logic
 A local match is accepted (`match_accepted = true`) if and only if:
 1. **Primary Cost Gate (`pass_cost`)**:
-   - Combined mode (mild 2D offset $< 0.16\text{ m}$): $C_{\text{3D}} < 0.22\text{ m}$
-   - 3D-only mode ($w_{\text{2D}} = 0.0$): $C_{\text{3D}} < 0.22\text{ m}$
-   - 2D-only mode ($w_{\text{2D}} = 1.0$): $C_{\text{2D}} < 0.08\text{ m}$
+   - Combined mode (mild 2D offset $< 0.08\text{ m}$): $C_{\text{3D}} < 0.21\text{ m}$
+   - 3D-only mode ($w_{\text{2D}} = 0.0$): $C_{\text{3D}} < 0.21\text{ m}$
+   - 2D-only mode ($w_{\text{2D}} = 1.0$): $C_{\text{2D}} < 0.04\text{ m}$
 2. **OR Secondary Inlier Gate (`pass_inliers`)** — all 4 conditions must hold simultaneously:
    - $N_{\text{inlier}} \ge 400$ (`min_inliers`)
    - $C_{\text{inlier}} < 0.035\text{ m}$ (`inlier_cost_thresh`)
    - $N_{\text{inlier}} / N_{\text{total}} \ge 0.28$ (`min_inlier_ratio`)
-   - $C_{\text{total}} < 0.22\text{ m}$ (`max_inlier_accept_cost`)
+   - $C_{\text{total}} < 0.25\text{ m}$ (`max_inlier_accept_cost`)
 
 ---
 
@@ -174,7 +175,7 @@ A local match is accepted (`match_accepted = true`) if and only if:
 | `global_search.step_yaw` | `0.30` | double | Coarse yaw grid resolution [rad]. |
 | `global_search.downsample_stride` | `2` | int | Obstacle point decimation stride during coarse global search. |
 | `global_search.top_k_candidates` | `4` | int | Number of distinct coarse minima extracted via Non-Maximum Suppression (NMS: $\Delta xy \ge 1.0\text{ m}$ or $|\Delta\psi| \ge 0.5\text{ rad}$) for fine local refinement. |
-| `global_search.lost_count_thresh` | `10` | int | Consecutive failed frames before triggering asynchronous global recovery (`~0.2 s` at 50 Hz). |
+| `global_search.lost_count_thresh` | `25` | int | Consecutive failed frames before triggering asynchronous global recovery (`~0.5 s` at 50 Hz). |
 
 ---
 
@@ -213,7 +214,7 @@ ros2 topic echo /localization/telemetry --csv > telemetry.csv
 python3 scripts/plot_telemetry.py --csv telemetry.csv --save telemetry_analysis.png
 ```
 Recommended curves to inspect:
-- `cost_3d` vs `cost_threshold_3d` (`0.22 m`) and `cost_2d` vs `cost_threshold_2d` (`0.08 m`) / detachment threshold (`0.16 m`)
+- `cost_3d` vs `cost_threshold_3d` (`0.21 m`) and `cost_2d` vs `cost_threshold_2d` (`0.04 m`) / detachment threshold (`0.08 m`)
 - `weight_2d` (verify smooth `0.40` behavior without frame-to-frame chattering)
 - `inlier_ratio` vs `min_inlier_ratio` (`0.28`) and `inlier_count` vs `min_inliers` (`400`)
 
@@ -224,7 +225,7 @@ Recommended curves to inspect:
 Parameters marked as mutable can be updated online via `ros2 param set`:
 ```bash
 ros2 param set /gn10_pointcloud_localization_node matching_params.weight_2d_lidar 0.40
-ros2 param set /gn10_pointcloud_localization_node matching_params.cost_threshold_3d 0.22
-ros2 param set /gn10_pointcloud_localization_node matching_params.cost_threshold_2d 0.08
+ros2 param set /gn10_pointcloud_localization_node matching_params.cost_threshold_3d 0.21
+ros2 param set /gn10_pointcloud_localization_node matching_params.cost_threshold_2d 0.04
 ```
 Immutable parameters (topic names, map file paths, and GPU buffer sizes) are protected and reject runtime changes.
