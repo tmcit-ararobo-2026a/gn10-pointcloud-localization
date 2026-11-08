@@ -78,8 +78,8 @@
       fine_refine: true                 # Enable multi-resolution coarse-to-fine grid refinement
       fine_refine_levels: 2             # Number of 5x refinement levels (2 levels -> 2 mm XY, 0.0012 rad yaw)
       max_dist_thresh: 0.25             # Per-point Huber/L1 residual clipping ceiling [m] (suppresses outliers)
-      cost_threshold_3d: 0.24           # Independent 3D LiDAR mean residual acceptance threshold [m]
-      cost_threshold_2d: 0.08           # Independent 2D LiDAR mean residual acceptance threshold [m]
+      cost_threshold_3d: 0.21           # Independent 3D LiDAR mean residual acceptance threshold [m]
+      cost_threshold_2d: 0.04           # Independent 2D LiDAR mean residual acceptance threshold [m]
       dynamic_dist_thresh: 0.15         # Distance threshold [m] above which 3D points are extracted as dynamic_cloud
       field_min_x: -5.5                 # Field X lower boundary [m] (overridden by ESDF header if use_map_bounds=true)
       field_max_x: 5.5                  # Field X upper boundary [m]
