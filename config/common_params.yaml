@@ -15,7 +15,7 @@
       crop_max_y: 6.0                   # ESDF grid maximum Y coordinate [m]
       min_z: -0.20                      # ESDF grid minimum Z coordinate [m]
       max_z: 4.00                       # ESDF grid maximum Z coordinate [m]
-      publish_map: true                 # Publish 3D ESDF voxel cloud once on startup (transient_local QoS)
+      publish_map: false                # Publish 3D ESDF voxel cloud once on startup (transient_local QoS)
       publish_max_distance: -1.0        # Max voxel distance to visualize [m] (< 0 uses esdf.max_dist)
       publish_stride: 1                 # Voxel subsampling stride for visualization (>= 1)
 
