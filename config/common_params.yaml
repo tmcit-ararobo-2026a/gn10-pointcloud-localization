@@ -134,7 +134,7 @@
       step_yaw: 0.3                     # Global coarse yaw grid step [rad]
       downsample_stride: 2              # Point cloud decimation stride during global search
       top_k_candidates: 4               # Number of spatially separated Top-K coarse peaks to fine-refine
-      lost_count_thresh: 10             # Consecutive failed frames before entering LOST state & triggering global search
+      lost_count_thresh: 25             # Consecutive failed frames before entering LOST state & triggering global search
 
     # =========================================================================
     # 9. Initial Pose & Benchmark Profiling
