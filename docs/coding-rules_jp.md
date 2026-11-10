@@ -61,4 +61,4 @@
 - **`gn10-pointcloud-localization` のソースコード（C++ / CUDA / ヘッダ / 設定ファイル / Launch / テスト）内のコメントはすべて英語で記述する。**
 - 関数やカーネルには Doxygen 形式のコメントを付与し、どのようなアルゴリズムで自己位置推定が行われ、各パラメータがどう作用するかがコードから直感的に把握できるようにする。
 - 5行以上の処理が続く場合は論理ブロックごとに分け、1行の要約コメントを追加する。
-- **日英バイリンガルドキュメント:** 重要なドキュメント（`README.md` / `README_jp.md`、`docs/parameter_tuning_guide.md` / `docs/parameter_tuning_guide_jp.md`、`docs/coding-rules.md` / `docs/coding-rules_jp.md`、および PlantUML `.pu` 図）は英語と日本語を別ファイルで作成し、アルゴリズムやパラメータの変更時に両方を最新の状態に保つ。
+- **日英バイリンガルドキュメント:** 重要なドキュメント（`README.md` / `README_jp.md`、`docs/algorithm_and_mechanisms.md` / `docs/algorithm_and_mechanisms_jp.md`、`docs/coding-rules.md` / `docs/coding-rules_jp.md`、および PlantUML `.pu` 図）は英語と日本語を別ファイルで作成し、アルゴリズムやパラメータの変更時に両方を最新の状態に保つ。

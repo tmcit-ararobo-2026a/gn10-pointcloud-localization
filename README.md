@@ -208,7 +208,7 @@ All important documents and PlantUML diagrams are maintained in both English and
 | Document / Diagram | English | Japanese |
 | --- | --- | --- |
 | **README** | [README.md](./README.md) | [README_jp.md](./README_jp.md) |
-| **Parameter Tuning & Algorithm Guide** | [docs/parameter_tuning_guide.md](./docs/parameter_tuning_guide.md) | [docs/parameter_tuning_guide_jp.md](./docs/parameter_tuning_guide_jp.md) |
+| **Algorithm & Invariant Mechanics Reference** | [docs/algorithm_and_mechanisms.md](./docs/algorithm_and_mechanisms.md) | [docs/algorithm_and_mechanisms_jp.md](./docs/algorithm_and_mechanisms_jp.md) |
 | **Coding Rules & Safety Standards** | [docs/coding-rules.md](./docs/coding-rules.md) | [docs/coding-rules_jp.md](./docs/coding-rules_jp.md) |
 | **Pipeline Flow & Parameter Diagram (PlantUML)** | [docs/pipeline_flow_and_parameters.pu](./docs/pipeline_flow_and_parameters.pu) | [docs/pipeline_flow_and_parameters_jp.pu](./docs/pipeline_flow_and_parameters_jp.pu) |
 | **Matching Cost & Anti-Oscillation Fallback (PlantUML)** | [docs/matching_cost_and_weighting.pu](./docs/matching_cost_and_weighting.pu) | [docs/matching_cost_and_weighting_jp.pu](./docs/matching_cost_and_weighting_jp.pu) |

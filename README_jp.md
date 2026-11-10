@@ -207,7 +207,7 @@ ros2 launch gn10_pointcloud_localization blue.launch.py
 | ドキュメント / 設計図 | 日本語 | 英語 |
 | :--- | :--- | :--- |
 | **README** | [README_jp.md](./README_jp.md) | [README.md](./README.md) |
-| **パラメータチューニング・アルゴリズム解説** | [docs/parameter_tuning_guide_jp.md](./docs/parameter_tuning_guide_jp.md) | [docs/parameter_tuning_guide.md](./docs/parameter_tuning_guide.md) |
+| **アルゴリズム・不変的メカニズム解説** | [docs/algorithm_and_mechanisms_jp.md](./docs/algorithm_and_mechanisms_jp.md) | [docs/algorithm_and_mechanisms.md](./docs/algorithm_and_mechanisms.md) |
 | **コーディング規約・安全設計基準** | [docs/coding-rules_jp.md](./docs/coding-rules_jp.md) | [docs/coding-rules.md](./docs/coding-rules.md) |
 | **全体パイプライン・パラメータ対応図 (PlantUML)** | [docs/pipeline_flow_and_parameters_jp.pu](./docs/pipeline_flow_and_parameters_jp.pu) | [docs/pipeline_flow_and_parameters.pu](./docs/pipeline_flow_and_parameters.pu) |
 | **独立残差コスト・振動防止フォールバック図 (PlantUML)** | [docs/matching_cost_and_weighting_jp.pu](./docs/matching_cost_and_weighting_jp.pu) | [docs/matching_cost_and_weighting.pu](./docs/matching_cost_and_weighting.pu) |
