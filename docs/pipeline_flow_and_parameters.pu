@@ -32,9 +32,9 @@ partition "0. Map Initialization (`setupMapData`)" #ECEFF1 {
         * `esdf.resolution`: **0.05 m** (5 cm voxel size)
         * `esdf.max_dist`: **0.50 m** (ESDF distance truncation ceiling)
         * `esdf.crop_enabled`: **true**
-        * `esdf.crop_min/max_x`: **[-5.5, 5.5] m**
-        * `esdf.crop_min/max_y`: **[-6.0, 6.0] m**
-        * `esdf.min_z` / `max_z`: **[-0.20, 4.00] m**
+        * `esdf.crop_min/max_x`: `crop_min_x` / `crop_max_x` (field-dependent)
+        * `esdf.crop_min/max_y`: `crop_min_y` / `crop_max_y` (field-dependent)
+        * `esdf.min_z` / `max_z`: `min_z` / `max_z` (field-dependent)
     end note
 }
 
@@ -56,7 +56,7 @@ fork again
             * `lidar_2d.deskew`: **true** (Rotational + Translational Deskew)
             * `lidar_2d.time_offset_sec`: **0.0 s**
             * `lidar_2d.topic`: `"/lakibeam/scan"`
-            * `lidar_2d.frame_id`: `"lakibeam_frame"` (`x=-0.33, y=0.0, z=0.08, yaw=3.13`)
+            * `lidar_2d.frame_id`: `"lakibeam_frame"` (calibrated sensor TF)
             * `lidar_2d.tf_wait_sec`: **0.05 s**
         end note
     }
@@ -76,7 +76,7 @@ end fork
 partition "2. Motion Prediction & Spatiotemporal Alignment (`cloudCallback`)" #FFF3E0 {
     :Predict search center `search_base_pose` at `reference_stamp`:\n1. **Yaw**: `last_known_pose_.yaw + yaw_history_.delta(last_match, reference_ns)`\n2. **Translation**: `last_known_pose_.xy + velocity_xy * dt` (when `!is_lost_`);
     :Align 2D LiDAR cloud from `latest_2d_stamp_` to `reference_stamp`\nvia **`alignPointsToTimestamp`** (IMU rotation + local velocity projection);
-    :Compute adaptive search window:\n* **Yaw expansion** during fast turns (`|omega_z| > 0.5 rad/s`)\n* **XY expansion** up to 1.5x during high speed (`v >= 2.0 m/s`);
+    :Compute adaptive search window:\n* **Yaw expansion** during fast turns (`|omega_z| > omega_thresh`)\n* **XY expansion** up to 1.5x during high speed (`v >= 2.0 m/s`);
     note right
         **Prediction & Adaptive Window Parameters**
         * `velocity_estimation.enable`: **true** (`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0 m/s`, EMA `alpha = 0.6`)
@@ -89,45 +89,45 @@ partition "2. Motion Prediction & Spatiotemporal Alignment (`cloudCallback`)" #F
 
 partition "3. GPU Deskew, Ground Filter & 2D Fusion (`prepareObstacleCloud`)" #E0F7FA {
     :Upload raw 3D timed points (`d_timed_in_`) & up to **2048** IMU samples (`d_imu_samples_`);
-    :Launch **`filterGroundWithDeskewKernel` (CUDA)**:\n1. Static TF `livox_frame -> base_link` (`x=0.25, y=-0.25, z=1.09, pitch=-0.273, roll=3.14159`)\n2. Binary-search IMU quadratic interpolation + velocity deskew (`+/-100 ms` clamp)\n3. Max range filter (`dist <= max_range`)\n4. Robot footprint self-filter (`r <= robot_radius` & `z in [height_min, height_max]`)\n5. Ground / Obstacle split (`z <= ground_z_thresh` -> Ground, else -> 3D Obstacle);
+    :Launch **`filterGroundWithDeskewKernel` (CUDA)**:\n1. Static TF `livox_frame -> base_link` (calibrated sensor TF)\n2. Binary-search IMU quadratic interpolation + velocity deskew (`+/-100 ms` clamp)\n3. Max range filter (`dist <= max_range`)\n4. Robot footprint self-filter (`r <= robot_radius` & `z in [height_min, height_max]`)\n5. Ground / Obstacle split (`z <= ground_z_thresh` -> Ground, else -> 3D Obstacle);
     :Append aligned 2D LiDAR points (`num_2d_obstacles_`) after 3D obstacles (`num_3d_obstacles_`) in `d_obstacle_`;
     note right
         **Filter Parameters (`filter_params.*`)**
-        * `max_range`: **12.0 m**
-        * `robot_radius`: **0.8 m**
-        * `robot_height_min / max`: **[0.0, 1.2] m**
+        * `max_range`: sensor/environment range limit
+        * `robot_radius`: robot structure radius
+        * `robot_height_min / max`: robot structure clearance
         * `ground_z_thresh`: **0.06 m**
-        * `max_points`: **200000**
+        * `max_points`: point buffer capacity
     end note
 }
 
 if (Is Robot Lost? (`is_lost_ == true` and no fresh prior)) then (YES: Global Recovery)
     partition "4A. Global Search Recovery (`GlobalSearcher::search`)" #FFEBEE {
-        :Stage 1: Downsample cloud (`downsample_stride = 2`) & evaluate coarse 3D grid\nacross full field (`step_xy = 0.30 m`, `step_yaw = 0.30 rad`);
-        :Select **Top-K (`K = 4`)** spatially/angularly separated candidates via **3D NMS**\n(`dist_xy >= 0.60 m` or `diff_yaw >= 0.50 rad`);
+        :Stage 1: Downsample cloud (`downsample_stride`) & evaluate coarse 3D grid\nacross field bounds (`step_xy`, `step_yaw`);
+        :Select **Top-K (`top_k_candidates`)** candidates via **3D NMS**\n(`dist_xy` or `diff_yaw`);
         :Stage 2: Run full-resolution multi-level `matchObstacleCloud` around each Top-K peak\nand select candidate with lowest cost;
         note right
             **Global Search Parameters (`global_search.*`)**
-            * `range_min/max_x`: **[-5.25, 5.25] m**
-            * `range_min/max_y`: **[-5.70, 5.70] m**
-            * `range_yaw_diff`: **1.0 rad** (Red/Blue) / **3.1415 rad** (Common)
-            * `step_xy`: **0.30 m**, `step_yaw`: **0.30 rad**
-            * `downsample_stride`: **2**, `top_k_candidates`: **4**
-            * `lost_count_thresh`: **10 frames** (`interval_sec = 0.5 s`)
+            * `range_min/max_x`: field-dependent boundary
+            * `range_min/max_y`: field-dependent boundary
+            * `range_yaw_diff`: initial yaw search tolerance
+            * `step_xy`, `step_yaw`: coarse search resolution
+            * `downsample_stride`, `top_k_candidates`
+            * `lost_count_thresh`, `interval_sec`
         end note
     }
 else (NO: Local Tracking)
     partition "4B. Local Multi-Resolution ESDF Matching & Anti-Oscillation Fallback (`matchObstacleCloud`)" #E8EAF6 {
         :Compute dynamic 2D weight `w_2d = weight_2d_lidar * min(1.0, N_2d / target_2d_points)`;
-        :Run 3-Stage Coarse-to-Fine GPU ESDF Matching (`evaluateESDFKernel` + `cub::DeviceReduce::ArgMin`):\n* **Coarse**: `range_xy = +/-0.30 m` (`step = 0.05 m`), `range_yaw = +/-0.15 rad` (`step = 0.03 rad`)\n* **Fine Level 1 (1/5x)**: `step_xy = 0.01 m`, `step_yaw = 0.006 rad`\n* **Fine Level 2 (1/25x)**: `step_xy = 0.002 m` (2 mm), `step_yaw = 0.0012 rad` (~0.07 deg);
+        :Run 3-Stage Coarse-to-Fine GPU ESDF Matching (`evaluateESDFKernel` + `cub::DeviceReduce::ArgMin`):\n* **Coarse**: `range_xy`, `range_yaw` (`step_xy`, `step_yaw`)\n* **Fine Level 1 (1/5x)**\n* **Fine Level 2 (1/25x)**;
         :Evaluate best pose metrics via `computeBestPoseMetricsESDFKernel`\n(`cost_3d`, `cost_2d`, 3D `inliers`, `inlier_cost`);
         if (Combined match failed 3D (`!pass_3d`) OR Severe 2D spike (`cost_2d >= 2 * cost_threshold_2d`)?) then (YES: Guard 1)
             :Re-run **3D-only (`w_2d = 0.0`)** to isolate 3D pose from corrupted/spiked 2D scan;
             if (3D-only still fails (`!pass_3d`) AND 2D is available?) then (YES: Guard 2)
-                :Re-run **2D-only (`w_2d = 1.0`)** within **tight continuity window**\n(`range_xy <= 2 * step_xy = 0.10 m`, `range_yaw <= 2 * step_yaw = 0.06 rad`)\nto maintain tracking without 3D <-> 2D jumping;
+                :Re-run **2D-only (`w_2d = 1.0`)** within **tight continuity window**\n(`range_xy <= 2 * step_xy`, `range_yaw <= 2 * step_yaw`)\nto maintain tracking without 3D <-> 2D jumping;
             endif
         endif
-        :Extract dynamic obstacles (`d >= dynamic_dist_thresh = 0.15 m`) from 3D cloud\nvia `filterDynamicPointsESDFKernel` + `cub::DeviceSelect::Flagged`;
+        :Extract dynamic obstacles (`d >= dynamic_dist_thresh`) from 3D cloud\nvia `filterDynamicPointsESDFKernel` + `cub::DeviceSelect::Flagged`;
     }
 endif
 
@@ -137,7 +137,7 @@ partition "5. Match Acceptance & Safety TF Gating (`isPoseMatchAccepted`)" #FCE4
         :Update `last_known_pose_ = best_pose` & update EMA velocity (`velocity_x_`, `velocity_y_`);
         :Broadcast `map -> base_link` TF & publish `/platform_constraint`, `/dynamic_cloud`,\nand `/robot/operation/localization_success = true`;
     else (REJECTED)
-        :Increment `lost_frame_count_++` (`if >= lost_count_thresh (10) -> is_lost_ = true`);
+        :Increment `lost_frame_count_++` (`if >= lost_count_thresh -> is_lost_ = true`);
         :Publish `/robot/operation/localization_success = false`;
         if (`!is_lost_` AND `lost_frame_count_ <= 2` AND `dt_since_last_match <= 0.10 s`?) then (Transient 1-2 frame drop)
             :Broadcast short-term IMU/velocity predicted TF (`is_predicted = true`);
@@ -147,12 +147,12 @@ partition "5. Match Acceptance & Safety TF Gating (`isPoseMatchAccepted`)" #FCE4
     endif
     note right
         **Acceptance Thresholds (`matching_params.*`)**
-        * **3D Pass (`N_3d >= 50`)**:
-          `cost_3d < 0.22 m` **OR**
-          (`inliers >= 400` AND `inlier_cost < 0.035 m`
-           AND `inlier_ratio >= 0.28` AND `cost_3d < 0.22 m`)
-        * **2D Pass (`N_2d >= 30`)**:
-          `cost_2d < 0.08 m`
+        * **3D Pass (`N_3d >= min_3d_points`)**:
+          `cost_3d < cost_threshold` **OR**
+          (`inliers >= min_inlier_points` AND `inlier_cost < max_inlier_accept_cost`
+           AND `inlier_ratio >= inlier_ratio_threshold` AND `cost_3d < cost_threshold`)
+        * **2D Pass (`N_2d >= min_2d_points`)**:
+          `cost_2d < cost_threshold_2d`
     end note
 }
 

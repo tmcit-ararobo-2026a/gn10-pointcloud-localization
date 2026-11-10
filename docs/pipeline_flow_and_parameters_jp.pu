@@ -32,9 +32,9 @@ partition "0. マップ初期化 (`setupMapData`)" #ECEFF1 {
         * `esdf.resolution`: **0.05 m** (5 cm ボクセル解像度)
         * `esdf.max_dist`: **0.50 m** (ESDF 最大飽和距離)
         * `esdf.crop_enabled`: **true**
-        * `esdf.crop_min/max_x`: **[-5.5, 5.5] m**
-        * `esdf.crop_min/max_y`: **[-6.0, 6.0] m**
-        * `esdf.min_z` / `max_z`: **[-0.20, 4.00] m**
+        * `esdf.crop_min/max_x`: `crop_min_x` / `crop_max_x` (環境依存)
+        * `esdf.crop_min/max_y`: `crop_min_y` / `crop_max_y` (環境依存)
+        * `esdf.min_z` / `max_z`: `min_z` / `max_z` (環境依存)
     end note
 }
 
@@ -56,7 +56,7 @@ fork again
             * `lidar_2d.deskew`: **true** (回転 + 並進 Deskew)
             * `lidar_2d.time_offset_sec`: **0.0 s**
             * `lidar_2d.topic`: `"/lakibeam/scan"`
-            * `lidar_2d.frame_id`: `"lakibeam_frame"` (`x=-0.33, y=0.0, z=0.08, yaw=3.13`)
+            * `lidar_2d.frame_id`: `"lakibeam_frame"` (較正済みセンサTF)
             * `lidar_2d.tf_wait_sec`: **0.05 s**
         end note
     }
@@ -76,7 +76,7 @@ end fork
 partition "2. 運動予測と時空間アライメント (`cloudCallback`)" #FFF3E0 {
     :基準時刻 `reference_stamp` における探索中心 `search_base_pose` を予測:\n1. **Yaw角**: `last_known_pose_.yaw + yaw_history_.delta(last_match, reference_ns)`\n2. **並進位置**: `last_known_pose_.xy + velocity_xy * dt` (`!is_lost_` 時);
     :2D LiDAR 点群を **`alignPointsToTimestamp`** により `latest_2d_stamp_` から\n3D 基準時刻 `reference_stamp` へ時空間補正 (IMU 回転 + 並進前進射影);
-    :探索範囲の動的拡大:\n* 高速旋回時 (`|omega_z| > 0.5 rad/s`) に **Yaw 探索幅を拡大**\n* 高速並進時 (`v >= 2.0 m/s`) に **XY 探索幅を最大 1.5 倍へ拡大**;
+    :探索範囲の動的拡大:\n* 高速旋回時 (`|omega_z| > omega_thresh`) に **Yaw 探索幅を拡大**\n* 高速並進時 (`v >= 2.0 m/s`) に **XY 探索幅を最大 1.5 倍へ拡大**;
     note right
         **速度推定・動的探索幅拡大パラメータ**
         * `velocity_estimation.enable`: **true** (`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0 m/s`, EMA `alpha = 0.6`)
@@ -89,45 +89,45 @@ partition "2. 運動予測と時空間アライメント (`cloudCallback`)" #FFF
 
 partition "3. GPU Deskew・床面除去・2D点群統合 (`prepareObstacleCloud`)" #E0F7FA {
     :3D 生点群 (`d_timed_in_`) と最大 **2048 サンプル**の IMU 履歴 (`d_imu_samples_`) を GPU へ転送;
-    :**`filterGroundWithDeskewKernel` (CUDA)** を実行:\n1. 静的 TF 変換 `livox_frame -> base_link` (`x=0.25, y=-0.25, z=1.09, pitch=-0.273, roll=3.14159`)\n2. 二分探索による IMU 区分2次補間 + 並進速度 Deskew (`+/-100 ms` 外挿クランプ)\n3. 最大距離フィルタ (`dist <= max_range`)\n4. ロボット自己フィルタ (`r <= robot_radius` かつ `z in [height_min, height_max]`)\n5. 床面 / 障害物分離 (`z <= ground_z_thresh` -> 地面, それ以外 -> 3D 障害物);
+    :**`filterGroundWithDeskewKernel` (CUDA)** を実行:\n1. 静的 TF 変換 `livox_frame -> base_link` (較正済みセンサTF)\n2. 二分探索による IMU 区分2次補間 + 並進速度 Deskew (`+/-100 ms` 外挿クランプ)\n3. 最大距離フィルタ (`dist <= max_range`)\n4. ロボット自己フィルタ (`r <= robot_radius` かつ `z in [height_min, height_max]`)\n5. 床面 / 障害物分離 (`z <= ground_z_thresh` -> 地面, それ以外 -> 3D 障害物);
     :時刻同期済み 2D LiDAR 点群 (`num_2d_obstacles_`) を `d_obstacle_` の 3D 障害物 (`num_3d_obstacles_`) の末尾に結合;
     note right
         **フィルタパラメータ (`filter_params.*`)**
-        * `max_range`: **12.0 m**
-        * `robot_radius`: **0.8 m**
-        * `robot_height_min / max`: **[0.0, 1.2] m**
+        * `max_range`: センサ・環境の最大計測距離
+        * `robot_radius`: ロボット占有半径
+        * `robot_height_min / max`: 機体構造高さ範囲
         * `ground_z_thresh`: **0.06 m**
-        * `max_points`: **200000**
+        * `max_points`: 点群バッファ容量上限
     end note
 }
 
 if (ロスト状態か？ (`is_lost_ == true` かつ外部 Prior なし)) then (YES: グローバル探索復帰)
     partition "4A. グローバル探索による自己位置復帰 (`GlobalSearcher::search`)" #FFEBEE {
-        :Stage 1: 点群を間引き (`downsample_stride = 2`)、フィールド全域を粗いグリッドで評価\n(`step_xy = 0.30 m`, `step_yaw = 0.30 rad`);
-        :**3D NMS (非極大抑制)** により空間・角度的に離れた上位 **Top-K (`K = 4`)** 候補を抽出\n(`dist_xy >= 0.60 m` または `diff_yaw >= 0.50 rad`);
+        :Stage 1: 点群を間引き (`downsample_stride`)、フィールド全域を粗いグリッドで評価\n(`step_xy`, `step_yaw`);
+        :**3D NMS (非極大抑制)** により空間・角度的に離れた上位 **Top-K (`top_k_candidates`)** 候補を抽出\n(`dist_xy` または `diff_yaw`);
         :Stage 2: 各 Top-K 候補の周囲でフル解像度の多段階 `matchObstacleCloud` を実行し、最小コスト姿勢を採用;
         note right
             **グローバル探索パラメータ (`global_search.*`)**
-            * `range_min/max_x`: **[-5.25, 5.25] m**
-            * `range_min/max_y`: **[-5.70, 5.70] m**
-            * `range_yaw_diff`: **1.0 rad** (Red/Blue) / **3.1415 rad** (Common)
-            * `step_xy`: **0.30 m**, `step_yaw`: **0.30 rad**
-            * `downsample_stride`: **2**, `top_k_candidates`: **4**
-            * `lost_count_thresh`: **10 フレーム** (`interval_sec = 0.5 s`)
+            * `range_min/max_x`: 環境依存の探索範囲
+            * `range_min/max_y`: 環境依存の探索範囲
+            * `range_yaw_diff`: 初期 Yaw 探索許容幅
+            * `step_xy`, `step_yaw`: 粗探索グリッド解像度
+            * `downsample_stride`, `top_k_candidates`
+            * `lost_count_thresh`, `interval_sec`
         end note
     }
 else (NO: ローカル追跡)
     partition "4B. 多段階 ESDF マッチングと振動防止フォールバック (`matchObstacleCloud`)" #E8EAF6 {
         :2D LiDAR の動的結合重みを計算: `w_2d = weight_2d_lidar * min(1.0, N_2d / target_2d_points)`;
-        :3段階 Coarse-to-Fine GPU ESDF マッチング (`evaluateESDFKernel` + `cub::DeviceReduce::ArgMin`):\n* **Coarse**: `range_xy = +/-0.30 m` (`step = 0.05 m`), `range_yaw = +/-0.15 rad` (`step = 0.03 rad`)\n* **Fine Level 1 (1/5倍)**: `step_xy = 0.01 m`, `step_yaw = 0.006 rad`\n* **Fine Level 2 (1/25倍)**: `step_xy = 0.002 m` (2 mm), `step_yaw = 0.0012 rad` (~0.07度);
+        :3段階 Coarse-to-Fine GPU ESDF マッチング (`evaluateESDFKernel` + `cub::DeviceReduce::ArgMin`):\n* **Coarse**: `range_xy`, `range_yaw` (`step_xy`, `step_yaw`)\n* **Fine Level 1 (1/5倍)**\n* **Fine Level 2 (1/25倍)**;
         :`computeBestPoseMetricsESDFKernel` で最良姿勢の指標を算出\n(`cost_3d`, `cost_2d`, 3D `inliers`, `inlier_cost`);
         if (統合マッチが 3D 不合格 (`!pass_3d`) または 2D が異常スパイク (`cost_2d >= 2 * cost_threshold_2d`)?) then (YES: ガード1 [デッドバンド])
             :**3D 単独 (`w_2d = 0.0`)** で再マッチングし、2D の異常値による引きずりを遮断;
             if (3D 単独でも不合格 (`!pass_3d`) かつ 2D 点群が有効?) then (YES: ガード2 [ジャンプ防止窓])
-                :`search_base_pose` 近傍の **狭小連続窓 (`range_xy <= 2 * step_xy = 0.10 m`, `range_yaw <= 0.06 rad`)** で\n**2D 単独 (`w_2d = 1.0`)** マッチングを実行し、3D <-> 2D 間の位置ジャンプ・振動を防止;
+                :`search_base_pose` 近傍の **狭小連続窓 (`range_xy <= 2 * step_xy`, `range_yaw <= 2 * step_yaw`)** で\n**2D 単独 (`w_2d = 1.0`)** マッチングを実行し、3D <-> 2D 間の位置ジャンプ・振動を防止;
             endif
         endif
-        :3D 障害物点群から動的障害物 (`d >= dynamic_dist_thresh = 0.15 m`) を\n`filterDynamicPointsESDFKernel` + `cub::DeviceSelect::Flagged` で高速抽出;
+        :3D 障害物点群から動的障害物 (`d >= dynamic_dist_thresh`) を\n`filterDynamicPointsESDFKernel` + `cub::DeviceSelect::Flagged` で高速抽出;
     }
 endif
 
@@ -137,7 +137,7 @@ partition "5. マッチング合否判定と安全 TF 配信制御 (`isPoseMatch
         :`last_known_pose_ = best_pose` を更新し、EMA 速度 (`velocity_x_`, `velocity_y_`) を更新;
         :`map -> base_link` TF、`/platform_constraint`、`/dynamic_cloud`、\nおよび `/robot/operation/localization_success = true` を配信;
     else (不合格 [REJECTED])
-        :`lost_frame_count_++` (`>= lost_count_thresh (10)` で `is_lost_ = true` へ遷移);
+        :`lost_frame_count_++` (`>= lost_count_thresh` で `is_lost_ = true` へ遷移);
         :`/robot/operation/localization_success = false` を配信;
         if (`!is_lost_` かつ `lost_frame_count_ <= 2` かつ `dt_since_last_match <= 0.10 s`?) then (単発 1〜2 フレームの瞬断)
             :短時間のみ IMU・速度予測姿勢で TF を補間配信 (`is_predicted = true`);
@@ -147,12 +147,12 @@ partition "5. マッチング合否判定と安全 TF 配信制御 (`isPoseMatch
     endif
     note right
         **合否判定しきい値 (`matching_params.*`)**
-        * **3D 合格条件 (`N_3d >= 50`)**:
-          `cost_3d < 0.22 m` **または**
-          (`inliers >= 400` かつ `inlier_cost < 0.035 m`
-           かつ `inlier_ratio >= 0.28` かつ `cost_3d < 0.22 m`)
-        * **2D 合格条件 (`N_2d >= 30`)**:
-          `cost_2d < 0.08 m`
+        * **3D 合格条件 (`N_3d >= min_3d_points`)**:
+          `cost_3d < cost_threshold` **または**
+          (`inliers >= min_inlier_points` かつ `inlier_cost < max_inlier_accept_cost`
+           かつ `inlier_ratio >= inlier_ratio_threshold` かつ `cost_3d < cost_threshold`)
+        * **2D 合格条件 (`N_2d >= min_2d_points`)**:
+          `cost_2d < cost_threshold_2d`
     end note
 }
 

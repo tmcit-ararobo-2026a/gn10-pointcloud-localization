@@ -22,19 +22,19 @@ skinparam note {
 title **gn10-pointcloud-localization: コスト評価の数理モデルと振動防止 3D/2D フォールバック機構**
 
 package "1. 点単位のロバスト残差評価 (`evaluateESDFKernel`)" #E3F2FD {
-    rectangle "**座標変換 (`base_link` -> `map`)**\n候補姿勢 $P_k = (r_x, r_y, r_{\\text{yaw}})$ に対して:\n$w_x = \\cos(r_{\\text{yaw}}) l_x - \\sin(r_{\\text{yaw}}) l_y + r_x$\n$w_y = \\sin(r_{\\text{yaw}}) l_x + \\cos(r_{\\text{yaw}}) l_y + r_y$\n$w_z = l_z$" as TF_EQ
+    rectangle "**座標変換 (`base_link` -> `map`)**\n候補姿勢 P_k = (r_x, r_y, r_yaw) に対して:\nw_x = cos(r_yaw) * l_x - sin(r_yaw) * l_y + r_x\nw_y = sin(r_yaw) * l_x + cos(r_yaw) * l_y + r_y\nw_z = l_z" as TF_EQ
 
-    rectangle "**ハードウェア三線形補間 ESDF 参照 (`tex3D`) と外れ値クリッピング**\n$d_i = \\text{tex3D}(u, v, w)$\n$c_i = \\min(d_i,\\; d_{\\max})$ ($(w_x, w_y) \\in \\text{FieldBounds}$ の場合、範囲外は $d_{\\max}$)\nただし $d_{\\max} = \\text{max\\_dist\\_thresh} = 0.25\\text{ m}$" as CLIP_EQ
+    rectangle "**ハードウェア三線形補間 ESDF 参照 (`tex3D`) と外れ値クリッピング**\nd_i = tex3D(u, v, w)\nc_i = min(d_i, d_max) ((w_x, w_y) が FieldBounds 内の場合、範囲外は d_max)\nただし d_max = max_dist_thresh" as CLIP_EQ
 
     TF_EQ -down-> CLIP_EQ
 }
 
 package "2. 3D・2D 独立平均残差と動的スケーリング重み" #E8F5E9 {
-    rectangle "**3D LiDAR 平均残差 ($N_{3D}$ 点, インデックス $i < N_{3D}$)**\n$\\text{cost}_{3D}(P_k) = \\frac{1}{N_{3D}} \\sum_{i=0}^{N_{3D}-1} c_i$\n\n**3D 壁面インライア集計 ($d_i < \\text{inlier\\_dist\\_thresh} = 0.08\\text{ m}$, 厳密に $i < N_{3D}$ のみ)**\n$N_{\\text{inlier}} = |\\{i < N_{3D} : d_i < 0.08\\text{ m}\\}|,\\quad \\text{cost}_{\\text{inlier}} = \\frac{1}{N_{\\text{inlier}}} \\sum_{d_i < 0.08} d_i$" as COST_3D
+    rectangle "**3D LiDAR 平均残差 (N_3d 点, インデックス i < N_3d)**\ncost_3d(P_k) = (1 / N_3d) * sum_{i=0}^{N_3d-1} c_i\n\n**3D 壁面インライア集計 (d_i < inlier_dist_thresh, 厳密に i < N_3d のみ)**\nN_inlier = count(i < N_3d where d_i < inlier_dist_thresh)\ncost_inlier = (1 / N_inlier) * sum_{d_i < inlier_dist_thresh} d_i" as COST_3D
 
-    rectangle "**2D LiDAR 平均残差 ($N_{2D}$ 点, インデックス $i \\ge N_{3D}$)**\n$\\text{cost}_{2D}(P_k) = \\frac{1}{N_{2D}} \\sum_{i=N_{3D}}^{N_{3D}+N_{2D}-1} c_i$\n\n**FoV カバレッジに応じた 2D 重み (`computeEffectiveWeight2D`)**\n$s_{\\text{fov}} = \\min\\left(1.0,\\; \\frac{N_{2D}}{\\text{target\\_2d\\_points (200)}}\\right)$\n$w_{2D} = \\text{weight\\_2d\\_lidar (0.40)} \\times s_{\\text{fov}}$" as COST_2D
+    rectangle "**2D LiDAR 平均残差 (N_2d 点, インデックス i >= N_3d)**\ncost_2d(P_k) = (1 / N_2d) * sum_{i=N_3d}^{N_3d+N_2d-1} c_i\n\n**FoV カバレッジに応じた 2D 重み (`computeEffectiveWeight2D`)**\ns_fov = min(1.0, N_2d / target_2d_points)\nw_2d = weight_2d_lidar * s_fov" as COST_2D
 
-    rectangle "**候補グリッド全体で最小化される複合目的関数**\n$\\text{cost}_{\\text{total}}(P_k) = (1 - w_{2D}) \\cdot \\text{cost}_{3D}(P_k) + w_{2D} \\cdot \\text{cost}_{2D}(P_k)$\n$P^* = \\arg\\min_{P_k} \\text{cost}_{\\text{total}}(P_k)$" as COMP_EQ
+    rectangle "**候補グリッド全体で最小化される複合目的関数**\ncost_total(P_k) = (1 - w_2d) * cost_3d(P_k) + w_2d * cost_2d(P_k)\nP* = argmin_{P_k} cost_total(P_k)" as COMP_EQ
 
     COST_3D -down-> COMP_EQ
     COST_2D -down-> COMP_EQ
@@ -44,13 +44,13 @@ CLIP_EQ -down-> COST_3D
 CLIP_EQ -down-> COST_2D
 
 package "3. 振動防止・双方向フォールバック状態遷移 (`PoseSolver::matchObstacleCloud`)" #FFF3E0 {
-    rectangle "**Step A: 3D + 2D 統合マッチング ($w_{2D} = 0.40 \\cdot s_{\\text{fov}}$)**\n統合最適姿勢 $P_{\\text{comb}}^*$ における $\\text{cost}_{3D}$, $\\text{cost}_{2D}$, $N_{\\text{inlier}}$, $\\text{cost}_{\\text{inlier}}$ を評価" as STEP_A
+    rectangle "**Step A: 3D + 2D 統合マッチング (w_2d = weight_2d_lidar * s_fov)**\n統合最適姿勢 P_comb* における cost_3d, cost_2d, N_inlier, cost_inlier を評価" as STEP_A
 
-    rectangle "**ガード1: 2D 切り離しに対するヒステリシス・デッドバンド**\n以下の場合 **のみ** 3D 単独再マッチングを実行:\n  `!pass_3d` (2D の異常により 3D 合格基準から外れた場合)\n  **または** $\\text{cost}_{2D} \\ge 2.0 \\times \\text{cost\\_threshold\\_2d} = 0.16\\text{ m}$ (2D の顕著なスパイク)\n*(`pass_3d == true` 時のデッドバンド $[0.08, 0.16)\\text{ m}$ により、しきい値境界での重みチャタリングを完全防止)*" as GUARD_1
+    rectangle "**ガード1: 2D 切り離しに対するヒステリシス・デッドバンド**\n以下の場合 **のみ** 3D 単独再マッチングを実行:\n  `!pass_3d` (2D の異常により 3D 合格基準から外れた場合)\n  **または** cost_2d >= 2.0 * cost_threshold_2d (2D の顕著なスパイク)\n*(`pass_3d == true` 時のデッドバンド [cost_threshold_2d, 2.0 * cost_threshold_2d) により重みチャタリングを完全防止)*" as GUARD_1
 
-    rectangle "**Step B: 3D 単独フォールバック ($w_{2D} = 0.0$)**\n**3D LiDAR 点群のみ** を用いて通常探索窓 ($\\pm 0.30\\text{ m}, \\pm 0.15\\text{ rad}$) で再探索 -> $P_{3D}^*$" as STEP_B
+    rectangle "**Step B: 3D 単独フォールバック (w_2d = 0.0)**\n**3D LiDAR 点群のみ** を用いて通常探索窓 (+/-range_xy, +/-range_yaw) で再探索 -> P_3d*" as STEP_B
 
-    rectangle "**ガード2: 2D 単独フォールバック時の狭小連続窓制限**\n$N_{3D} \\ge 50$ で 3D 単独でも `!pass_3d` となった場合:\n`search_base_pose` (IMU+速度予測姿勢) の周囲 **狭小近傍窓**\n($\\pm 2 \\cdot \\text{step}_{xy} = \\pm 0.10\\text{ m},\\; \\pm 2 \\cdot \\text{step}_{\\text{yaw}} = \\pm 0.06\\text{ rad}$) に限定して **2D 単独 ($w_{2D} = 1.0$)** を評価\n*(2D 単独が離れた偽の壁へジャンプし、次フレームで 3D と位置振動する現象を物理的に遮断)*" as STEP_C
+    rectangle "**ガード2: 2D 単独フォールバック時の狭小連続窓制限**\nN_3d >= min_3d_points で 3D 単独でも `!pass_3d` となった場合:\n`search_base_pose` (IMU+速度予測姿勢) の周囲 **狭小近傍窓**\n(+/-2 * step_xy, +/-2 * step_yaw) に限定して **2D 単独 (w_2d = 1.0)** を評価\n*(2D 単独が離れた偽の壁へジャンプし、次フレームで 3D と位置振動する現象を物理的に遮断)*" as STEP_C
 
     STEP_A -down-> GUARD_1
     GUARD_1 -down-> STEP_B : 条件成立時
@@ -60,7 +60,7 @@ package "3. 振動防止・双方向フォールバック状態遷移 (`PoseSolv
 COMP_EQ -down-> STEP_A
 
 package "4. 最終マッチング合否判定 (`MatchingParams::isMatchAccepted`)" #FCE4EC {
-    rectangle "**`pass_3d || pass_2d` が成立するとき合格 (`true`)**:\n* **`pass_3d`** ($N_{3D} \\ge 50$): $\\text{cost}_{3D} < 0.22\\text{ m}$ **または** ($N_{\\text{inlier}} \\ge 400 \\land \\text{cost}_{\\text{inlier}} < 0.035\\text{ m} \\land \\frac{N_{\\text{inlier}}}{N_{3D}} \\ge 0.28 \\land \\text{cost}_{3D} < 0.22\\text{ m}$)\n* **`pass_2d`** ($N_{2D} \\ge 30$): $\\text{cost}_{2D} < 0.08\\text{ m}$" as FINAL_ACCEPT
+    rectangle "**`pass_3d || pass_2d` が成立するとき合格 (`true`)**:\n* **`pass_3d`** (N_3d >= min_3d_points):\n  cost_3d < cost_threshold\n  **または** (N_inlier >= min_inlier_points AND cost_inlier < max_inlier_accept_cost\n       AND N_inlier / N_3d >= inlier_ratio_threshold AND cost_3d < cost_threshold)\n* **`pass_2d`** (N_2d >= min_2d_points):\n  cost_2d < cost_threshold_2d" as FINAL_ACCEPT
 }
 
 STEP_A -down-> FINAL_ACCEPT : 通常時 (`pass_3d` かつ 2D スパイクなし)

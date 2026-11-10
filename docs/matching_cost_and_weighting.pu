@@ -22,19 +22,19 @@ skinparam note {
 title **gn10-pointcloud-localization: Mathematical Cost Formulation & Anti-Oscillation 3D/2D Fallback**
 
 package "1. Per-Point Robust Residual Evaluation (`evaluateESDFKernel`)" #E3F2FD {
-    rectangle "**Coordinate Transformation (`base_link` -> `map`)**\nFor candidate pose $P_k = (r_x, r_y, r_{\\text{yaw}})$:\n$w_x = \\cos(r_{\\text{yaw}}) l_x - \\sin(r_{\\text{yaw}}) l_y + r_x$\n$w_y = \\sin(r_{\\text{yaw}}) l_x + \\cos(r_{\\text{yaw}}) l_y + r_y$\n$w_z = l_z$" as TF_EQ
+    rectangle "**Coordinate Transformation (`base_link` -> `map`)**\nFor candidate pose P_k = (r_x, r_y, r_yaw):\nw_x = cos(r_yaw) * l_x - sin(r_yaw) * l_y + r_x\nw_y = sin(r_yaw) * l_x + cos(r_yaw) * l_y + r_y\nw_z = l_z" as TF_EQ
 
-    rectangle "**Hardware Trilinear ESDF Lookup (`tex3D`) & Outlier Clipping**\n$d_i = \\text{tex3D}(u, v, w)$\n$c_i = \\min(d_i,\\; d_{\\max})$ if $(w_x, w_y) \\in \\text{FieldBounds}$, else $d_{\\max}$\nwhere $d_{\\max} = \\text{max\\_dist\\_thresh} = 0.25\\text{ m}$" as CLIP_EQ
+    rectangle "**Hardware Trilinear ESDF Lookup (`tex3D`) & Outlier Clipping**\nd_i = tex3D(u, v, w)\nc_i = min(d_i, d_max) if (w_x, w_y) in FieldBounds, else d_max\nwhere d_max = max_dist_thresh" as CLIP_EQ
 
     TF_EQ -down-> CLIP_EQ
 }
 
 package "2. Independent 3D & 2D Mean Residuals and Dynamic Weighting" #E8F5E9 {
-    rectangle "**3D LiDAR Mean Residual ($N_{3D}$ points, index $i < N_{3D}$)**\n$\\text{cost}_{3D}(P_k) = \\frac{1}{N_{3D}} \\sum_{i=0}^{N_{3D}-1} c_i$\n\n**3D Wall Inliers ($d_i < \\text{inlier\\_dist\\_thresh} = 0.08\\text{ m}$, strictly $i < N_{3D}$)**\n$N_{\\text{inlier}} = |\\{i < N_{3D} : d_i < 0.08\\text{ m}\\}|,\\quad \\text{cost}_{\\text{inlier}} = \\frac{1}{N_{\\text{inlier}}} \\sum_{d_i < 0.08} d_i$" as COST_3D
+    rectangle "**3D LiDAR Mean Residual (N_3d points, index i < N_3d)**\ncost_3d(P_k) = (1 / N_3d) * sum_{i=0}^{N_3d-1} c_i\n\n**3D Wall Inliers (d_i < inlier_dist_thresh, strictly i < N_3d)**\nN_inlier = count(i < N_3d where d_i < inlier_dist_thresh)\ncost_inlier = (1 / N_inlier) * sum_{d_i < inlier_dist_thresh} d_i" as COST_3D
 
-    rectangle "**2D LiDAR Mean Residual ($N_{2D}$ points, index $i \\ge N_{3D}$)**\n$\\text{cost}_{2D}(P_k) = \\frac{1}{N_{2D}} \\sum_{i=N_{3D}}^{N_{3D}+N_{2D}-1} c_i$\n\n**FoV-Scaled 2D Weight (`computeEffectiveWeight2D`)**\n$s_{\\text{fov}} = \\min\\left(1.0,\\; \\frac{N_{2D}}{\\text{target\\_2d\\_points (200)}}\\right)$\n$w_{2D} = \\text{weight\\_2d\\_lidar (0.40)} \\times s_{\\text{fov}}$" as COST_2D
+    rectangle "**2D LiDAR Mean Residual (N_2d points, index i >= N_3d)**\ncost_2d(P_k) = (1 / N_2d) * sum_{i=N_3d}^{N_3d+N_2d-1} c_i\n\n**FoV-Scaled 2D Weight (`computeEffectiveWeight2D`)**\ns_fov = min(1.0, N_2d / target_2d_points)\nw_2d = weight_2d_lidar * s_fov" as COST_2D
 
-    rectangle "**Composite Objective Function Minimized Across Candidate Grid**\n$\\text{cost}_{\\text{total}}(P_k) = (1 - w_{2D}) \\cdot \\text{cost}_{3D}(P_k) + w_{2D} \\cdot \\text{cost}_{2D}(P_k)$\n$P^* = \\arg\\min_{P_k} \\text{cost}_{\\text{total}}(P_k)$" as COMP_EQ
+    rectangle "**Composite Objective Function Minimized Across Candidate Grid**\ncost_total(P_k) = (1 - w_2d) * cost_3d(P_k) + w_2d * cost_2d(P_k)\nP* = argmin_{P_k} cost_total(P_k)" as COMP_EQ
 
     COST_3D -down-> COMP_EQ
     COST_2D -down-> COMP_EQ
@@ -44,13 +44,13 @@ CLIP_EQ -down-> COST_3D
 CLIP_EQ -down-> COST_2D
 
 package "3. Oscillation-Free Bidirectional Fallback State Machine (`PoseSolver::matchObstacleCloud`)" #FFF3E0 {
-    rectangle "**Step A: Combined 3D + 2D Match ($w_{2D} = 0.40 \\cdot s_{\\text{fov}}$)**\nEvaluate $\\text{cost}_{3D}$, $\\text{cost}_{2D}$, $N_{\\text{inlier}}$, $\\text{cost}_{\\text{inlier}}$ at $P_{\\text{comb}}^*$" as STEP_A
+    rectangle "**Step A: Combined 3D + 2D Match (w_2d = weight_2d_lidar * s_fov)**\nEvaluate cost_3d, cost_2d, N_inlier, cost_inlier at P_comb*" as STEP_A
 
-    rectangle "**Guard 1: Hysteresis Deadband on 2D Detachment**\nTrigger 3D-only retry **ONLY IF**:\n  `!pass_3d` (2D pulled 3D out of acceptance)\n  **OR** $\\text{cost}_{2D} \\ge 2.0 \\times \\text{cost\\_threshold\\_2d} = 0.16\\text{ m}$ (Severe 2D spike)\n*(Deadband $[0.08, 0.16)\\text{ m}$ when `pass_3d == true` prevents weight chattering!)*" as GUARD_1
+    rectangle "**Guard 1: Hysteresis Deadband on 2D Detachment**\nTrigger 3D-only retry **ONLY IF**:\n  `!pass_3d` (2D pulled 3D out of acceptance)\n  **OR** cost_2d >= 2.0 * cost_threshold_2d (Severe 2D spike)\n*(Deadband [cost_threshold_2d, 2.0 * cost_threshold_2d) prevents weight chattering)*" as GUARD_1
 
-    rectangle "**Step B: 3D-Only Fallback ($w_{2D} = 0.0$)**\nRe-run local search using **only 3D LiDAR points** over full search window\n($\\pm 0.30\\text{ m}, \\pm 0.15\\text{ rad}$) -> $P_{3D}^*$" as STEP_B
+    rectangle "**Step B: 3D-Only Fallback (w_2d = 0.0)**\nRe-run local search using **only 3D LiDAR points** over full search window\n(+/-range_xy, +/-range_yaw) -> P_3d*" as STEP_B
 
-    rectangle "**Guard 2: Tight Continuity Window for 2D-Only Fallback**\nIf 3D-only also fails (`!pass_3d`) while $N_{3D} \\ge 50$:\nRun **2D-Only ($w_{2D} = 1.0$)** restricted to a **tight local neighborhood**\naround `search_base_pose`: $\\pm 2 \\cdot \\text{step}_{xy} = \\pm 0.10\\text{ m},\\; \\pm 2 \\cdot \\text{step}_{\\text{yaw}} = \\pm 0.06\\text{ rad}$.\n*(Prevents 2D-only from jumping to distant false walls & oscillating with 3D!)*" as STEP_C
+    rectangle "**Guard 2: Tight Continuity Window for 2D-Only Fallback**\nIf 3D-only also fails (`!pass_3d`) while N_3d >= min_3d_points:\nRun **2D-Only (w_2d = 1.0)** restricted to a **tight local neighborhood**\naround `search_base_pose`: +/-2 * step_xy, +/-2 * step_yaw.\n*(Prevents 2D-only from jumping to distant false walls & oscillating with 3D)*" as STEP_C
 
     STEP_A -down-> GUARD_1
     GUARD_1 -down-> STEP_B : Triggered
@@ -60,7 +60,7 @@ package "3. Oscillation-Free Bidirectional Fallback State Machine (`PoseSolver::
 COMP_EQ -down-> STEP_A
 
 package "4. Final Match Acceptance (`MatchingParams::isMatchAccepted`)" #FCE4EC {
-    rectangle "**Accepted (`true`) iff `pass_3d || pass_2d`**:\n* **`pass_3d`** ($N_{3D} \\ge 50$): $\\text{cost}_{3D} < 0.22\\text{ m}$ **OR** ($N_{\\text{inlier}} \\ge 400 \\land \\text{cost}_{\\text{inlier}} < 0.035\\text{ m} \\land \\frac{N_{\\text{inlier}}}{N_{3D}} \\ge 0.28 \\land \\text{cost}_{3D} < 0.22\\text{ m}$)\n* **`pass_2d`** ($N_{2D} \\ge 30$): $\\text{cost}_{2D} < 0.08\\text{ m}$" as FINAL_ACCEPT
+    rectangle "**Accepted (`true`) iff `pass_3d || pass_2d`**:\n* **`pass_3d`** (N_3d >= min_3d_points):\n  cost_3d < cost_threshold\n  **OR** (N_inlier >= min_inlier_points AND cost_inlier < max_inlier_accept_cost\n       AND N_inlier / N_3d >= inlier_ratio_threshold AND cost_3d < cost_threshold)\n* **`pass_2d`** (N_2d >= min_2d_points):\n  cost_2d < cost_threshold_2d" as FINAL_ACCEPT
 }
 
 STEP_A -down-> FINAL_ACCEPT : Normal (`pass_3d` & no 2D spike)
