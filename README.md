@@ -18,6 +18,10 @@ Successfully deployed for autonomous navigation and positioning in NHK Robocon 2
 - Features real-time dynamic obstacle filtering that separates non-map objects and publishes them to `/dynamic_cloud`.
 - Instead of relying on odometry, the system performs high-speed matching against a static map; this minimizes systematic error bias and enables real-time position estimation within that static map.
 
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053" width="80%" controls></video>
+</p>
+
 ## 2. System Architecture & Localization Algorithm
 
 ```
