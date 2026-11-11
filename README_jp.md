@@ -18,7 +18,7 @@ NHK高専ロボコン2026においてフィールド上でロボットの位置�
 - マップ以外の障害物のフィルタ機能を備えロボット周囲の動的障害物をリアルタイムに分離し、`/dynamic_cloud` として配信。
 - オドメトリを使用する代わりに静的マップとのマッチングを高速で行うため、誤差の偏りが生じにくく静的マップ上の位置をリアルタイムで推定可能。
 
- <video src="https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053" width="80%" controls></video>
+https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
 
 ## 2. システム構成と自己位置推定アルゴリズム
 
