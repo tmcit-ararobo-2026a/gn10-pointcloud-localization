@@ -8,8 +8,6 @@ NHK高専ロボコン2026においてフィールド上でロボットの位置�
 
 <img width="814" height="562" alt="image" src="https://github.com/user-attachments/assets/4254e8ba-a133-42b7-86b6-07034116f0f9" />
 
-<img width="1007" height="711" alt="image" src="https://github.com/user-attachments/assets/cd8ddd3f-9a64-45c4-b60e-91cef41f2de9" />
-
 ## 目次
 
 1. [概要と特徴](#1-概要と特徴)
