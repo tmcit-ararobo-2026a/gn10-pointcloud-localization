@@ -2,58 +2,37 @@
 
 [English](./README.md)
 
-GN10 自律移動ロボット向けの GPU 高速化 3D + 2D ハイブリッド LiDAR 自己位置推定 ROS 2 パッケージです（Livox MID360 3D LiDAR + Lakibeam 1 2D 平面 LiDAR + 6 軸 IMU）。  
-点群と IMU のみからグローバル初期位置同定（誘拐ロボット問題の解決）およびサブセンチメートル精度の安定したローカルトラッキングを実現します。
+ESDF + 3D Texture Memory + Jetson Orin Nano + MID360sを用いた自己位置推定。
+高速で軽量な静的マップマッチング技術によって、初期位置やオドメトリ無しでLiDAR点群から自己位置を推定します。
+NHK高専ロボコン2026においてフィールド上でロボットの位置を推定し自動運転・位置合わせとして使用しました。
 
 <img width="814" height="562" alt="image" src="https://github.com/user-attachments/assets/4254e8ba-a133-42b7-86b6-07034116f0f9" />
+
+<img width="1007" height="711" alt="image" src="https://github.com/user-attachments/assets/cd8ddd3f-9a64-45c4-b60e-91cef41f2de9" />
 
 ## 目次
 
 1. [概要と特徴](#1-概要と特徴)
-2. [3D ESDF & GPU 3D Texture Memory の仕組み](#2-3d-esdf--gpu-3d-texture-memory-の仕組み)
-3. [システム構成と自己位置推定アルゴリズム](#3-システム構成と自己位置推定アルゴリズム)
-   - [3D / 2D 双方向フォールバックと位置振動防止機構](#3d--2d-双方向フォールバックと位置振動防止機構)
-   - [異常時の安全設計（TF 配信の即時停止）](#異常時の安全設計tf-配信の即時停止)
-4. [ビルド環境・依存関係](#4-ビルド環境依存関係)
-5. [使い方](#5-使い方)
+2. [システム構成と自己位置推定アルゴリズム](#2-システム構成と自己位置推定アルゴリズム)
+3. [ビルド環境・依存関係](#3-ビルド環境依存関係)
+4. [使い方](#4-使い方)
    - [マップファイルの配置](#マップファイルの配置)
-   - [PCD から ESDF への事前変換 (CLI)](#pcd-から-esdf-への事前変換-cli)
-   - [起動 (Launch)](#起動-launch)
-   - [RViz2 での ESDF マップ可視化](#rviz2-での-esdf-マップ可視化)
-6. [パラメータ解説](#6-パラメータ解説)
-7. [ドキュメント・設計図一覧](#7-ドキュメント設計図一覧)
-8. [ライセンス](#8-ライセンス)
-
----
+   - [PCDからESDFへの事前変換](#pcdからesdfへの事前変換)
+   - [起動](#起動)
+5. [パラメータ解説](#5-パラメータ解説)
+6. [ドキュメント・設計図一覧](#6-ドキュメント設計図一覧)
+7. [ライセンス](#7-ライセンス)
 
 ## 1. 概要と特徴
 
-- **GPU 3D Texture Memory による $\mathcal{O}(1)$ スキャンマッチング**:  
-  点群マップ（`.pcd`）や CAD 定義（`.json`）を **3D ESDF（Euclidean Signed Distance Field）** に変換し、NVIDIA GPU の **3D Texture Memory** にロード。k-d Tree 探索を行わず、ESDF テクスチャ参照とハードウェア・トライリニア補間により点あたり $\mathcal{O}(1)$ の定数時間で表面距離残差を評価します。
-- **3D + 2D LiDAR 独立残差融合と振動防止フォールバック**:  
-  3D LiDAR (`Livox MID360`) と 2D 平面 LiDAR (`Lakibeam 1`) の残差を GPU カーネル内で独立に評価し、視野角（FoV）スケーリングおよび **2 段の振動防止ガード機構** を用いて統合します。片方のセンサが遮蔽・劣化した際にも、位置飛びやチャタリングを起こさずに追従を継続します。
-- **回転・並進歪み補正 (Deskew) と 3D/2D センサ間時刻同期**:  
-  3D 蓄積点群（`0.10 s` 窓）および 2D スキャン（`time_increment`）の各ビームに対し、IMU 角速度積分（回転）とロボット局所速度 $v_{\text{local}}$（並進）による歪み補正を実施し、さらに 2D 点群を 3D 点群基準時刻 $t_{\text{3D}}$ へ時刻同期します。
-- **グローバル自己位置同定 (Top-K NMS Kidnapped Robot Solver)**:  
-  IMU の絶対 Yaw 姿勢を活用し、フィールド全域の候補を GPU で一括評価。非極大抑制（NMS）で抽出した上位 K 個の極小候補を精密ローカル探索にかけて自己位置を復帰します。
-- **動的障害物・歩行者フィルタリング**:  
-  静的マップ表面からの距離（`dynamic_dist_thresh = 0.15 m`）に基づいてロボット周囲の動的障害物や他機体をリアルタイムに分離し、`/dynamic_cloud` として配信します。
+- GPUを用いた自己位置推定(Jetson Orin Nanoで使用するために作成した。)
+- 点群と点群をマッチングせず、ESDFを用いて点群をマッチングすることでよりシンプルで幅広い拡張性を備える。
+- ESDFをGPUの3D Texture Memoryに展開することで、点あたり $\mathcal{O}(1)$ の計算量でマッチング。
+- ESDF変換機能・独自フォーマットを備え、`.pcd`の点群データや`.json`で定義されたCADデータからESDFマップを生成可能。
+- ROS2 Humble対応で様々なプロジェクトに応用可能。
+- マップ以外の障害物のフィルタ機能を備えロボット周囲の動的障害物をリアルタイムに分離し、`/dynamic_cloud` として配信。
 
----
-
-## 2. 3D ESDF & GPU 3D Texture Memory の仕組み
-
-<img width="1007" height="711" alt="image" src="https://github.com/user-attachments/assets/cd8ddd3f-9a64-45c4-b60e-91cef41f2de9" />
-
-### 従来の最近傍探索と 3D ESDF テクスチャ参照の比較
-PCD 点群マップに対して直接 k-d Tree 最近傍探索を行うと、点あたり $\mathcal{O}(\log N_{\text{pcd}})$ の計算量がかかり、GPU スレッド間の分岐不一致（Warp Divergence）とランダムメモリアクセスによりフレームレートが低下します。  
-本パッケージでは、`0.05 m` 解像度の 3D ボクセルグリッドに最近傍壁面距離を事前格納した ESDF を CUDA 3D Texture (`cudaTextureObject_t`) にバインドすることで:
-1. **ハードウェア・トライリニア補間**: GPU 専用テクスチャユニットが 3 次線形補間をハードウェアで計算し、5 cm グリッド間を滑らかな連続距離としてサンプリングします。
-2. **均一なテクスチャサンプリング**: 全 GPU スレッドが同一の `tex3D<float>()` 命令を実行するため、Jetson Orin Nano 上で数千通りの候補姿勢 $(x, y, \psi)$ を数ミリ秒で並列評価できます。
-
----
-
-## 3. システム構成と自己位置推定アルゴリズム
+## 2. システム構成と自己位置推定アルゴリズム
 
 ```
 [3D LiDAR (Livox MID360)] ──> [ScanAccumulator (0.10s Deskew)] ──> [GroundFilter (CUDA)] ──> [3D 障害物点群]
@@ -73,24 +52,7 @@ PCD 点群マップに対して直接 k-d Tree 最近傍探索を行うと、点
                                                          [localization_success = true]                     [25フレーム連続失敗でGlobalSearch発動]
 ```
 
-### 3D / 2D 双方向フォールバックと位置振動防止機構
-[`PoseSolver::matchObstacleCloud`](src/pose_solver.cpp) では、3D 点群 ($N_{\text{3D}}$) と 2D 点群 ($N_{\text{2D}}$) の平均表面距離コスト ($C_{\text{3D}}, C_{\text{2D}}$) を独立に計算します。両方のセンサに十分な点数がある場合（$N_{\text{3D}} \ge 50, N_{\text{2D}} \ge 30$）、Combined モード（`w_2d = 0.40 * fov_scale`）、3D 単独モード（`w_2d = 0.0`）、2D 単独モード（`w_2d = 1.0`）の切り替えで位置飛びや振動が発生しないよう、以下の **2 段ガード機構** を備えています:
-
-1. **ガード 1 — 2D 切り離し判定のヒステリシス不感帯 (`[0.04 m, 0.08 m)`)**:
-   - 初回の Combined マッチングで 3D が合格（`pass_3d`: $C_{\text{3D}} < 0.21\text{ m}$）している場合、2D コスト $C_{\text{2D}}$ が通常の合格閾値 `cost_threshold_2d` (`0.04 m`) をわずかに超えただけでは 2D を切り離しません。
-   - 2D を切り離して 3D 単独（`w_2d = 0.0`）で再計算するのは、`!pass_3d` **または** $C_{\text{2D}} \ge 2.0 \times$ `cost_threshold_2d` (`0.08 m`、2D の明確な異常・遮蔽) のときのみです。
-   - これにより、$C_{\text{2D}} \in [0.04, 0.08)\text{ m}$ の不感帯では重み `w_2d = 0.40 * fov_scale` が連続的に保たれたまま `pass_3d` で合格となり、`0.04 m` 付近での重みチャタリング（微小振動）を防止します。
-2. **ガード 2 — 2D 単独フォールバック時の局所連続性ウィンドウ制限 (`±0.10 m, ±0.06 rad`)**:
-   - 3D 単独でも不合格（`!pass_3d`）となった場合は 2D 単独（`w_2d = 1.0`）を試行しますが、3D 点群が存在する状態（$N_{\text{3D}} \ge 50$）では、IMU＋速度予測姿勢 `search_base_pose` の周囲の探索範囲を $\min(r_{xy}, 2 s_{xy}) = \pm 0.10\text{ m}$、$\min(r_{\psi}, 2 s_{\psi}) = \pm 0.06\text{ rad}$（$r, s$ は探索半幅と刻み幅）に制限します。
-   - これにより、3D が一時的に劣化したフレームでも 2D で滑らかに局所追従を継続しつつ、2D 単独が 20〜30 cm 離れた別の平行壁へジャンプして 3D 復帰時に揺り戻し振動を起こす現象を防止します（$N_{\text{3D}} < 50$ の完全な 3D センサ欠損時のみフル探索窓 $\pm 0.30\text{ m}$ を使用します）。
-
-### 異常時の安全設計（TF 配信の即時停止）
-- マッチングが `pass_cost` と `pass_inliers` の両方で不合格となったフレームでは、[`LocalizationNode`](src/localization_node.cpp) は **即座に `map -> base_link` TF および `/platform_constraint` の配信を停止** し、`/robot/operation/localization_success` に `false` を配信します。
-- 未検証の予測姿勢（デッドレコニング）で TF を延長配信しないため、異常時には下位制御が確実に安全停止します。
-
----
-
-## 4. ビルド環境・依存関係
+## 3. ビルド環境・依存関係
 
 - **OS**: Ubuntu 22.04 LTS
 - **ROS**: ROS 2 Humble
@@ -114,14 +76,12 @@ colcon build --symlink-install --packages-select gn10_pointcloud_localization
 source install/setup.bash
 ```
 
----
-
-## 5. 使い方
+## 4. 使い方
 
 ### マップファイルの配置
-マップファイル（`.pcd`, `.esdf`, `.json`）はパッケージ内の `map/` フォルダに配置すると、YAML 設定からファイル名のみで自動参照できます。
+マップファイル（`.pcd`, `.esdf`, `.json`）はパッケージ内の `map/` フォルダに配置すると、YAML 設定からファイル名のみで自動参照。
 
-### PCD から ESDF への事前変換 (CLI)
+### PCDからESDFへの事前変換
 ```bash
 # 使用法: pcd_to_esdf_converter <input.pcd> <output.esdf> <resolution_m> [max_dist_m] [min_x max_x min_y max_y min_z max_z]
 ros2 run gn10_pointcloud_localization pcd_to_esdf_converter \
@@ -129,31 +89,16 @@ ros2 run gn10_pointcloud_localization pcd_to_esdf_converter \
   ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.esdf \
   0.05 0.50 -5.5 5.5 -6.0 6.0 -0.2 4.0
 ```
-`map_source_type: "pcd"` を指定して起動した場合も、初回起動時に `map/cache/<ファイル名>.esdf` キャッシュが自動生成され、2 回目以降は高速に読み込まれます。
+`map_source_type: "pcd"` を指定して起動した場合も、初回起動時に `map/cache/<ファイル名>.esdf` キャッシュが自動生成され、2 回目以降は高速に読み込み。
 
-### 起動 (Launch)
+### 起動
 ```bash
 # 通常起動 (common_params.yaml + localization_params.yaml)
 ros2 launch gn10_pointcloud_localization localization.launch.py
 
 # Rosbag 再生などのシミュレーション時刻を使用する場合
 ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=true
-
-# 競技ゾーン別プリセット (赤ゾーン / 青ゾーン)
-ros2 launch gn10_pointcloud_localization red.launch.py
-ros2 launch gn10_pointcloud_localization blue.launch.py
 ```
-
-#### 実機キャリブレーション済み静的 TF 既定値
-3 つの launch ファイル（`red.launch.py`, `blue.launch.py`, `localization.launch.py`）はすべて実機合わせ込み済みの同一の静的 TF（`start_livox_tf:=true`, `start_lakibeam_tf:=true`）を配信します:
-- **`base_link -> livox_frame`**: `x = 0.25 m, y = -0.25 m, z = 1.09 m, yaw = 0.0 rad, pitch = -0.273 rad, roll = 3.14159 rad`
-- **`base_link -> lakibeam_frame`**: `x = -0.33 m, y = 0.0 m, z = 0.08 m, yaw = 3.13 rad, pitch = 0.0 rad, roll = 0.0 rad`
-
-### RViz2 での ESDF マップ可視化
-起動時に `/esdf_map` (`sensor_msgs/msg/PointCloud2`, `Transient Local` QoS) へ可視化用ボクセル点群が 1 回配信されます。
-- **RViz2 設定**: `Topic: /esdf_map`, `Durability Policy: Transient Local`, `Color Transformer: Intensity`, `Style: Flat Squares (~0.04 m)`
-
----
 
 ## 6. パラメータ解説
 
@@ -198,8 +143,6 @@ ros2 launch gn10_pointcloud_localization blue.launch.py
 | `global_search.top_k_candidates` | `4` | グローバル復帰探索時に NMS で抽出して精密化する上位候補数。 |
 | `global_search.lost_count_thresh` | `25` | グローバル全域探索へ移行する連続失敗フレーム数。 |
 
----
-
 ## 7. ドキュメント・設計図一覧
 
 主要なドキュメントおよび PlantUML 設計図の一覧です:
@@ -211,8 +154,6 @@ ros2 launch gn10_pointcloud_localization blue.launch.py
 | **コーディング規約・安全設計基準** | [docs/coding-rules_jp.md](./docs/coding-rules_jp.md) | [docs/coding-rules.md](./docs/coding-rules.md) |
 | **全体パイプライン・パラメータ対応図 (PlantUML)** | [docs/pipeline_flow_and_parameters_jp.pu](./docs/pipeline_flow_and_parameters_jp.pu) | [docs/pipeline_flow_and_parameters.pu](./docs/pipeline_flow_and_parameters.pu) |
 | **独立残差コスト・振動防止フォールバック図 (PlantUML)** | [docs/matching_cost_and_weighting_jp.pu](./docs/matching_cost_and_weighting_jp.pu) | [docs/matching_cost_and_weighting.pu](./docs/matching_cost_and_weighting.pu) |
-
----
 
 ## 8. ライセンス
 
