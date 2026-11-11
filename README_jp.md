@@ -20,7 +20,7 @@ NHK高専ロボコン2026においてフィールド上でロボットの位置�
    - [PCDからESDFへの事前変換](#pcdからesdfへの事前変換)
    - [起動](#起動)
 5. [パラメータ解説](#5-パラメータ解説)
-6. [ドキュメント・設計図一覧](#6-ドキュメント設計図一覧)
+6. [設計図一覧](#6-設計図一覧)
 7. [ライセンス](#7-ライセンス)
 
 ## 1. 概要と特徴
@@ -100,13 +100,13 @@ ros2 launch gn10_pointcloud_localization localization.launch.py
 ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=true
 ```
 
-## 6. パラメータ解説
+## 5. パラメータ解説
 
-共通設定は [`config/common_params.yaml`](./config/common_params.yaml) に定義されており、各プロファイル（`localization_params.yaml`, `red_params.yaml`, `blue_params.yaml`）で差分を上書きします。
+共通設定は [`config/common_params.yaml`](./config/common_params.yaml) に定義。
 
 | パラメータ名 | 既定値 (`common_params.yaml`) | 役割・メカニズム |
 | :--- | :---: | :--- |
-| `map_source_type` | `"json"` (red/blue は `"pcd"`) | マップ種別 (`json`, `pcd`, `esdf`, `ros2_param`)。 |
+| `map_source_type` | `"json"` | マップ種別 (`json`, `pcd`, `esdf`, `ros2_param`)。 |
 | `map_file_path` | `""` | マップファイル名またはパス（相対パスは `map/` 内を探索）。 |
 | `esdf.resolution` | `0.05` | 3D ESDF グリッドのセル解像度 [m]。 |
 | `esdf.max_dist` | `0.50` | ESDF 距離場の最大打ち切り距離 [m]。 |
@@ -117,11 +117,11 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `scan_accumulation.window_s` | `0.10` | 3D LiDAR 点群の蓄積時間窓 [s]（スキャン末尾時刻へ運動補正）。 |
 | `filter_params.ground_z_thresh` | `0.06` | `base_link` 基準の床面除去高さ閾値 [m]。 |
 | `filter_params.robot_radius` | `0.80` | 自己機体除外半径 [m]（XY 平面）。 |
-| `filter_params.robot_height_min` / `max` | `0.0` / `1.2` | 障害物として有効な高さ範囲 $z$ [m]。 |
+| `filter_params.robot_height_min` / `max` | `0.0` / `1.2` | 自己機体除外半径 [m]（z方向）。 |
 | `filter_params.max_range` | `12.0` | センサの最大有効距離 [m]。 |
-| `matching_params.search_range_xy` | `0.30` | ローカル追従時の XY 探索半径 [m]（2.0 m/s 以上の高速移動時は最大 1.5 倍へ適応拡大）。 |
+| `matching_params.search_range_xy` | `0.30` | ローカル追従時の XY 探索半径 [m]。 |
 | `matching_params.search_step_xy` | `0.05` | ローカル粗探索の XY グリッド刻み幅 [m]。 |
-| `matching_params.search_range_yaw` | `0.15` | ローカル粗探索の基本 Yaw 探索半径 [rad]（約 $\pm 8.6^\circ$）。 |
+| `matching_params.search_range_yaw` | `0.15` | ローカル粗探索の基本 Yaw 探索半径 [rad]。 |
 | `matching_params.search_step_yaw` | `0.03` | ローカル粗探索の Yaw 刻み幅 [rad]（約 $1.7^\circ$）。 |
 | `matching_params.fine_refine` / `levels` | `true` / `2` | 2 段の $5 \times 5 \times 5$ サブボクセル精密探索（`0.05 m` $\to$ `0.002 m`）。 |
 | `matching_params.max_dist_thresh` | `0.25` | マッチング評価時の点ごとの ESDF 残差打ち切り距離 [m]。 |
@@ -140,21 +140,15 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `velocity_estimation.enable` | `true` | EMA 平滑化（$\alpha = 0.6$）つき並進速度推定と等速外挿の有効化（`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0`）。 |
 | `lidar_2d.enable` / `deskew` | `true` / `true` | Lakibeam 2D LiDAR の有効化と、回転・並進歪み補正および 3D 基準時刻への同期補正。 |
 | `lidar_2d.time_offset_sec` | `0.0` | 2D LiDAR タイムスタンプの静的オフセット [s]。 |
-| `global_search.top_k_candidates` | `4` | グローバル復帰探索時に NMS で抽出して精密化する上位候補数。 |
+| `global_search.top_k_candidates` | `4` | グローバル復帰探索時にNMSで抽出して精密化する上位候補数。 |
 | `global_search.lost_count_thresh` | `25` | グローバル全域探索へ移行する連続失敗フレーム数。 |
 
-## 7. ドキュメント・設計図一覧
+## 6. 設計図一覧
 
-主要なドキュメントおよび PlantUML 設計図の一覧です:
+![処理の流れとパラメータの作用](docs/pipeline_flow_and_parameters_jp.png)
 
-| ドキュメント / 設計図 | 日本語 | 英語 |
-| :--- | :--- | :--- |
-| **README** | [README_jp.md](./README_jp.md) | [README.md](./README.md) |
-| **パラメータチューニング・アルゴリズム解説** | [docs/parameter_tuning_guide_jp.md](./docs/parameter_tuning_guide_jp.md) | [docs/parameter_tuning_guide.md](./docs/parameter_tuning_guide.md) |
-| **コーディング規約・安全設計基準** | [docs/coding-rules_jp.md](./docs/coding-rules_jp.md) | [docs/coding-rules.md](./docs/coding-rules.md) |
-| **全体パイプライン・パラメータ対応図 (PlantUML)** | [docs/pipeline_flow_and_parameters_jp.pu](./docs/pipeline_flow_and_parameters_jp.pu) | [docs/pipeline_flow_and_parameters.pu](./docs/pipeline_flow_and_parameters.pu) |
-| **独立残差コスト・振動防止フォールバック図 (PlantUML)** | [docs/matching_cost_and_weighting_jp.pu](./docs/matching_cost_and_weighting_jp.pu) | [docs/matching_cost_and_weighting.pu](./docs/matching_cost_and_weighting.pu) |
+![マッチング時のコスト評価](docs/matching_cost_and_weighting_jp.png)
 
-## 8. ライセンス
+## 7. ライセンス
 
-本リポジトリは [Apache 2.0 ライセンス](./LICENSE) のもとで公開されています。
+本リポジトリは [Apache 2.0 LICENSE](./LICENSE) のもとで公開されています。
