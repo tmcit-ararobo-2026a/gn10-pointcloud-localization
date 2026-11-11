@@ -2,28 +2,15 @@
 
 [English](./README.md)
 
-ESDF + 3D Texture Memory + Jetson Orin Nano + MID360sを用いた自己位置推定。
+ESDF + 3D Texture Memory + Jetson Orin Nano + MID360 を用いた自己位置推定。
 高速で軽量な静的マップマッチング技術によって、初期位置やオドメトリ無しでLiDAR点群から自己位置を推定します。
 NHK高専ロボコン2026においてフィールド上でロボットの位置を推定し自動運転・位置合わせとして使用しました。
 
 <img width="814" height="562" alt="image" src="https://github.com/user-attachments/assets/4254e8ba-a133-42b7-86b6-07034116f0f9" />
 
-## 目次
-
-1. [概要と特徴](#1-概要と特徴)
-2. [システム構成と自己位置推定アルゴリズム](#2-システム構成と自己位置推定アルゴリズム)
-3. [ビルド環境・依存関係](#3-ビルド環境依存関係)
-4. [使い方](#4-使い方)
-   - [マップファイルの配置](#マップファイルの配置)
-   - [PCDからESDFへの事前変換](#pcdからesdfへの事前変換)
-   - [起動](#起動)
-5. [パラメータ解説](#5-パラメータ解説)
-6. [設計図一覧](#6-設計図一覧)
-7. [ライセンス](#7-ライセンス)
-
 ## 1. 概要と特徴
 
-- GPUを用いた自己位置推定(Jetson Orin Nanoで使用するために作成した。)
+- GPUを用いた自己位置推定（Jetson Orin Nano向けに最適化）。
 - 点群と点群をマッチングせず、ESDFを用いて点群をマッチングすることでよりシンプルで幅広い拡張性を備える。
 - ESDFをGPUの3D Texture Memoryに展開することで、点あたり $\mathcal{O}(1)$ の計算量でマッチング。
 - ESDF変換機能・独自フォーマットを備え、`.pcd`の点群データや`.json`で定義されたCADデータからESDFマップを生成可能。
@@ -115,7 +102,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `scan_accumulation.window_s` | `0.10` | 3D LiDAR 点群の蓄積時間窓 [s]（スキャン末尾時刻へ運動補正）。 |
 | `filter_params.ground_z_thresh` | `0.06` | `base_link` 基準の床面除去高さ閾値 [m]。 |
 | `filter_params.robot_radius` | `0.80` | 自己機体除外半径 [m]（XY 平面）。 |
-| `filter_params.robot_height_min` / `max` | `0.0` / `1.2` | 自己機体除外半径 [m]（z方向）。 |
+| `filter_params.robot_height_min` / `max` | `0.0` / `1.2` | 自己機体除外の高さ範囲 [m]（Z 方向）。 |
 | `filter_params.max_range` | `12.0` | センサの最大有効距離 [m]。 |
 | `matching_params.search_range_xy` | `0.30` | ローカル追従時の XY 探索半径 [m]。 |
 | `matching_params.search_step_xy` | `0.05` | ローカル粗探索の XY グリッド刻み幅 [m]。 |
@@ -124,17 +111,17 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `matching_params.fine_refine` / `levels` | `true` / `2` | 2 段の $5 \times 5 \times 5$ サブボクセル精密探索（`0.05 m` $\to$ `0.002 m`）。 |
 | `matching_params.max_dist_thresh` | `0.25` | マッチング評価時の点ごとの ESDF 残差打ち切り距離 [m]。 |
 | `matching_params.dynamic_dist_thresh` | `0.15` | `/dynamic_cloud` として抽出するマップ表面からの距離閾値 [m]。 |
-| `matching_params.cost_threshold_3d` | `0.21` | 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.21\text{ m}$)。 |
+| `matching_params.cost_threshold_3d` | `0.23` | 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.23\text{ m}$)。 |
 | `matching_params.cost_threshold_2d` | `0.04` | 2D LiDAR 独立残差合格しきい値 [m] ($C_{\text{2D}} < 0.04\text{ m}$、ヒステリシス切り離しは $2\times = 0.08\text{ m}$)。 |
 | `matching_params.inlier_dist_thresh` | `0.08` | マップ壁面から `0.08 m` (8 cm) 以内の点をインライアと判定。 |
 | `matching_params.min_inliers` | `400` | インライア合格判定に必要な最小インライア点数 ($N_{\text{inlier}} \ge 400$)。 |
 | `matching_params.inlier_cost_thresh` | `0.035` | インライア合格判定に必要な平均インライア残差上限 [m] ($C_{\text{inlier}} < 0.035\text{ m}$)。 |
-| `matching_params.min_inlier_ratio` | `0.28` | 全障害物点に対する最小インライア比率 ($N_{\text{inlier}} / N_{\text{total}} \ge 0.28$)。 |
-| `matching_params.max_inlier_accept_cost` | `0.25` | インライア合格判定時の全体合成コスト上限ガード [m] ($C_{\text{total}} < 0.25\text{ m}$)。 |
+| `matching_params.min_inlier_ratio` | `0.28` | 3D 障害物点に対する最小インライア比率 ($N_{\text{inlier}} / N_{\text{3D}} \ge 0.28$)。 |
+| `matching_params.max_inlier_accept_cost` | `0.25` | インライア合格判定時の 3D 残差コスト上限ガード [m] ($C_{\text{3D}} < 0.25\text{ m}$)。 |
 | `matching_params.weight_2d_lidar` | `0.40` | Combined モード時の 2D LiDAR 独立残差項の基本重み係数 $w_{\text{2D,base}}$。 |
 | `matching_params.min_2d_points` / `target_2d_points` | `30` / `200` | 2D 残差有効化の最小点数と、100% 視野角重み付けとなる基準 2D 点数。 |
 | `matching_params.min_3d_points` | `50` | 最小 3D 障害物点数（これ未満の場合はフル探索窓の 2D 単独モード $w_{\text{2D}} = 1.0$ へ移行）。 |
-| `matching_params.dynamic_yaw_expansion` | `true` | $|\omega_z| > 0.50\text{ rad/s}$ の急旋回時に Yaw 探索窓を最大 `0.40 rad` まで動的拡大（係数 `0.15`）。 |
+| `matching_params.dynamic_yaw_expansion` | `false` | 急旋回（$|\omega_z| > 0.50\text{ rad/s}$）時に Yaw 探索窓を最大 `0.60 rad` まで動的拡大（係数 `0.5`）。 |
 | `velocity_estimation.enable` | `true` | EMA 平滑化（$\alpha = 0.6$）つき並進速度推定と等速外挿の有効化（`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0`）。 |
 | `lidar_2d.enable` / `deskew` | `true` / `true` | Lakibeam 2D LiDAR の有効化と、回転・並進歪み補正および 3D 基準時刻への同期補正。 |
 | `lidar_2d.time_offset_sec` | `0.0` | 2D LiDAR タイムスタンプの静的オフセット [s]。 |
