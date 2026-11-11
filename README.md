@@ -16,6 +16,7 @@ Successfully deployed for autonomous navigation and positioning in NHK Robocon 2
 - Supports automatic ESDF map generation from `.pcd` point clouds and `.json` CAD geometric definitions via a dedicated binary format.
 - Built for ROS 2 Humble for straightforward integration across robotic projects.
 - Features real-time dynamic obstacle filtering that separates non-map objects and publishes them to `/dynamic_cloud`.
+- Instead of relying on odometry, the system performs high-speed matching against a static map; this minimizes systematic error bias and enables real-time position estimation within that static map.
 
 ## 2. System Architecture & Localization Algorithm
 
