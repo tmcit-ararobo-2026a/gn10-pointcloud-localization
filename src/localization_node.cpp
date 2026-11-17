@@ -1437,19 +1437,44 @@ bool LocalizationNode::getTransformAsArray(
     const std::string& frame_id, const rclcpp::Time& stamp, float out_transform[12]
 )
 {
+    geometry_msgs::msg::TransformStamped tf_stamped;
     try {
-        auto tf                        = tf_buffer_->lookupTransform(base_frame_, frame_id, stamp);
-        const Eigen::Affine3d eigen_tf = tf2::transformToEigen(tf);
-        for (int r = 0; r < 3; ++r) {
-            for (int c = 0; c < 4; ++c) {
-                out_transform[r * 4 + c] = static_cast<float>(eigen_tf.matrix()(r, c));
-            }
-        }
-        return true;
+        tf_stamped = tf_buffer_->lookupTransform(
+            base_frame_, frame_id, stamp, rclcpp::Duration::from_seconds(0.01)
+        );
     } catch (const tf2::TransformException& ex) {
-        RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
-        return false;
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            2000,
+            "TF lookup failed at stamp (%s -> %s): %s; falling back to latest TF",
+            base_frame_.c_str(),
+            frame_id.c_str(),
+            ex.what()
+        );
+        try {
+            tf_stamped = tf_buffer_->lookupTransform(base_frame_, frame_id, tf2::TimePointZero);
+        } catch (const tf2::TransformException& fallback_ex) {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(),
+                *this->get_clock(),
+                2000,
+                "TF fallback lookup failed (%s -> %s): %s",
+                base_frame_.c_str(),
+                frame_id.c_str(),
+                fallback_ex.what()
+            );
+            return false;
+        }
     }
+
+    const Eigen::Affine3d eigen_tf = tf2::transformToEigen(tf_stamped);
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            out_transform[r * 4 + c] = static_cast<float>(eigen_tf.matrix()(r, c));
+        }
+    }
+    return true;
 }
 
 std::vector<TimedScanPoint> LocalizationNode::extractRawTimedPoints(
