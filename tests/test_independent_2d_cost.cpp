@@ -444,12 +444,45 @@ void testESDFMatcherWeightedResidual()
         solved_inlier_cost
     ));
 
-    // 5b) When 3D has points (num_3d = 200 >= 50) but fails, and 2D has a distant false wall
-    //     at x = 0.25m (outside 2 * step_xy = 0.10m from base_pose = 0.0m), the 2D-only fallback
-    //     window is clamped to +/- 0.10m so it cannot reach x = -0.25m and is safely rejected.
+    // 5b) When 3D has points (num_3d = 200 >= 50) but fails, and 2D is shifted by 0.15m
+    //     (within range_xy = 0.25m, though > 2 * step_xy = 0.10m), 2D-only fallback succeeds.
+    std::vector<float> offset_15cm_2d;
+    for (int i = 0; i < num_2d; ++i) {
+        offset_15cm_2d.push_back(0.15f);
+        offset_15cm_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
+        offset_15cm_2d.push_back(0.2f);
+    }
+    bool ok_15cm_2d = solver.processPointCloud(
+        bad_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        &offset_15cm_2d,
+        false
+    );
+    assert(ok_15cm_2d);
+    assert(solver.lastWeight2D() == 1.0f);
+    assert(std::abs(solved_pose.x - (-0.15f)) < 0.06f);
+    assert(solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
+
+    // 5c) When 2D has a distant false wall at x = 0.40m (outside range_xy = 0.25m),
+    //     it cannot reach x = -0.40m and is safely rejected by cost_threshold_2d.
     std::vector<float> distant_2d;
     for (int i = 0; i < num_2d; ++i) {
-        distant_2d.push_back(0.25f);
+        distant_2d.push_back(0.40f);
         distant_2d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / num_2d));
         distant_2d.push_back(0.2f);
     }

@@ -448,22 +448,12 @@ bool PoseSolver::matchObstacleCloud(
                 }
 
                 if (!pass_3d) {
-                    // Anti-jump continuity window (Guard 2):
-                    // When 3D LiDAR has points (num_3d_obstacles_ >= min_3d_points) but fails
-                    // acceptance, restrict the 2D-only fallback search around search_base_pose
-                    // to at most 2 * step_xy and 2 * step_yaw. This maintains local tracking
-                    // continuity while preventing 2D-only from jumping to a distant wall and
-                    // oscillating against 3D on subsequent frames.
+                    // 2D-only fallback across the full local search window when 3D fails acceptance.
                     const PoseCandidate saved_3d_pose = out_best_pose;
                     const float saved_3d_cost = out_best_cost;
                     const int saved_3d_inliers = local_inliers;
                     const float saved_3d_inlier_cost = local_inlier_cost;
                     const std::vector<float> saved_3d_dynamic = out_dynamic_pts;
-
-                    const float fallback_range_xy =
-                        std::min(match_params.range_xy, 2.0f * match_params.step_xy);
-                    const float fallback_range_yaw =
-                        std::min(match_params.range_yaw, 2.0f * match_params.step_yaw);
 
                     last_weight_2d_ = 1.0f;
                     const bool matched_2d_only = run_local_match(
@@ -472,13 +462,13 @@ bool PoseSolver::matchObstacleCloud(
                         0,
                         num_2d_obstacles_,
                         1.0f,
-                        fallback_range_xy,
-                        fallback_range_yaw,
+                        match_params.range_xy,
+                        match_params.range_yaw,
                         nullptr,
                         &last_cost_2d_
                     );
                     if (!matched_2d_only || last_cost_2d_ >= match_params.cost_threshold_2d) {
-                        // Neither 3D nor tight 2D fallback passed; restore 3D-only state
+                        // Neither 3D nor 2D-only fallback passed; restore 3D-only state
                         out_best_pose = saved_3d_pose;
                         out_best_cost = saved_3d_cost;
                         local_inliers = saved_3d_inliers;
