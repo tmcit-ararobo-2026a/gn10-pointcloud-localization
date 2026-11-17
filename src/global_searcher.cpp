@@ -314,9 +314,10 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
         cand_pose.yaw = normalizeAngle(cand_pose.yaw);
 
         // Enforce 3D LiDAR primacy during global recovery: when 3D obstacle points are available,
-        // normalize any 2D-only fallback candidate back to 3D cost scale and require 3D acceptance.
+        // normalize any candidate where 2D failed acceptance back to 3D cost scale.
         if (solver.obstacleCount3D() >= match_params.min_3d_points &&
-            solver.lastWeight2D() >= 1.0f) {
+            (solver.lastWeight2D() >= 1.0f ||
+             solver.lastCost2D() >= match_params.cost_threshold_2d)) {
             cand_cost = solver.lastCost3D();
         }
         const bool is_accepted =

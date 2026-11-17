@@ -78,7 +78,7 @@
       fine_refine: true                 # Enable multi-resolution coarse-to-fine grid refinement
       fine_refine_levels: 2             # Number of 5x refinement levels (2 levels -> 2 mm XY, 0.0012 rad yaw)
       max_dist_thresh: 0.25             # Per-point Huber/L1 residual clipping ceiling [m] (suppresses outliers)
-      cost_threshold_3d: 0.23           # Independent 3D LiDAR mean residual acceptance threshold [m]
+      cost_threshold_3d: 0.202          # Independent 3D LiDAR mean residual acceptance threshold [m]
       cost_threshold_2d: 0.04           # Independent 2D LiDAR mean residual acceptance threshold [m]
       dynamic_dist_thresh: 0.15         # Distance threshold [m] above which 3D points are extracted as dynamic_cloud
       field_min_x: -5.5                 # Field X lower boundary [m] (overridden by ESDF header if use_map_bounds=true)
@@ -87,10 +87,10 @@
       field_max_y: 6.0                  # Field Y upper boundary [m]
       use_map_bounds: true              # Automatically adopt field boundaries from the loaded ESDF map header
       inlier_dist_thresh: 0.08          # Distance threshold [m] to count a 3D obstacle point as a wall inlier
-      min_inliers: 400                  # Minimum 3D inlier point count for inlier-based acceptance
-      inlier_cost_thresh: 0.035         # Maximum mean residual [m] of inlier points for inlier-based acceptance
-      min_inlier_ratio: 0.28            # Minimum ratio (inliers / 3D obstacles) for inlier-based acceptance
-      max_inlier_accept_cost: 0.25      # Hard upper bound on 3D cost [m] even when inliers pass (set > cost_threshold_3d to enable inlier rescue)
+      min_inliers: 350                  # Minimum 3D inlier point count for inlier-based acceptance
+      inlier_cost_thresh: 0.040         # Maximum mean residual [m] of inlier points for inlier-based acceptance
+      min_inlier_ratio: 0.20            # Minimum ratio (inliers / 3D obstacles) for inlier-based acceptance
+      max_inlier_accept_cost: 0.230     # Hard upper bound on 3D cost [m] even when inliers pass (set > cost_threshold_3d to enable inlier rescue)
       weight_2d_lidar: 0.40             # Base weight w_2d (0.0..1.0) of 2D LiDAR in composite ESDF cost
       min_2d_points: 30                 # Minimum valid 2D LiDAR points required to activate 2D matching
       target_2d_points: 200             # Reference 2D point count for full FoV scaling (fov_scale = min(1, N_2d/200))
@@ -135,8 +135,8 @@
       step_yaw: 0.3                     # Global coarse yaw grid step [rad]
       downsample_stride: 2              # Point cloud decimation stride during global search
       top_k_candidates: 4               # Number of spatially separated Top-K coarse peaks to fine-refine
-      uniqueness_ratio: 0.95            # Top-1/Top-2 margin threshold for borderline global matches (1.0 disables)
-      verify_frames: 2                  # Consecutive frames required to confirm borderline global recovery candidates
+      uniqueness_ratio: 0.960           # Top-1/Top-2 margin threshold for borderline global matches (1.0 disables)
+      verify_frames: 3                  # Consecutive frames required to confirm borderline global recovery candidates
       lost_count_thresh: 25             # Consecutive failed frames before entering LOST state & triggering global search
 
     # =========================================================================
