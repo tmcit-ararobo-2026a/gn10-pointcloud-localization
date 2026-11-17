@@ -15,6 +15,7 @@ __global__ void filterGroundKernel(
     float* out_obstacle,
     const float* transform,  // 3x4 float matrix (R|t)
     int num_points,
+    int max_points,
     float range_max,
     float robot_radius,
     float robot_height_min,
@@ -55,14 +56,18 @@ __global__ void filterGroundKernel(
     // Classify ground vs. obstacle points based on base_link Z threshold
     if (zb <= ground_z_thresh) {
         int g_idx = atomicAdd(ground_count, 1);
-        out_ground[g_idx * 3 + 0] = xb;
-        out_ground[g_idx * 3 + 1] = yb;
-        out_ground[g_idx * 3 + 2] = zb;
+        if (g_idx < max_points) {
+            out_ground[g_idx * 3 + 0] = xb;
+            out_ground[g_idx * 3 + 1] = yb;
+            out_ground[g_idx * 3 + 2] = zb;
+        }
     } else {
         int o_idx = atomicAdd(obstacle_count, 1);
-        out_obstacle[o_idx * 3 + 0] = xb;
-        out_obstacle[o_idx * 3 + 1] = yb;
-        out_obstacle[o_idx * 3 + 2] = zb;
+        if (o_idx < max_points) {
+            out_obstacle[o_idx * 3 + 0] = xb;
+            out_obstacle[o_idx * 3 + 1] = yb;
+            out_obstacle[o_idx * 3 + 2] = zb;
+        }
     }
 }
 
@@ -141,6 +146,7 @@ __global__ void filterGroundWithDeskewKernel(
     const float* transform,
     int num_points,
     int stride,
+    int max_points,
     DeskewParams deskew,
     const IMUSample* imu_samples,
     int num_imu_samples,
@@ -225,14 +231,18 @@ __global__ void filterGroundWithDeskewKernel(
     // 5. Partition into ground and obstacle point clouds
     if (zb <= ground_z_thresh) {
         int ground_index = atomicAdd(ground_count, 1);
-        out_ground[ground_index * 3 + 0] = xb;
-        out_ground[ground_index * 3 + 1] = yb;
-        out_ground[ground_index * 3 + 2] = zb;
+        if (ground_index < max_points) {
+            out_ground[ground_index * 3 + 0] = xb;
+            out_ground[ground_index * 3 + 1] = yb;
+            out_ground[ground_index * 3 + 2] = zb;
+        }
     } else {
         int obstacle_index = atomicAdd(obstacle_count, 1);
-        out_obstacle[obstacle_index * 3 + 0] = xb;
-        out_obstacle[obstacle_index * 3 + 1] = yb;
-        out_obstacle[obstacle_index * 3 + 2] = zb;
+        if (obstacle_index < max_points) {
+            out_obstacle[obstacle_index * 3 + 0] = xb;
+            out_obstacle[obstacle_index * 3 + 1] = yb;
+            out_obstacle[obstacle_index * 3 + 2] = zb;
+        }
     }
 }
 
@@ -243,6 +253,7 @@ void launchGroundFilter(
     float* d_obstacle,
     const float* d_transform,
     int num_points,
+    int max_points,
     float range_max,
     float robot_radius,
     float robot_height_min,
@@ -266,6 +277,7 @@ void launchGroundFilter(
         d_obstacle,
         d_transform,
         num_points,
+        max_points,
         range_max,
         robot_radius,
         robot_height_min,
@@ -289,6 +301,7 @@ void launchGroundFilterWithDeskew(
     const float* d_transform,
     int num_points,
     int stride,
+    int max_points,
     const DeskewParams& deskew_params,
     const IMUSample* d_imu_samples,
     int num_imu_samples,
@@ -327,6 +340,7 @@ void launchGroundFilterWithDeskew(
         d_transform,
         num_points,
         safe_stride,
+        max_points,
         deskew_params,
         d_imu_samples,
         num_imu_samples,
