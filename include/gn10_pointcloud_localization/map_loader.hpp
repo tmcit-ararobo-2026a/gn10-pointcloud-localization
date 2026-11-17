@@ -17,7 +17,4 @@ public:
 
     // Load analytic field objects from ROS 2 parameter string array
     static std::vector<FieldObject> loadFromParams(const std::vector<std::string>& param_strings);
-
-    // Hardcoded standard NHK 2026 field map (fallback when no external map is provided)
-    static std::vector<FieldObject> createNHK2026FieldMap();
 };
