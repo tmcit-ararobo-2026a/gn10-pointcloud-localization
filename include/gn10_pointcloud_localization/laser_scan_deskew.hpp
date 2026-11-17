@@ -166,7 +166,8 @@ inline std::vector<float> deskewLaserScan(
  * @param yaw_history Integrated IMU yaw history
  * @param vx_local Local linear velocity X in base_link frame at the target timestamp [m/s]
  * @param vy_local Local linear velocity Y in base_link frame at the target timestamp [m/s]
- * @return std::vector<float> Timestamp-aligned point cloud in base_link frame (interleaved x, y, z)
+ * @return std::vector<float> Timestamp-aligned point cloud in base_link frame (interleaved x, y, z),
+ *         or empty vector if IMU yaw delta is unavailable for the requested interval
  */
 inline std::vector<float> alignPointsToTimestamp(
     const std::vector<float>& points,
@@ -187,7 +188,9 @@ inline std::vector<float> alignPointsToTimestamp(
     }
 
     double delta_yaw = 0.0;
-    yaw_history.delta(source_stamp_ns, target_stamp_ns, delta_yaw);
+    if (!yaw_history.delta(source_stamp_ns, target_stamp_ns, delta_yaw)) {
+        return {};
+    }
 
     const float cos_d = static_cast<float>(std::cos(delta_yaw));
     const float sin_d = static_cast<float>(std::sin(delta_yaw));
