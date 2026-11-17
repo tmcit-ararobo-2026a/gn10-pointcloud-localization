@@ -598,6 +598,7 @@ int PoseSolver::prepareObstacleCloud(
             d_transform_,
             num_points,
             stride,
+            max_points_,
             deskew_params,
             d_imu_samples_,
             num_samples,
@@ -613,6 +614,8 @@ int PoseSolver::prepareObstacleCloud(
         );
 
         cudaStreamSynchronize(stream_);
+        h_ground_count   = std::min(h_ground_count, max_points_);
+        h_obstacle_count = std::min(h_obstacle_count, max_points_);
     }
     auto t_gf_end = std::chrono::high_resolution_clock::now();
     last_metrics_.time_ground_filter_ms =
@@ -684,6 +687,7 @@ int PoseSolver::prepareObstacleCloud(
             d_obstacle_,
             d_transform_,
             num_points,
+            max_points_,
             filter_params.range_max,
             filter_params.robot_radius,
             filter_params.robot_height_min,
@@ -696,6 +700,8 @@ int PoseSolver::prepareObstacleCloud(
         );
 
         cudaStreamSynchronize(stream_);
+        h_ground_count   = std::min(h_ground_count, max_points_);
+        h_obstacle_count = std::min(h_obstacle_count, max_points_);
     }
     auto t_gf_end = std::chrono::high_resolution_clock::now();
     last_metrics_.time_ground_filter_ms =
@@ -730,16 +736,18 @@ void PoseSolver::copyFilteredClouds(std::vector<float>* ground, std::vector<floa
 {
     std::lock_guard<std::recursive_mutex> lock(solver_mutex_);
     if (ground) {
-        ground->resize(static_cast<size_t>(ground_count_) * 3);
-        if (ground_count_ > 0) {
+        const int safe_ground_count = std::min(ground_count_, max_points_);
+        ground->resize(static_cast<size_t>(safe_ground_count) * 3);
+        if (safe_ground_count > 0) {
             cudaMemcpy(
                 ground->data(), d_ground_, ground->size() * sizeof(float), cudaMemcpyDeviceToHost
             );
         }
     }
     if (obstacle) {
-        obstacle->resize(static_cast<size_t>(obstacle_count_) * 3);
-        if (obstacle_count_ > 0) {
+        const int safe_obstacle_count = std::min(obstacle_count_, max_points_);
+        obstacle->resize(static_cast<size_t>(safe_obstacle_count) * 3);
+        if (safe_obstacle_count > 0) {
             cudaMemcpy(
                 obstacle->data(),
                 d_obstacle_,
