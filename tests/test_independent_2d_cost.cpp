@@ -511,6 +511,95 @@ void testTimeSourceSafety()
     std::cout << "[Test] testTimeSourceSafety PASSED!" << std::endl;
 }
 
+void testFieldSDFCostPopulation()
+{
+    std::cout << "[Test] testFieldSDFCostPopulation starting..." << std::endl;
+
+    FieldObject wall{};
+    wall.type = ObjectType::BOX;
+    wall.center_x = 0.0f;
+    wall.center_y = 0.0f;
+    wall.z_min = 0.0f;
+    wall.z_max = 1.0f;
+    wall.param1 = 0.05f;
+    wall.param2 = 2.0f;
+
+    PoseSolver solver(1000);
+    solver.setMap({wall});
+
+    GroundFilterParams gf_params{};
+    gf_params.range_max        = 5.0f;
+    gf_params.robot_radius     = 0.01f;
+    gf_params.robot_height_min = 0.0f;
+    gf_params.robot_height_max = 1.0f;
+    gf_params.ground_z_thresh  = 0.05f;
+
+    MatchingParams solver_params{};
+    solver_params.range_xy          = 0.10f;
+    solver_params.step_xy           = 0.05f;
+    solver_params.range_yaw         = 0.0f;
+    solver_params.step_yaw          = 0.05f;
+    solver_params.max_dist_thresh   = 0.50f;
+    solver_params.cost_threshold_3d = 0.15f;
+    solver_params.min_3d_points     = 50;
+    solver_params.min_inliers       = 50;
+    solver_params.fine_refine       = true;
+    solver_params.fine_refine_levels = 1;
+    solver_params.field_min_x       = -2.0f;
+    solver_params.field_max_x       = 2.0f;
+    solver_params.field_min_y       = -2.0f;
+    solver_params.field_max_y       = 2.0f;
+
+    // 200 obstacle points shifted by 0.50m from the wall (exceeds range_xy=0.10m + wall half-width=0.05m)
+    std::vector<float> mismatched_3d;
+    for (int i = 0; i < 200; ++i) {
+        mismatched_3d.push_back(0.50f);
+        mismatched_3d.push_back(-1.0f + 2.0f * (static_cast<float>(i) / 200.0f));
+        mismatched_3d.push_back(0.5f);
+    }
+
+    const float identity_tf[12] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f
+    };
+
+    PoseCandidate base_pose{0.0f, 0.0f, 0.0f};
+    PoseCandidate solved_pose{};
+    float solved_cost = 0.0f;
+    int solved_inliers = 0;
+    float solved_inlier_cost = 1.0f;
+    std::vector<float> dynamic_pts;
+
+    solver.processPointCloud(
+        mismatched_3d,
+        identity_tf,
+        gf_params,
+        solver_params,
+        base_pose,
+        dynamic_pts,
+        solved_pose,
+        solved_cost,
+        &solved_inliers,
+        &solved_inlier_cost,
+        nullptr,
+        false
+    );
+
+    // lastCost3D must reflect the actual residual (not stay at 0.0f) and reject the mismatch
+    assert(solver.lastCost3D() >= solver_params.cost_threshold_3d);
+    assert(!solver_params.isMatchAccepted(
+        solver.lastCost3D(),
+        solver.lastCost2D(),
+        solver.obstacleCount3D(),
+        solver.obstacleCount2D(),
+        solved_inliers,
+        solved_inlier_cost
+    ));
+
+    std::cout << "[Test] testFieldSDFCostPopulation PASSED!" << std::endl;
+}
+
 int main()
 {
     testTimeSourceSafety();
@@ -523,6 +612,7 @@ int main()
     }
 
     testESDFMatcherWeightedResidual();
+    testFieldSDFCostPopulation();
     std::cout << "All Independent 2D Residual Weighting tests PASSED successfully!" << std::endl;
     return 0;
 }
