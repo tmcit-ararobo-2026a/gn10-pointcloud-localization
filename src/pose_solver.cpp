@@ -379,6 +379,16 @@ bool PoseSolver::matchObstacleCloud(
                     }
                 }
             }
+            if (!use_esdf_) {
+                const float fallback_cost =
+                    matched ? out_best_cost : match_params.max_dist_thresh;
+                if (out_c3d != nullptr && active_3d_count > 0) {
+                    *out_c3d = fallback_cost;
+                }
+                if (out_c2d != nullptr && active_2d_count > 0) {
+                    *out_c2d = fallback_cost;
+                }
+            }
             return matched;
         };
 

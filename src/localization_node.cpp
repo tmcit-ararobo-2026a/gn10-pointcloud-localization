@@ -14,6 +14,7 @@
 #include <limits>
 #include <random>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <stdexcept>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <unordered_set>
@@ -419,102 +420,109 @@ void LocalizationNode::setupMapData()
 
     if (map_source == "esdf") {
         if (file_path.empty()) {
-            RCLCPP_ERROR(
+            RCLCPP_FATAL(
                 this->get_logger(), "map_source_type is 'esdf' but map_file_path is empty!"
             );
-        } else if (!esdf_map_.loadBinary(file_path)) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to load ESDF file: %s", file_path.c_str());
+            throw std::runtime_error("map_source_type is 'esdf' but map_file_path is empty");
+        }
+        if (!esdf_map_.loadBinary(file_path)) {
+            RCLCPP_FATAL(this->get_logger(), "Failed to load ESDF file: %s", file_path.c_str());
+            throw std::runtime_error("Failed to load ESDF file: " + file_path);
+        }
+        RCLCPP_INFO(
+            this->get_logger(),
+            "Loaded ESDF map: %dx%dx%d, res=%.3f",
+            esdf_map_.header().size_x,
+            esdf_map_.header().size_y,
+            esdf_map_.header().size_z,
+            esdf_map_.header().resolution
+        );
+        configureESDFBounds();
+        solver_->setESDFMap(esdf_map_);
+        return;
+    }
+
+    if (map_source == "pcd") {
+        if (file_path.empty()) {
+            RCLCPP_FATAL(
+                this->get_logger(), "map_source_type is 'pcd' but map_file_path is empty!"
+            );
+            throw std::runtime_error("map_source_type is 'pcd' but map_file_path is empty");
+        }
+        // Check for cached binary ESDF map (map/cache/<pcd_stem>.esdf)
+        const std::filesystem::path pcd_path(file_path);
+        const std::filesystem::path cache_dir = pcd_path.parent_path() / "cache";
+        std::error_code cache_error;
+        std::filesystem::create_directories(cache_dir, cache_error);
+        if (cache_error) {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "Failed to create ESDF cache directory '%s': %s",
+                cache_dir.string().c_str(),
+                cache_error.message().c_str()
+            );
+        }
+        const std::string cache_path =
+            (cache_dir / (pcd_path.stem().string() + ".esdf")).string();
+        bool loaded_cache = esdf_map_.loadBinary(cache_path);
+        if (loaded_cache && esdf_crop_bounds_.enabled) {
+            const auto& cached       = esdf_map_.header();
+            const auto expected_size = [](float min_value, float max_value, float resolution) {
+                return std::max(
+                    1, static_cast<int>(std::ceil((max_value - min_value) / resolution))
+                );
+            };
+            loaded_cache =
+                std::abs(cached.resolution - esdf_res) < 1e-6f &&
+                std::abs(cached.max_dist_thresh - esdf_max_dist) < 1e-6f &&
+                std::abs(cached.min_x - esdf_crop_bounds_.min_x) < 1e-5f &&
+                std::abs(cached.min_y - esdf_crop_bounds_.min_y) < 1e-5f &&
+                std::abs(cached.min_z - esdf_crop_bounds_.min_z) < 1e-5f &&
+                cached.size_x ==
+                    expected_size(esdf_crop_bounds_.min_x, esdf_crop_bounds_.max_x, esdf_res) &&
+                cached.size_y ==
+                    expected_size(esdf_crop_bounds_.min_y, esdf_crop_bounds_.max_y, esdf_res) &&
+                cached.size_z ==
+                    expected_size(esdf_crop_bounds_.min_z, esdf_crop_bounds_.max_z, esdf_res);
+        }
+        if (loaded_cache) {
+            RCLCPP_INFO(
+                this->get_logger(), "Found ESDF cache: %s. Loaded directly.", cache_path.c_str()
+            );
         } else {
             RCLCPP_INFO(
                 this->get_logger(),
-                "Loaded ESDF map: %dx%dx%d, res=%.3f",
-                esdf_map_.header().size_x,
-                esdf_map_.header().size_y,
-                esdf_map_.header().size_z,
-                esdf_map_.header().resolution
+                "Building ESDF map from PCD: %s (res=%.3f, max_dist=%.3f)...",
+                file_path.c_str(),
+                esdf_res,
+                esdf_max_dist
             );
-            configureESDFBounds();
-            solver_->setESDFMap(esdf_map_);
-            return;
-        }
-    } else if (map_source == "pcd") {
-        if (file_path.empty()) {
-            RCLCPP_ERROR(
-                this->get_logger(), "map_source_type is 'pcd' but map_file_path is empty!"
-            );
-        } else {
-            // Check for cached binary ESDF map (map/cache/<pcd_stem>.esdf)
-            const std::filesystem::path pcd_path(file_path);
-            const std::filesystem::path cache_dir = pcd_path.parent_path() / "cache";
-            std::error_code cache_error;
-            std::filesystem::create_directories(cache_dir, cache_error);
-            if (cache_error) {
-                RCLCPP_WARN(
-                    this->get_logger(),
-                    "Failed to create ESDF cache directory '%s': %s",
-                    cache_dir.string().c_str(),
-                    cache_error.message().c_str()
-                );
-            }
-            const std::string cache_path =
-                (cache_dir / (pcd_path.stem().string() + ".esdf")).string();
-            bool loaded_cache = esdf_map_.loadBinary(cache_path);
-            if (loaded_cache && esdf_crop_bounds_.enabled) {
-                const auto& cached       = esdf_map_.header();
-                const auto expected_size = [](float min_value, float max_value, float resolution) {
-                    return std::max(
-                        1, static_cast<int>(std::ceil((max_value - min_value) / resolution))
-                    );
-                };
-                loaded_cache =
-                    std::abs(cached.resolution - esdf_res) < 1e-6f &&
-                    std::abs(cached.max_dist_thresh - esdf_max_dist) < 1e-6f &&
-                    std::abs(cached.min_x - esdf_crop_bounds_.min_x) < 1e-5f &&
-                    std::abs(cached.min_y - esdf_crop_bounds_.min_y) < 1e-5f &&
-                    std::abs(cached.min_z - esdf_crop_bounds_.min_z) < 1e-5f &&
-                    cached.size_x ==
-                        expected_size(esdf_crop_bounds_.min_x, esdf_crop_bounds_.max_x, esdf_res) &&
-                    cached.size_y ==
-                        expected_size(esdf_crop_bounds_.min_y, esdf_crop_bounds_.max_y, esdf_res) &&
-                    cached.size_z ==
-                        expected_size(esdf_crop_bounds_.min_z, esdf_crop_bounds_.max_z, esdf_res);
-            }
-            if (loaded_cache) {
+            if (esdf_map_.buildFromPCD(
+                    file_path,
+                    esdf_res,
+                    esdf_max_dist,
+                    esdf_crop_bounds_,
+                    filter_params_.ground_z_thresh
+                )) {
+                esdf_map_.saveBinary(cache_path);
                 RCLCPP_INFO(
-                    this->get_logger(), "Found ESDF cache: %s. Loaded directly.", cache_path.c_str()
+                    this->get_logger(), "ESDF built and cached to: %s", cache_path.c_str()
                 );
             } else {
-                RCLCPP_INFO(
-                    this->get_logger(),
-                    "Building ESDF map from PCD: %s (res=%.3f, max_dist=%.3f)...",
-                    file_path.c_str(),
-                    esdf_res,
-                    esdf_max_dist
+                RCLCPP_FATAL(
+                    this->get_logger(), "Failed to build ESDF from PCD: %s", file_path.c_str()
                 );
-                if (esdf_map_.buildFromPCD(
-                        file_path,
-                        esdf_res,
-                        esdf_max_dist,
-                        esdf_crop_bounds_,
-                        filter_params_.ground_z_thresh
-                    )) {
-                    esdf_map_.saveBinary(cache_path);
-                    RCLCPP_INFO(
-                        this->get_logger(), "ESDF built and cached to: %s", cache_path.c_str()
-                    );
-                } else {
-                    RCLCPP_ERROR(
-                        this->get_logger(), "Failed to build ESDF from PCD: %s", file_path.c_str()
-                    );
-                }
-            }
-
-            if (!esdf_map_.empty()) {
-                configureESDFBounds();
-                solver_->setESDFMap(esdf_map_);
-                return;
+                throw std::runtime_error("Failed to build ESDF from PCD: " + file_path);
             }
         }
+
+        if (esdf_map_.empty()) {
+            RCLCPP_FATAL(this->get_logger(), "Loaded ESDF map is empty: %s", file_path.c_str());
+            throw std::runtime_error("Loaded ESDF map is empty: " + file_path);
+        }
+        configureESDFBounds();
+        solver_->setESDFMap(esdf_map_);
+        return;
     }
 
     if (map_source == "json") {
@@ -528,18 +536,26 @@ void LocalizationNode::setupMapData()
     } else if (map_source == "ros2_param") {
         auto param_list = this->get_parameter("map_objects").as_string_array();
         map_objects_    = MapLoader::loadFromParams(param_list);
+    } else {
+        RCLCPP_FATAL(
+            this->get_logger(), "Unsupported map_source_type: '%s'", map_source.c_str()
+        );
+        throw std::runtime_error("Unsupported map_source_type: " + map_source);
     }
 
     if (map_objects_.empty()) {
-        RCLCPP_WARN(
-            this->get_logger(), "Map is empty or failed to load. Falling back to default map."
+        RCLCPP_FATAL(
+            this->get_logger(),
+            "Map is empty or failed to load (map_source_type='%s', map_file_path='%s').",
+            map_source.c_str(),
+            file_path.c_str()
         );
-        map_objects_ = MapLoader::createNHK2026FieldMap();
+        throw std::runtime_error("Map is empty or failed to load");
     }
 
     // Automatically build a 3D ESDF texture from analytic field objects for O(1) GPU matching
     RCLCPP_INFO(this->get_logger(), "Building 3D ESDF texture from field objects...");
-    if (esdf_map_.buildFromFieldObjects(
+    if (!esdf_map_.buildFromFieldObjects(
             map_objects_,
             esdf_res,
             esdf_crop_bounds_.enabled ? esdf_crop_bounds_.min_x : match_params_.field_min_x,
@@ -550,18 +566,19 @@ void LocalizationNode::setupMapData()
             esdf_max_z_,
             esdf_max_dist
         )) {
-        RCLCPP_INFO(
-            this->get_logger(),
-            "ESDF texture ready: %dx%dx%d",
-            esdf_map_.header().size_x,
-            esdf_map_.header().size_y,
-            esdf_map_.header().size_z
+        RCLCPP_FATAL(
+            this->get_logger(), "Failed to build 3D ESDF texture from field objects."
         );
-        solver_->setESDFMap(esdf_map_);
-    } else {
-        RCLCPP_WARN(this->get_logger(), "Falling back to geometric object SDF solver.");
-        solver_->setMap(map_objects_);
+        throw std::runtime_error("Failed to build 3D ESDF texture from field objects");
     }
+    RCLCPP_INFO(
+        this->get_logger(),
+        "ESDF texture ready: %dx%dx%d",
+        esdf_map_.header().size_x,
+        esdf_map_.header().size_y,
+        esdf_map_.header().size_z
+    );
+    solver_->setESDFMap(esdf_map_);
 }
 
 void LocalizationNode::configureESDFBounds()
