@@ -1148,6 +1148,20 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         last_yaw_integrated_ns_ = reference_ns;
     };
 
+    auto is_global_recovery_accepted = [&](const MatchingParams& params, int inliers, float inlier_c) {
+        if (solver_->obstacleCount3D() >= params.min_3d_points) {
+            return params.isMatchAccepted(
+                solver_->lastCost3D(),
+                std::numeric_limits<float>::max(),
+                solver_->obstacleCount3D(),
+                0,
+                inliers,
+                inlier_c
+            );
+        }
+        return isPoseMatchAccepted(params, inliers, inlier_c);
+    };
+
     const bool can_run_global_search =
         (last_global_search_stamp_.nanoseconds() == 0) ||
         ((reference_stamp.nanoseconds() - last_global_search_stamp_.nanoseconds()) * 1e-9 >=
@@ -1193,20 +1207,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                 extra_pts_ptr,
                 need_dynamic
             );
-            const float ratio_3d =
-                (solver_->obstacleCount3D() > 0)
-                    ? (static_cast<float>(inlier_count) /
-                       static_cast<float>(solver_->obstacleCount3D()))
-                    : 0.0f;
-            const bool trial_quality_ok =
-                (solver_->lastCost3D() < 0.85f * active_match_params.cost_threshold_3d) ||
-                (solver_->obstacleCount2D() >= active_match_params.min_2d_points &&
-                 solver_->lastCost2D() < active_match_params.cost_threshold_2d) ||
-                (ratio_3d >= 0.20f);
 
             if (trial_matched &&
-                isPoseMatchAccepted(trial_match_params, inlier_count, inlier_cost) &&
-                trial_quality_ok) {
+                is_global_recovery_accepted(trial_match_params, inlier_count, inlier_cost)) {
                 int next_trial_count = 0;
                 {
                     std::lock_guard<std::mutex> lock(pose_mutex_);
@@ -1240,11 +1243,11 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                 dynamic_pts.clear();
                 RCLCPP_WARN(
                     this->get_logger(),
-                    "[GlobalSearch] Trial rejected on subsequent frame (cost: %.4f, 3D: %.4f, inliers: %d, ratio_3d: %.1f%%). Remaining in lost state.",
+                    "[GlobalSearch] Trial rejected on subsequent frame (cost: %.4f, 3D: %.4f, 2D: %.4f, inliers: %d). Remaining in lost state.",
                     best_cost,
                     solver_->lastCost3D(),
-                    inlier_count,
-                    ratio_3d * 100.0f
+                    solver_->lastCost2D(),
+                    inlier_count
                 );
             }
         } else if (trial_dt >= 0.25 || trial_dt < 0.0) {
@@ -1281,18 +1284,10 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
         const bool gs_accepted =
             std::isfinite(best_cost) && (best_cost < std::numeric_limits<float>::max() / 2.0f) &&
-            isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
+            is_global_recovery_accepted(active_match_params, inlier_count, inlier_cost);
 
         if (gs_accepted) {
-            const bool high_conf_immediate =
-                (global_verify_frames_ <= 1) ||
-                (solver_->obstacleCount3D() >= active_match_params.min_3d_points &&
-                 solver_->lastCost3D() < 0.80f * active_match_params.cost_threshold_3d) ||
-                (solver_->obstacleCount3D() < active_match_params.min_3d_points &&
-                 solver_->obstacleCount2D() >= active_match_params.min_2d_points &&
-                 solver_->lastCost2D() < 0.75f * active_match_params.cost_threshold_2d);
-
-            if (high_conf_immediate) {
+            if (global_verify_frames_ <= 1) {
                 commit_recovery(best_pose);
                 RCLCPP_INFO(
                     this->get_logger(),
@@ -1315,7 +1310,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                 dynamic_pts.clear();
                 RCLCPP_INFO(
                     this->get_logger(),
-                    "[GlobalSearch] Borderline candidate entered trial verification (1/%d frames, cost: %.4f, 3D: %.4f, inliers: %d).",
+                    "[GlobalSearch] Candidate entered trial verification (1/%d frames, cost: %.4f, 3D: %.4f, inliers: %d).",
                     global_verify_frames_,
                     best_cost,
                     solver_->lastCost3D(),

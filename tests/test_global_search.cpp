@@ -38,6 +38,8 @@ void testGlobalSearchDownsampledThreshold()
     search_cfg.step_yaw          = 0.25f;
     search_cfg.downsample_stride = 2;
     search_cfg.top_k_candidates  = 2;
+    // Featureless single flat wall has shift-invariant cost along Y; disable uniqueness here.
+    search_cfg.uniqueness_ratio  = 1.0f;
 
     GlobalSearcher searcher(search_cfg, rclcpp::get_logger("test_global_search"));
 

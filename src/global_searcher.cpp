@@ -314,7 +314,11 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
         cand_pose.yaw = normalizeAngle(cand_pose.yaw);
 
         // Enforce 3D LiDAR primacy during global recovery: when 3D obstacle points are available,
-        // do not accept a pose via 2D-only fallback that failed 3D matching criteria.
+        // normalize any 2D-only fallback candidate back to 3D cost scale and require 3D acceptance.
+        if (solver.obstacleCount3D() >= match_params.min_3d_points &&
+            solver.lastWeight2D() >= 1.0f) {
+            cand_cost = solver.lastCost3D();
+        }
         const bool is_accepted =
             (solver.obstacleCount3D() >= match_params.min_3d_points)
                 ? match_params.isMatchAccepted(
@@ -400,45 +404,25 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
         }
     }
 
-    const bool high_confidence_3d =
-        (solver.obstacleCount3D() >= match_params.min_3d_points) &&
-        (best.cost_3d < 0.82f * match_params.cost_threshold_3d);
-    const bool high_confidence_2d =
-        (solver.obstacleCount2D() >= match_params.min_2d_points) &&
-        (best.cost_2d < 0.75f * match_params.cost_threshold_2d) &&
-        (solver.obstacleCount3D() < match_params.min_3d_points ||
-         best.cost_3d < 0.90f * match_params.cost_threshold_3d);
-    const bool is_high_confidence = high_confidence_3d || high_confidence_2d;
+    const bool fails_uniqueness =
+        (config.uniqueness_ratio < 1.0f) && std::isfinite(second_best_cost) &&
+        (best.cost > config.uniqueness_ratio * second_best_cost);
 
-    if (!is_high_confidence) {
-        const bool fails_uniqueness =
-            (config.uniqueness_ratio < 1.0f) && std::isfinite(second_best_cost) &&
-            (best.cost > config.uniqueness_ratio * second_best_cost);
-        const float inlier_ratio_3d =
-            (solver.obstacleCount3D() > 0)
-                ? (static_cast<float>(best.inliers) / static_cast<float>(solver.obstacleCount3D()))
-                : 1.0f;
-        const bool fails_borderline_inliers =
-            (solver.obstacleCount3D() >= match_params.min_3d_points) && (inlier_ratio_3d < 0.16f);
-
-        if (fails_uniqueness || fails_borderline_inliers) {
-            RCLCPP_WARN(
-                logger_,
-                "[GlobalSearch] Top-1 candidate rejected by borderline check "
-                "(best: %.4f, second: %.4f, ratio: %.3f/%0.3f, 3d_inlier_ratio: %.1f%%).",
-                best.cost,
-                second_best_cost,
-                std::isfinite(second_best_cost) ? (best.cost / std::max(1e-6f, second_best_cost))
-                                                : 0.0f,
-                config.uniqueness_ratio,
-                inlier_ratio_3d * 100.0f
-            );
-            solver.setLastCosts(
-                std::numeric_limits<float>::max(), std::numeric_limits<float>::max()
-            );
-            setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
-            return PoseCandidate{0.0f, 0.0f, 0.0f};
-        }
+    if (fails_uniqueness) {
+        RCLCPP_WARN(
+            logger_,
+            "[GlobalSearch] Top-1 candidate rejected by uniqueness check "
+            "(best: %.4f, second: %.4f, ratio: %.3f/%.3f).",
+            best.cost,
+            second_best_cost,
+            best.cost / std::max(1e-6f, second_best_cost),
+            config.uniqueness_ratio
+        );
+        solver.setLastCosts(
+            std::numeric_limits<float>::max(), std::numeric_limits<float>::max()
+        );
+        setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
+        return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
 
     solver.setLastCosts(best.cost_3d, best.cost_2d);
