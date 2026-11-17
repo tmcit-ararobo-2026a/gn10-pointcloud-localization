@@ -38,6 +38,7 @@ https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
                                                          [TF 配信 (map -> base_link)]                      [TF・推定姿勢の配信を即時停止]
                                                          [/platform_constraint & /dynamic_cloud]           [localization_success = false]
                                                          [localization_success = true]                     [25フレーム連続失敗でGlobalSearch発動]
+                                                                                                           [(IMU Yaw絞り込み + Uniqueness + Trial検証)]
 ```
 
 ## 3. ビルド環境・依存関係
@@ -114,13 +115,13 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `matching_params.fine_refine` / `levels` | `true` / `2` | 2 段の $5 \times 5 \times 5$ サブボクセル精密探索（`0.05 m` $\to$ `0.002 m`）。 |
 | `matching_params.max_dist_thresh` | `0.25` | マッチング評価時の点ごとの ESDF 残差打ち切り距離 [m]。 |
 | `matching_params.dynamic_dist_thresh` | `0.15` | `/dynamic_cloud` として抽出するマップ表面からの距離閾値 [m]。 |
-| `matching_params.cost_threshold_3d` | `0.23` | 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.23\text{ m}$)。 |
+| `matching_params.cost_threshold_3d` | `0.202` | 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.202\text{ m}$)。 |
 | `matching_params.cost_threshold_2d` | `0.04` | 2D LiDAR 独立残差合格しきい値 [m] ($C_{\text{2D}} < 0.04\text{ m}$、ヒステリシス切り離しは $2\times = 0.08\text{ m}$)。 |
 | `matching_params.inlier_dist_thresh` | `0.08` | マップ壁面から `0.08 m` (8 cm) 以内の点をインライアと判定。 |
-| `matching_params.min_inliers` | `400` | インライア合格判定に必要な最小インライア点数 ($N_{\text{inlier}} \ge 400$)。 |
-| `matching_params.inlier_cost_thresh` | `0.035` | インライア合格判定に必要な平均インライア残差上限 [m] ($C_{\text{inlier}} < 0.035\text{ m}$)。 |
-| `matching_params.min_inlier_ratio` | `0.28` | 3D 障害物点に対する最小インライア比率 ($N_{\text{inlier}} / N_{\text{3D}} \ge 0.28$)。 |
-| `matching_params.max_inlier_accept_cost` | `0.25` | インライア合格判定時の 3D 残差コスト上限ガード [m] ($C_{\text{3D}} < 0.25\text{ m}$)。 |
+| `matching_params.min_inliers` | `350` | インライア合格判定に必要な最小インライア点数 ($N_{\text{inlier}} \ge 350$)。 |
+| `matching_params.inlier_cost_thresh` | `0.040` | インライア合格判定に必要な平均インライア残差上限 [m] ($C_{\text{inlier}} < 0.040\text{ m}$)。 |
+| `matching_params.min_inlier_ratio` | `0.20` | 3D 障害物点に対する最小インライア比率 ($N_{\text{inlier}} / N_{\text{3D}} \ge 0.20$)。 |
+| `matching_params.max_inlier_accept_cost` | `0.230` | インライア合格判定時の 3D 残差コスト上限ガード [m] ($C_{\text{3D}} < 0.230\text{ m}$)。 |
 | `matching_params.weight_2d_lidar` | `0.40` | Combined モード時の 2D LiDAR 独立残差項の基本重み係数 $w_{\text{2D,base}}$。 |
 | `matching_params.min_2d_points` / `target_2d_points` | `30` / `200` | 2D 残差有効化の最小点数と、100% 視野角重み付けとなる基準 2D 点数。 |
 | `matching_params.min_3d_points` | `50` | 最小 3D 障害物点数（これ未満の場合はフル探索窓の 2D 単独モード $w_{\text{2D}} = 1.0$ へ移行）。 |
@@ -128,7 +129,11 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `velocity_estimation.enable` | `true` | EMA 平滑化（$\alpha = 0.6$）つき並進速度推定と等速外挿の有効化（`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0`）。 |
 | `lidar_2d.enable` / `deskew` | `true` / `true` | Lakibeam 2D LiDAR の有効化と、回転・並進歪み補正および 3D 基準時刻への同期補正。 |
 | `lidar_2d.time_offset_sec` | `0.0` | 2D LiDAR タイムスタンプの静的オフセット [s]。 |
+| `global_search.range_yaw_diff` | `3.1415` | 方位事前情報がない場合のグローバル Yaw 全域探索半幅 [rad]。 |
+| `global_search.recovery_yaw_diff` | `0.40` | IMU 方位事前情報（最終マッチ後 `10.0 s` 以内または初期姿勢事前値）が有効な間の絞り込み Yaw 探索半幅 [rad]（初回失敗時は `range_yaw_diff` へ自動フォールバック）。 |
 | `global_search.top_k_candidates` | `4` | グローバル復帰探索時にNMSで抽出して精密化する上位候補数。 |
+| `global_search.uniqueness_ratio` | `0.960` | 曖昧なグローバル一致を棄却する Top-1/Top-2 コスト比上限 (`best_cost <= uniqueness_ratio * second_best_cost`、$180^\circ$ 点対称ツインを除外、`1.0` で無効化)。 |
+| `global_search.verify_frames` | `3` | グローバル復帰を確定して TF/推定姿勢の出力を再開する前に、トライアル状態で要求する連続ローカル検証フレーム数。 |
 | `global_search.lost_count_thresh` | `25` | グローバル全域探索へ移行する連続失敗フレーム数。 |
 
 ## 6. 設計図一覧

@@ -41,7 +41,8 @@ partition "0. Map Initialization (`setupMapData`)" #ECEFF1 {
 fork
     partition "1A. IMU Stream (`imuCallback` @ 200 Hz)" #E8F5E9 {
         :Receive `/livox/imu` (`sensor_msgs/Imu`);
-        :Transform angular velocity to `base_link` (`R_base_imu_`);
+        :Skip tiny out-of-order UDP packets (`0 <= back_ns <= 1.0 s`, reset only on loop `> 1.0 s`);
+        :Transform angular velocity to `base_link` (`R_base_imu_`) under `pose_mutex_`;
         :Trapezoidal yaw integration in `YawHistory` (2.0 s rolling buffer)\nand update `latest_omega_z_`;
     }
 fork again
@@ -74,7 +75,7 @@ fork again
 end fork
 
 partition "2. Motion Prediction & Spatiotemporal Alignment (`cloudCallback`)" #FFF3E0 {
-    :Predict search center `search_base_pose` at `reference_stamp`:\n1. **Yaw**: `last_known_pose_.yaw + yaw_history_.delta(last_match, reference_ns)`\n2. **Translation**: `last_known_pose_.xy + velocity_xy * dt` (when `!is_lost_`);
+    :Predict search center `search_base_pose` at `reference_stamp`:\n1. **Yaw**: Incremental integration via `last_yaw_integrated_ns_` (`last_known_pose_.yaw + delta`)\n2. **Translation**: `last_known_pose_.xy + velocity_xy * dt` (when `!is_lost_`);
     :Align 2D LiDAR cloud from `latest_2d_stamp_` to `reference_stamp`\nvia **`alignPointsToTimestamp`** (IMU rotation + local velocity projection);
     :Compute adaptive search window:\n* **Yaw expansion** during fast turns (`|omega_z| > omega_thresh`)\n* **XY expansion** up to 1.5x during high speed (`v >= 2.0 m/s`);
     note right
@@ -103,17 +104,21 @@ partition "3. GPU Deskew, Ground Filter & 2D Fusion (`prepareObstacleCloud`)" #E
 
 if (Is Robot Lost? (`is_lost_ == true` and no fresh prior)) then (YES: Global Recovery)
     partition "4A. Global Search Recovery (`GlobalSearcher::search`)" #FFEBEE {
-        :Stage 1: Downsample cloud (`downsample_stride`) & evaluate coarse 3D grid\nacross field bounds (`step_xy`, `step_yaw`);
-        :Select **Top-K (`top_k_candidates`)** candidates via **3D NMS**\n(`dist_xy` or `diff_yaw`);
-        :Stage 2: Run full-resolution multi-level `matchObstacleCloud` around each Top-K peak\nand select candidate with lowest cost;
+        :Select yaw search half-range: `recovery_yaw_diff` (`0.40 rad`) if IMU heading prior\nis valid (`< 10.0 s` since last match or initial prior); fall back to `range_yaw_diff` (`3.1415 rad`) on failure;
+        :Stage 1: Downsample cloud (`downsample_stride`) & evaluate coarse 3D grid\nacross field bounds (`step_xy`, `step_yaw`) and select **Top-K (`top_k_candidates`)** via **3D NMS**;
+        :Stage 2: Run full-resolution `matchObstacleCloud` around each Top-K peak\n(**3D LiDAR primacy**: normalize failed-2D / 2D-only fallback costs back to `cost_3d` scale when `N_3d >= min_3d_points`);
+        :Stage 3: **Top-1/Top-2 Uniqueness Check**: reject if `best.cost > uniqueness_ratio * second_best_cost`\n(excluding 180 deg antipodal symmetry twin);
+        :Stage 4: **Multi-Frame Trial Verification**: require `verify_frames` (`3`) consecutive frames\npassing `is_global_recovery_accepted` (`1.5x` local window) before clearing `is_lost_`;
         note right
             **Global Search Parameters (`global_search.*`)**
-            * `range_min/max_x`: field-dependent boundary
-            * `range_min/max_y`: field-dependent boundary
-            * `range_yaw_diff`: initial yaw search tolerance
-            * `step_xy`, `step_yaw`: coarse search resolution
-            * `downsample_stride`, `top_k_candidates`
-            * `lost_count_thresh`, `interval_sec`
+            * `range_min/max_x`, `range_min/max_y`: field-dependent boundary
+            * `range_yaw_diff`: **3.1415 rad** (fallback / priorless yaw half-range)
+            * `recovery_yaw_diff`: **0.40 rad** (IMU heading prior yaw half-range)
+            * `step_xy` / `step_yaw`: **0.30 m** / **0.3 rad**
+            * `downsample_stride` / `top_k_candidates`: **2** / **4**
+            * `uniqueness_ratio`: **0.960** (1.0 disables)
+            * `verify_frames`: **3** (consecutive trial confirmation frames)
+            * `lost_count_thresh`: **25** (interval: 0.5 s)
         end note
     }
 else (NO: Local Tracking)
@@ -148,11 +153,11 @@ partition "5. Match Acceptance & Safety TF Gating (`isPoseMatchAccepted`)" #FCE4
     note right
         **Acceptance Thresholds (`matching_params.*`)**
         * **3D Pass (`N_3d >= min_3d_points`)**:
-          `cost_3d < cost_threshold` **OR**
-          (`inliers >= min_inlier_points` AND `inlier_cost < max_inlier_accept_cost`
-           AND `inlier_ratio >= inlier_ratio_threshold` AND `cost_3d < cost_threshold`)
+          `cost_3d < cost_threshold_3d (0.202 m)` **OR**
+          (`inliers >= min_inliers (350)` AND `inlier_cost < inlier_cost_thresh (0.040 m)`
+           AND `inlier_ratio >= min_inlier_ratio (0.20)` AND `cost_3d < max_inlier_accept_cost (0.230 m)`)
         * **2D Pass (`N_2d >= min_2d_points`)**:
-          `cost_2d < cost_threshold_2d`
+          `cost_2d < cost_threshold_2d (0.04 m)`
     end note
 }
 

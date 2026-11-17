@@ -38,6 +38,7 @@ https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
                                                          [Publish TF (map -> base_link)]                       [Halt TF & Pose Output Immediately]
                                                          [/platform_constraint & /dynamic_cloud]                [localization_success = false]
                                                          [localization_success = true]                          [Trigger GlobalSearch after 25 frames]
+                                                                                                                [(IMU Yaw Window + Uniqueness + Trial Verify)]
 ```
 
 ## 3. Build Environment & Dependencies
@@ -114,13 +115,13 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 | `matching_params.fine_refine` / `levels` | `true` / `2` | 2-stage $5 \times 5 \times 5$ sub-voxel refinement (`0.05 m` $\to$ `0.002 m`). |
 | `matching_params.max_dist_thresh` | `0.25` | Per-point Huber/L1 residual distance clipping ceiling [m]. |
 | `matching_params.dynamic_dist_thresh` | `0.15` | Distance threshold [m] above which points are extracted as `/dynamic_cloud`. |
-| `matching_params.cost_threshold_3d` | `0.23` | Independent 3D LiDAR mean residual acceptance threshold [m] ($C_{\text{3D}} < 0.23\text{ m}$). |
+| `matching_params.cost_threshold_3d` | `0.202` | Independent 3D LiDAR mean residual acceptance threshold [m] ($C_{\text{3D}} < 0.202\text{ m}$). |
 | `matching_params.cost_threshold_2d` | `0.04` | Independent 2D LiDAR mean residual acceptance threshold [m] ($C_{\text{2D}} < 0.04\text{ m}$, hysteresis detachment at $2\times = 0.08\text{ m}$). |
 | `matching_params.inlier_dist_thresh` | `0.08` | Distance threshold [m] to classify an obstacle point as a wall inlier. |
-| `matching_params.min_inliers` | `400` | Minimum inlier point count for inlier-based acceptance ($N_{\text{inlier}} \ge 400$). |
-| `matching_params.inlier_cost_thresh` | `0.035` | Maximum mean residual of inlier points for inlier acceptance [m] ($C_{\text{inlier}} < 0.035\text{ m}$). |
-| `matching_params.min_inlier_ratio` | `0.28` | Minimum inlier ratio against 3D obstacle points ($N_{\text{inlier}} / N_{\text{3D}} \ge 0.28$). |
-| `matching_params.max_inlier_accept_cost` | `0.25` | 3D residual cost upper bound guard for inlier acceptance [m] ($C_{\text{3D}} < 0.25\text{ m}$). |
+| `matching_params.min_inliers` | `350` | Minimum inlier point count for inlier-based acceptance ($N_{\text{inlier}} \ge 350$). |
+| `matching_params.inlier_cost_thresh` | `0.040` | Maximum mean residual of inlier points for inlier acceptance [m] ($C_{\text{inlier}} < 0.040\text{ m}$). |
+| `matching_params.min_inlier_ratio` | `0.20` | Minimum inlier ratio against 3D obstacle points ($N_{\text{inlier}} / N_{\text{3D}} \ge 0.20$). |
+| `matching_params.max_inlier_accept_cost` | `0.230` | 3D residual cost upper bound guard for inlier acceptance [m] ($C_{\text{3D}} < 0.230\text{ m}$). |
 | `matching_params.weight_2d_lidar` | `0.40` | Base weight $w_{\text{2D,base}}$ of 2D LiDAR residual term in Combined mode. |
 | `matching_params.min_2d_points` / `target_2d_points` | `30` / `200` | Minimum 2D point threshold and reference point count for 100% FoV scaling. |
 | `matching_params.min_3d_points` | `50` | Minimum 3D obstacle points (falls back to full-window 2D-only mode $w_{\text{2D}} = 1.0$ if fewer). |
@@ -128,7 +129,11 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 | `velocity_estimation.enable` | `true` | Enables linear velocity estimation with EMA smoothing ($\alpha = 0.6$) and constant-velocity extrapolation (`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0`). |
 | `lidar_2d.enable` / `deskew` | `true` / `true` | Enables Lakibeam 2D LiDAR, rotational/translational deskew, and time synchronization to 3D reference timestamp. |
 | `lidar_2d.time_offset_sec` | `0.0` | Static timestamp offset [s] added to 2D LiDAR scan timestamps. |
+| `global_search.range_yaw_diff` | `3.1415` | Full yaw search half-range [rad] when no valid heading prior is available. |
+| `global_search.recovery_yaw_diff` | `0.40` | Restricted yaw search half-range [rad] when IMU heading prior is valid (`< 10.0 s` since last match or initial heading prior; automatically falls back to `range_yaw_diff` on initial failure). |
 | `global_search.top_k_candidates` | `4` | Number of Top-K spatially distinct local minima refined via NMS during global recovery. |
+| `global_search.uniqueness_ratio` | `0.960` | Top-1/Top-2 cost margin threshold (`best_cost <= uniqueness_ratio * second_best_cost`, excluding $180^\circ$ antipodal symmetry twin) to reject ambiguous global matches (`1.0` disables). |
+| `global_search.verify_frames` | `3` | Consecutive local verification frames required in trial state before committing global recovery and resuming TF/pose output. |
 | `global_search.lost_count_thresh` | `25` | Consecutive failed frame threshold before triggering full-field global search. |
 
 ## 6. Diagrams

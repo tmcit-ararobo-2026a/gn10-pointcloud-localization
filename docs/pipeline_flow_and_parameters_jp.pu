@@ -41,7 +41,8 @@ partition "0. マップ初期化 (`setupMapData`)" #ECEFF1 {
 fork
     partition "1A. IMU ストリーム (`imuCallback` @ 200 Hz)" #E8F5E9 {
         :`/livox/imu` (`sensor_msgs/Imu`) を受信;
-        :角速度を `base_link` 座標系へ変換 (`R_base_imu_`);
+        :UDP 微小順序逆転パケットを安全スキップ (`0 <= back_ns <= 1.0 s`, `> 1.0 s` 後退時のみリセット);
+        :`pose_mutex_` 下で角速度を `base_link` 座標系へ変換 (`R_base_imu_`);
         :`YawHistory` (直近 2.0 秒保持) で台形則積分し `latest_omega_z_` を更新;
     }
 fork again
@@ -74,7 +75,7 @@ fork again
 end fork
 
 partition "2. 運動予測と時空間アライメント (`cloudCallback`)" #FFF3E0 {
-    :基準時刻 `reference_stamp` における探索中心 `search_base_pose` を予測:\n1. **Yaw角**: `last_known_pose_.yaw + yaw_history_.delta(last_match, reference_ns)`\n2. **並進位置**: `last_known_pose_.xy + velocity_xy * dt` (`!is_lost_` 時);
+    :基準時刻 `reference_stamp` における探索中心 `search_base_pose` を予測:\n1. **Yaw角**: `last_yaw_integrated_ns_` による毎フレーム逐次積分 (`last_known_pose_.yaw + delta`)\n2. **並進位置**: `last_known_pose_.xy + velocity_xy * dt` (`!is_lost_` 時);
     :2D LiDAR 点群を **`alignPointsToTimestamp`** により `latest_2d_stamp_` から\n3D 基準時刻 `reference_stamp` へ時空間補正 (IMU 回転 + 並進前進射影);
     :探索範囲の動的拡大:\n* 高速旋回時 (`|omega_z| > omega_thresh`) に **Yaw 探索幅を拡大**\n* 高速並進時 (`v >= 2.0 m/s`) に **XY 探索幅を最大 1.5 倍へ拡大**;
     note right
@@ -103,17 +104,21 @@ partition "3. GPU Deskew・床面除去・2D点群統合 (`prepareObstacleCloud`
 
 if (ロスト状態か？ (`is_lost_ == true` かつ外部 Prior なし)) then (YES: グローバル探索復帰)
     partition "4A. グローバル探索による自己位置復帰 (`GlobalSearcher::search`)" #FFEBEE {
-        :Stage 1: 点群を間引き (`downsample_stride`)、フィールド全域を粗いグリッドで評価\n(`step_xy`, `step_yaw`);
-        :**3D NMS (非極大抑制)** により空間・角度的に離れた上位 **Top-K (`top_k_candidates`)** 候補を抽出\n(`dist_xy` または `diff_yaw`);
-        :Stage 2: 各 Top-K 候補の周囲でフル解像度の多段階 `matchObstacleCloud` を実行し、最小コスト姿勢を採用;
+        :IMU 方位事前情報の有効性に応じた Yaw 探索半幅を選択: 有効時 (`< 10.0 s`) は `recovery_yaw_diff` (`0.40 rad`),\n無効時・初回失敗時は `range_yaw_diff` (`3.1415 rad`) へフォールバック;
+        :Stage 1: 点群を間引き (`downsample_stride`)、フィールド全域を粗探索 (`step_xy`, `step_yaw`) し\n**3D NMS** で上位 **Top-K (`top_k_candidates`)** 候補を抽出;
+        :Stage 2: 各 Top-K 候補の周囲でフル解像度 `matchObstacleCloud` を実行\n(**3D LiDAR 優先**: `N_3d >= min_3d_points` のとき 2D 不合格・2D単独フォールバックのコストを `cost_3d` 尺度へ正規化);
+        :Stage 3: **Top-1/Top-2 Uniqueness 判定**: `best.cost > uniqueness_ratio * second_best_cost` なら曖昧候補として棄却\n(180° 点対称ツインを除外して比較);
+        :Stage 4: **複数フレーム Trial 検証**: 局所探索窓 `1.5` 倍で連続 `verify_frames` (`3`) フレーム\n`is_global_recovery_accepted` を満たした後に `is_lost_` を解除;
         note right
             **グローバル探索パラメータ (`global_search.*`)**
-            * `range_min/max_x`: 環境依存の探索範囲
-            * `range_min/max_y`: 環境依存の探索範囲
-            * `range_yaw_diff`: 初期 Yaw 探索許容幅
-            * `step_xy`, `step_yaw`: 粗探索グリッド解像度
-            * `downsample_stride`, `top_k_candidates`
-            * `lost_count_thresh`, `interval_sec`
+            * `range_min/max_x`, `range_min/max_y`: 環境依存の探索範囲
+            * `range_yaw_diff`: **3.1415 rad** (事前方位なし/フォールバック時)
+            * `recovery_yaw_diff`: **0.40 rad** (IMU 方位事前情報有効時)
+            * `step_xy` / `step_yaw`: **0.30 m** / **0.3 rad**
+            * `downsample_stride` / `top_k_candidates`: **2** / **4**
+            * `uniqueness_ratio`: **0.960** (1.0 で無効化)
+            * `verify_frames`: **3** (Trial 連続検証フレーム数)
+            * `lost_count_thresh`: **25** (interval: 0.5 s)
         end note
     }
 else (NO: ローカル追跡)
@@ -148,11 +153,11 @@ partition "5. マッチング合否判定と安全 TF 配信制御 (`isPoseMatch
     note right
         **合否判定しきい値 (`matching_params.*`)**
         * **3D 合格条件 (`N_3d >= min_3d_points`)**:
-          `cost_3d < cost_threshold` **または**
-          (`inliers >= min_inlier_points` かつ `inlier_cost < max_inlier_accept_cost`
-           かつ `inlier_ratio >= inlier_ratio_threshold` かつ `cost_3d < cost_threshold`)
+          `cost_3d < cost_threshold_3d (0.202 m)` **または**
+          (`inliers >= min_inliers (350)` かつ `inlier_cost < inlier_cost_thresh (0.040 m)`
+           かつ `inlier_ratio >= min_inlier_ratio (0.20)` かつ `cost_3d < max_inlier_accept_cost (0.230 m)`)
         * **2D 合格条件 (`N_2d >= min_2d_points`)**:
-          `cost_2d < cost_threshold_2d`
+          `cost_2d < cost_threshold_2d (0.04 m)`
     end note
 }
 
