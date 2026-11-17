@@ -402,7 +402,7 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
 
     const bool high_confidence_3d =
         (solver.obstacleCount3D() >= match_params.min_3d_points) &&
-        (best.cost_3d < 0.88f * match_params.cost_threshold_3d);
+        (best.cost_3d < 0.82f * match_params.cost_threshold_3d);
     const bool high_confidence_2d =
         (solver.obstacleCount2D() >= match_params.min_2d_points) &&
         (best.cost_2d < 0.75f * match_params.cost_threshold_2d) &&
@@ -419,7 +419,7 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
                 ? (static_cast<float>(best.inliers) / static_cast<float>(solver.obstacleCount3D()))
                 : 1.0f;
         const bool fails_borderline_inliers =
-            (solver.obstacleCount3D() >= match_params.min_3d_points) && (inlier_ratio_3d < 0.12f);
+            (solver.obstacleCount3D() >= match_params.min_3d_points) && (inlier_ratio_3d < 0.16f);
 
         if (fails_uniqueness || fails_borderline_inliers) {
             RCLCPP_WARN(

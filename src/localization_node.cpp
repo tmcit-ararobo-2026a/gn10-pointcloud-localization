@@ -26,6 +26,7 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
     prior_stamp_              = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
     last_imu_stamp_           = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
     last_global_search_stamp_ = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+    recovery_trial_stamp_     = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
 
     declareAndGetParameters();
 
@@ -170,6 +171,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("global_search.downsample_stride", 2);
     this->declare_parameter("global_search.top_k_candidates", 4);
     this->declare_parameter("global_search.uniqueness_ratio", 0.95);
+    this->declare_parameter("global_search.verify_frames", 2);
     this->declare_parameter("global_search.lost_count_thresh", 5);
     this->declare_parameter("global_search.interval_sec", 0.5);
 
@@ -295,6 +297,9 @@ void LocalizationNode::declareAndGetParameters()
     );
     global_uniqueness_ratio_ = static_cast<float>(
         this->get_parameter("global_search.uniqueness_ratio").as_double()
+    );
+    global_verify_frames_ = std::max(
+        1, static_cast<int>(this->get_parameter("global_search.verify_frames").as_int())
     );
     lost_threshold_count_ = this->get_parameter("global_search.lost_count_thresh").as_int();
     global_search_interval_sec_ =
@@ -853,6 +858,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             has_velocity_           = false;
             has_heading_prior_      = false;
             last_yaw_integrated_ns_ = 0;
+            has_recovery_trial_     = false;
+            recovery_trial_count_   = 0;
             is_lost_                = true;
         }
     }
@@ -1115,6 +1122,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             lost_frame_count_       = 0;
             matched                 = true;
             has_heading_prior_      = true;
+            has_recovery_trial_     = false;
+            recovery_trial_count_   = 0;
             last_match_stamp_       = reference_stamp;
             last_yaw_integrated_ns_ = reference_ns;
         } else {
@@ -1123,12 +1132,130 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         }
     }
 
+    auto commit_recovery = [&](const PoseCandidate& recovered_pose) {
+        std::lock_guard<std::mutex> lock(pose_mutex_);
+        is_lost_                = false;
+        lost_frame_count_       = 0;
+        matched                 = true;
+        global_recovered        = true;
+        has_recovery_trial_     = false;
+        recovery_trial_count_   = 0;
+        has_velocity_           = false;
+        has_heading_prior_      = true;
+        velocity_history_.clear();
+        velocity_history_.push_back({reference_stamp, recovered_pose});
+        last_match_stamp_       = reference_stamp;
+        last_yaw_integrated_ns_ = reference_ns;
+    };
+
     const bool can_run_global_search =
         (last_global_search_stamp_.nanoseconds() == 0) ||
         ((reference_stamp.nanoseconds() - last_global_search_stamp_.nanoseconds()) * 1e-9 >=
          global_search_interval_sec_);
 
-    if (is_lost_ && !matched && can_run_global_search) {
+    bool active_trial = false;
+    PoseCandidate active_trial_pose{};
+    rclcpp::Time active_trial_stamp = reference_stamp;
+    {
+        std::lock_guard<std::mutex> lock(pose_mutex_);
+        active_trial      = has_recovery_trial_;
+        active_trial_pose = recovery_trial_pose_;
+        active_trial_stamp = recovery_trial_stamp_;
+    }
+
+    if (is_lost_ && !matched && active_trial) {
+        const double trial_dt =
+            (reference_stamp.nanoseconds() - active_trial_stamp.nanoseconds()) * 1e-9;
+        if (trial_dt > 0.0 && trial_dt < 0.25) {
+            PoseCandidate trial_pose = active_trial_pose;
+            double trial_rot         = 0.0;
+            if (imu_initialized_ &&
+                imu_snapshot.delta(active_trial_stamp.nanoseconds(), reference_ns, trial_rot)) {
+                trial_pose.yaw = normalizeAngle(trial_pose.yaw + static_cast<float>(trial_rot));
+            }
+            MatchingParams trial_match_params = active_match_params;
+            trial_match_params.range_xy *= 1.5f;
+
+            const bool trial_matched = solver_->processPointCloud(
+                accumulated_points,
+                h_transform,
+                deskew_params,
+                imu_samples,
+                stride,
+                active_filter_params,
+                trial_match_params,
+                trial_pose,
+                dynamic_pts,
+                best_pose,
+                best_cost,
+                &inlier_count,
+                &inlier_cost,
+                extra_pts_ptr,
+                need_dynamic
+            );
+            const float ratio_3d =
+                (solver_->obstacleCount3D() > 0)
+                    ? (static_cast<float>(inlier_count) /
+                       static_cast<float>(solver_->obstacleCount3D()))
+                    : 0.0f;
+            const bool trial_quality_ok =
+                (solver_->lastCost3D() < 0.85f * active_match_params.cost_threshold_3d) ||
+                (solver_->obstacleCount2D() >= active_match_params.min_2d_points &&
+                 solver_->lastCost2D() < active_match_params.cost_threshold_2d) ||
+                (ratio_3d >= 0.20f);
+
+            if (trial_matched &&
+                isPoseMatchAccepted(trial_match_params, inlier_count, inlier_cost) &&
+                trial_quality_ok) {
+                int next_trial_count = 0;
+                {
+                    std::lock_guard<std::mutex> lock(pose_mutex_);
+                    recovery_trial_pose_  = best_pose;
+                    recovery_trial_stamp_ = reference_stamp;
+                    recovery_trial_count_++;
+                    next_trial_count = recovery_trial_count_;
+                }
+                if (next_trial_count >= global_verify_frames_) {
+                    commit_recovery(best_pose);
+                    RCLCPP_INFO(
+                        this->get_logger(),
+                        "[GlobalSearch] Trial verified (%d frames). Recovered from lost state. (cost: %.4f, inliers: %d, inlier_cost: %.4f)",
+                        global_verify_frames_,
+                        best_cost,
+                        inlier_count,
+                        inlier_cost
+                    );
+                } else {
+                    matched = false;
+                    dynamic_pts.clear();
+                }
+            } else {
+                {
+                    std::lock_guard<std::mutex> lock(pose_mutex_);
+                    has_recovery_trial_   = false;
+                    recovery_trial_count_ = 0;
+                    active_trial          = false;
+                }
+                matched = false;
+                dynamic_pts.clear();
+                RCLCPP_WARN(
+                    this->get_logger(),
+                    "[GlobalSearch] Trial rejected on subsequent frame (cost: %.4f, 3D: %.4f, inliers: %d, ratio_3d: %.1f%%). Remaining in lost state.",
+                    best_cost,
+                    solver_->lastCost3D(),
+                    inlier_count,
+                    ratio_3d * 100.0f
+                );
+            }
+        } else if (trial_dt >= 0.25 || trial_dt < 0.0) {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            has_recovery_trial_   = false;
+            recovery_trial_count_ = 0;
+            active_trial          = false;
+        }
+    }
+
+    if (is_lost_ && !matched && !active_trial && can_run_global_search) {
         last_global_search_stamp_ = reference_stamp;
         float current_prior_yaw   = search_base_pose.yaw;
         const float effective_yaw_diff =
@@ -1152,31 +1279,49 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             extra_pts_ptr
         );
 
-        global_recovered = std::isfinite(best_cost) &&
-                           (best_cost < std::numeric_limits<float>::max() / 2.0f) &&
-                           isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
+        const bool gs_accepted =
+            std::isfinite(best_cost) && (best_cost < std::numeric_limits<float>::max() / 2.0f) &&
+            isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
 
-        if (global_recovered) {
-            {
-                std::lock_guard<std::mutex> lock(pose_mutex_);
-                is_lost_                = false;
-                lost_frame_count_       = 0;
-                matched                 = true;
-                has_velocity_           = false;
-                has_heading_prior_      = true;
-                velocity_history_.clear();
-                velocity_history_.push_back({reference_stamp, best_pose});
-                last_match_stamp_       = reference_stamp;
-                last_yaw_integrated_ns_ = reference_ns;
+        if (gs_accepted) {
+            const bool high_conf_immediate =
+                (global_verify_frames_ <= 1) ||
+                (solver_->obstacleCount3D() >= active_match_params.min_3d_points &&
+                 solver_->lastCost3D() < 0.80f * active_match_params.cost_threshold_3d) ||
+                (solver_->obstacleCount3D() < active_match_params.min_3d_points &&
+                 solver_->obstacleCount2D() >= active_match_params.min_2d_points &&
+                 solver_->lastCost2D() < 0.75f * active_match_params.cost_threshold_2d);
+
+            if (high_conf_immediate) {
+                commit_recovery(best_pose);
+                RCLCPP_INFO(
+                    this->get_logger(),
+                    "[GlobalSearch] Successfully recovered from lost state. (cost: %.4f, inliers: %d, inlier_cost: %.4f, yaw_diff: %.2f)",
+                    best_cost,
+                    inlier_count,
+                    inlier_cost,
+                    effective_yaw_diff
+                );
+            } else {
+                {
+                    std::lock_guard<std::mutex> lock(pose_mutex_);
+                    has_recovery_trial_   = true;
+                    recovery_trial_pose_  = best_pose;
+                    recovery_trial_stamp_ = reference_stamp;
+                    recovery_trial_count_ = 1;
+                }
+                global_recovered = false;
+                matched          = false;
+                dynamic_pts.clear();
+                RCLCPP_INFO(
+                    this->get_logger(),
+                    "[GlobalSearch] Borderline candidate entered trial verification (1/%d frames, cost: %.4f, 3D: %.4f, inliers: %d).",
+                    global_verify_frames_,
+                    best_cost,
+                    solver_->lastCost3D(),
+                    inlier_count
+                );
             }
-            RCLCPP_INFO(
-                this->get_logger(),
-                "[GlobalSearch] Successfully recovered from lost state. (cost: %.4f, inliers: %d, inlier_cost: %.4f, yaw_diff: %.2f)",
-                best_cost,
-                inlier_count,
-                inlier_cost,
-                effective_yaw_diff
-            );
         } else {
             std::lock_guard<std::mutex> lock(pose_mutex_);
             if (has_heading_prior_ && last_match_stamp_.nanoseconds() == 0) {
@@ -1467,6 +1612,8 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
             has_velocity_           = false;
             has_heading_prior_      = false;
             last_yaw_integrated_ns_ = 0;
+            has_recovery_trial_     = false;
+            recovery_trial_count_   = 0;
             is_lost_                = true;
             imu_initialized_        = false;
         } else if (back_ns >= 0) {
@@ -2049,8 +2196,9 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         } else if (
             name == "global_search.downsample_stride" ||
             name == "global_search.lost_count_thresh" || name == "global_search.top_k_candidates" ||
-            name == "matching_params.min_3d_points" || name == "matching_params.min_2d_points" ||
-            name == "matching_params.target_2d_points" || name == "matching_params.min_inliers"
+            name == "global_search.verify_frames" || name == "matching_params.min_3d_points" ||
+            name == "matching_params.min_2d_points" || name == "matching_params.target_2d_points" ||
+            name == "matching_params.min_inliers"
         ) {
             if (param.as_int() < 1) {
                 result.successful = false;
@@ -2225,6 +2373,8 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         } else if (name == "global_search.uniqueness_ratio") {
             global_uniqueness_ratio_ = static_cast<float>(param.as_double());
             update_global_search_cfg = true;
+        } else if (name == "global_search.verify_frames") {
+            global_verify_frames_ = static_cast<int>(param.as_int());
         } else if (name == "global_search.lost_count_thresh") {
             lost_threshold_count_ = static_cast<int>(param.as_int());
 
