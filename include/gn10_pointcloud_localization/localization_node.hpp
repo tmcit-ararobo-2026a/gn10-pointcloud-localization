@@ -111,6 +111,7 @@ private:
     float global_range_min_y_{-5.70f};
     float global_range_max_y_{5.70f};
     float global_range_yaw_diff_{0.785f};
+    float global_recovery_yaw_diff_{0.40f};
     float global_step_xy_{0.30f};
     float global_step_yaw_{0.2618f};
     int global_downsample_stride_{2};
@@ -133,6 +134,8 @@ private:
     rclcpp::Time last_imu_stamp_;
     std::atomic<bool> imu_initialized_{false};
     std::atomic<bool> is_lost_{true};
+    bool has_heading_prior_{false};
+    int64_t last_yaw_integrated_ns_{0};
     int lost_frame_count_{0};
     std::atomic<float> latest_omega_z_{0.0f};
     Eigen::Matrix3d R_base_imu_{Eigen::Matrix3d::Identity()};

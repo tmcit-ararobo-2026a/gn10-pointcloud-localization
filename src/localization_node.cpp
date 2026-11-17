@@ -164,6 +164,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("global_search.range_min_y", -5.70);
     this->declare_parameter("global_search.range_max_y", 5.70);
     this->declare_parameter("global_search.range_yaw_diff", 0.7854);
+    this->declare_parameter("global_search.recovery_yaw_diff", 0.40);
     this->declare_parameter("global_search.step_xy", 0.30);
     this->declare_parameter("global_search.step_yaw", 0.2618);
     this->declare_parameter("global_search.downsample_stride", 2);
@@ -281,6 +282,8 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("global_search.range_max_y").as_double());
     global_range_yaw_diff_ =
         static_cast<float>(this->get_parameter("global_search.range_yaw_diff").as_double());
+    global_recovery_yaw_diff_ =
+        static_cast<float>(this->get_parameter("global_search.recovery_yaw_diff").as_double());
     global_step_xy_ = static_cast<float>(this->get_parameter("global_search.step_xy").as_double());
     global_step_yaw_ =
         static_cast<float>(this->get_parameter("global_search.step_yaw").as_double());
@@ -308,7 +311,8 @@ void LocalizationNode::declareAndGetParameters()
     predicted_pose_      = last_known_pose_;
     // A known start pose resolves the field's near-symmetric global matches.
     // Do not publish it as a measurement; first require a successful cloud match.
-    is_lost_ = !this->get_parameter("initial_pose.use_for_local_search").as_bool();
+    is_lost_           = !this->get_parameter("initial_pose.use_for_local_search").as_bool();
+    has_heading_prior_ = this->get_parameter("initial_pose.use_for_local_search").as_bool();
 
     topic_esdf_map_           = this->get_parameter("topics.output_esdf_map").as_string();
     esdf_crop_bounds_.enabled = this->get_parameter("esdf.crop_enabled").as_bool();
@@ -845,9 +849,11 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         {
             std::lock_guard<std::mutex> lock(pose_mutex_);
             yaw_history_.clear();
-            imu_initialized_ = false;
-            has_velocity_    = false;
-            is_lost_         = true;
+            imu_initialized_        = false;
+            has_velocity_           = false;
+            has_heading_prior_      = false;
+            last_yaw_integrated_ns_ = 0;
+            is_lost_                = true;
         }
     }
     const bool window_ready        = scan_accumulator_.append(timed_points, reference_ns);
@@ -892,8 +898,10 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     // Compute local search center (search_base_pose) via IMU yaw integration and linear velocity prediction
     PoseCandidate search_base_pose;
     bool has_fresh_prior   = false;
+    bool has_imu_yaw_prior = false;
     float current_omega_z  = 0.0f;
     YawHistory imu_snapshot;
+    std::vector<IMUSample> imu_samples;
     float vx_world_current = 0.0f;
     float vy_world_current = 0.0f;
     bool has_vel_current   = false;
@@ -906,13 +914,49 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             vy_world_current = velocity_y_;
             has_vel_current  = true;
         }
-        double rotation  = 0;
+        double rotation = 0.0;
         if (imu_initialized_ && last_match_stamp_.nanoseconds() > 0) {
-            const double dt =
+            const int64_t from_ns = (last_yaw_integrated_ns_ > 0)
+                                        ? last_yaw_integrated_ns_
+                                        : last_match_stamp_.nanoseconds();
+            const double step_dt  = (reference_ns - from_ns) * 1e-9;
+            const double total_dt =
                 (reference_stamp.nanoseconds() - last_match_stamp_.nanoseconds()) * 1e-9;
-            if (dt > 0.0 && dt < 1.0 &&
-                imu_snapshot.delta(last_match_stamp_.nanoseconds(), reference_ns, rotation)) {
-                search_base_pose.yaw += float(rotation);
+            if (step_dt >= 0.0 && step_dt < 1.5 &&
+                imu_snapshot.delta(from_ns, reference_ns, rotation)) {
+                last_known_pose_.yaw    = normalizeAngle(last_known_pose_.yaw + float(rotation));
+                last_yaw_integrated_ns_ = reference_ns;
+                search_base_pose.yaw    = last_known_pose_.yaw;
+                if (total_dt >= 0.0 && total_dt < 10.0) {
+                    has_imu_yaw_prior = true;
+                }
+            }
+        } else if (imu_initialized_ && has_heading_prior_) {
+            if (last_yaw_integrated_ns_ == 0) {
+                imu_snapshot.get_imu_samples(imu_samples);
+                if (!imu_samples.empty()) {
+                    const int64_t earliest_imu_ns = imu_samples.front().stamp_ns;
+                    const double dt               = (reference_ns - earliest_imu_ns) * 1e-9;
+                    if (dt >= 0.0 && dt < 2.0 &&
+                        imu_snapshot.delta(earliest_imu_ns, reference_ns, rotation)) {
+                        last_known_pose_.yaw =
+                            normalizeAngle(last_known_pose_.yaw + float(rotation));
+                        last_yaw_integrated_ns_ = reference_ns;
+                        search_base_pose.yaw    = last_known_pose_.yaw;
+                        has_imu_yaw_prior       = true;
+                    }
+                }
+            } else {
+                const double step_dt = (reference_ns - last_yaw_integrated_ns_) * 1e-9;
+                if (step_dt >= 0.0 && step_dt < 1.5 &&
+                    imu_snapshot.delta(last_yaw_integrated_ns_, reference_ns, rotation)) {
+                    last_known_pose_.yaw    = normalizeAngle(last_known_pose_.yaw + float(rotation));
+                    last_yaw_integrated_ns_ = reference_ns;
+                    search_base_pose.yaw    = last_known_pose_.yaw;
+                    has_imu_yaw_prior       = true;
+                } else if (step_dt >= 1.5) {
+                    has_heading_prior_ = false;
+                }
             }
         }
         search_base_pose.yaw = normalizeAngle(search_base_pose.yaw);
@@ -996,8 +1040,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     imu_snapshot.get_angle_at(reference_ns, ref_angle);
     deskew_params.ref_imu_angle = static_cast<float>(ref_angle);
 
-    std::vector<IMUSample> imu_samples;
-    imu_snapshot.get_imu_samples(imu_samples);
+    if (imu_samples.empty()) {
+        imu_snapshot.get_imu_samples(imu_samples);
+    }
 
     size_t max_points_param =
         static_cast<size_t>(this->get_parameter("filter_params.max_points").as_int());
@@ -1066,10 +1111,12 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             matched && isPoseMatchAccepted(active_match_params, inlier_count, inlier_cost);
         if (accepted) {
             std::lock_guard<std::mutex> lock(pose_mutex_);
-            is_lost_          = false;
-            lost_frame_count_ = 0;
-            matched           = true;
-            last_match_stamp_ = reference_stamp;
+            is_lost_                = false;
+            lost_frame_count_       = 0;
+            matched                 = true;
+            has_heading_prior_      = true;
+            last_match_stamp_       = reference_stamp;
+            last_yaw_integrated_ns_ = reference_ns;
         } else {
             matched = false;
             dynamic_pts.clear();
@@ -1084,6 +1131,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
     if (is_lost_ && !matched && can_run_global_search) {
         last_global_search_stamp_ = reference_stamp;
         float current_prior_yaw   = search_base_pose.yaw;
+        const float effective_yaw_diff =
+            has_imu_yaw_prior ? std::min(global_range_yaw_diff_, global_recovery_yaw_diff_)
+                              : global_range_yaw_diff_;
 
         best_pose = global_searcher_->search(
             *solver_,
@@ -1095,7 +1145,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             active_filter_params,
             active_match_params,
             current_prior_yaw,
-            global_range_yaw_diff_,
+            effective_yaw_diff,
             best_cost,
             &inlier_count,
             &inlier_cost,
@@ -1109,21 +1159,29 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         if (global_recovered) {
             {
                 std::lock_guard<std::mutex> lock(pose_mutex_);
-                is_lost_          = false;
-                lost_frame_count_ = 0;
-                matched           = true;
-                has_velocity_     = false;
+                is_lost_                = false;
+                lost_frame_count_       = 0;
+                matched                 = true;
+                has_velocity_           = false;
+                has_heading_prior_      = true;
                 velocity_history_.clear();
                 velocity_history_.push_back({reference_stamp, best_pose});
-                last_match_stamp_ = reference_stamp;
+                last_match_stamp_       = reference_stamp;
+                last_yaw_integrated_ns_ = reference_ns;
             }
             RCLCPP_INFO(
                 this->get_logger(),
-                "[GlobalSearch] Successfully recovered from lost state. (cost: %.4f, inliers: %d, inlier_cost: %.4f)",
+                "[GlobalSearch] Successfully recovered from lost state. (cost: %.4f, inliers: %d, inlier_cost: %.4f, yaw_diff: %.2f)",
                 best_cost,
                 inlier_count,
-                inlier_cost
+                inlier_cost,
+                effective_yaw_diff
             );
+        } else {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            if (has_heading_prior_ && last_match_stamp_.nanoseconds() == 0) {
+                has_heading_prior_ = false;
+            }
         }
     } else if (!is_lost_ && !matched) {
         matched = solver_->processPointCloud(
@@ -1152,9 +1210,10 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
         if (match_accepted) {
             std::lock_guard<std::mutex> lock(pose_mutex_);
-            matched           = true;
-            lost_frame_count_ = 0;
-            is_lost_          = false;
+            matched            = true;
+            lost_frame_count_  = 0;
+            is_lost_           = false;
+            has_heading_prior_ = true;
 
             // Estimate translation over a fixed time interval rather than
             // differentiating alternating 50 ms scan noise into fake velocity.
@@ -1203,7 +1262,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                     }
                 }
             }
-            last_match_stamp_ = reference_stamp;
+            last_match_stamp_       = reference_stamp;
+            last_yaw_integrated_ns_ = reference_ns;
         } else {
             matched = false;
             dynamic_pts.clear();
@@ -1400,11 +1460,18 @@ void LocalizationNode::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
     );
     const Eigen::Vector3d omega_base = R_base_imu_ * omega_imu;
     const rclcpp::Time stamp(msg->header.stamp);
-    if (imu_initialized_ && last_imu_stamp_.nanoseconds() > 0 && stamp < last_imu_stamp_) {
-        yaw_history_.clear();
-        has_velocity_    = false;
-        is_lost_         = true;
-        imu_initialized_ = false;
+    if (imu_initialized_ && last_imu_stamp_.nanoseconds() > 0) {
+        const int64_t back_ns = last_imu_stamp_.nanoseconds() - stamp.nanoseconds();
+        if (back_ns > 1000000000LL) {
+            yaw_history_.clear();
+            has_velocity_           = false;
+            has_heading_prior_      = false;
+            last_yaw_integrated_ns_ = 0;
+            is_lost_                = true;
+            imu_initialized_        = false;
+        } else if (back_ns >= 0) {
+            return;
+        }
     }
     latest_omega_z_ = static_cast<float>(omega_base.z());
     if (imu_initialized_ && !is_lost_ && last_imu_stamp_.nanoseconds() > 0) {
@@ -2025,6 +2092,13 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
                 result.reason     = "global_search.uniqueness_ratio must be in (0.0, 1.0]";
                 return result;
             }
+        } else if (name == "global_search.recovery_yaw_diff") {
+            const double val = param.as_double();
+            if (!std::isfinite(val) || val <= 0.0 || val > M_PI) {
+                result.successful = false;
+                result.reason     = "global_search.recovery_yaw_diff must be in (0.0, pi]";
+                return result;
+            }
         } else if (name == "lidar_2d.time_offset_sec") {
             if (!std::isfinite(param.as_double())) {
                 result.successful = false;
@@ -2134,6 +2208,8 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             update_global_search_cfg = true;
         } else if (name == "global_search.range_yaw_diff") {
             global_range_yaw_diff_ = static_cast<float>(param.as_double());
+        } else if (name == "global_search.recovery_yaw_diff") {
+            global_recovery_yaw_diff_ = static_cast<float>(param.as_double());
         } else if (name == "global_search.step_xy") {
             global_step_xy_          = static_cast<float>(param.as_double());
             update_global_search_cfg = true;

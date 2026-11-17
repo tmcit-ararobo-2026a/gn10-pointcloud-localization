@@ -313,14 +313,26 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
 
         cand_pose.yaw = normalizeAngle(cand_pose.yaw);
 
-        const bool is_accepted = match_params.isMatchAccepted(
-            solver.lastCost3D(),
-            solver.lastCost2D(),
-            solver.obstacleCount3D(),
-            solver.obstacleCount2D(),
-            cand_inliers,
-            cand_inlier_cost
-        );
+        // Enforce 3D LiDAR primacy during global recovery: when 3D obstacle points are available,
+        // do not accept a pose via 2D-only fallback that failed 3D matching criteria.
+        const bool is_accepted =
+            (solver.obstacleCount3D() >= match_params.min_3d_points)
+                ? match_params.isMatchAccepted(
+                      solver.lastCost3D(),
+                      std::numeric_limits<float>::max(),
+                      solver.obstacleCount3D(),
+                      0,
+                      cand_inliers,
+                      cand_inlier_cost
+                  )
+                : match_params.isMatchAccepted(
+                      solver.lastCost3D(),
+                      solver.lastCost2D(),
+                      solver.obstacleCount3D(),
+                      solver.obstacleCount2D(),
+                      cand_inliers,
+                      cand_inlier_cost
+                  );
 
         refined_candidates.push_back({
             cand_pose,
@@ -393,7 +405,9 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
         (best.cost_3d < 0.88f * match_params.cost_threshold_3d);
     const bool high_confidence_2d =
         (solver.obstacleCount2D() >= match_params.min_2d_points) &&
-        (best.cost_2d < 0.75f * match_params.cost_threshold_2d);
+        (best.cost_2d < 0.75f * match_params.cost_threshold_2d) &&
+        (solver.obstacleCount3D() < match_params.min_3d_points ||
+         best.cost_3d < 0.90f * match_params.cost_threshold_3d);
     const bool is_high_confidence = high_confidence_3d || high_confidence_2d;
 
     if (!is_high_confidence) {

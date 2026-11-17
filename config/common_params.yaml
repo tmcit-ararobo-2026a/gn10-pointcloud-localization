@@ -130,6 +130,7 @@
       range_min_y: -5.70                # Global search minimum Y coordinate [m]
       range_max_y: 5.70                 # Global search maximum Y coordinate [m]
       range_yaw_diff: 3.1415            # Global yaw search half-range [rad] around prior heading (overridden per team)
+      recovery_yaw_diff: 0.40           # Restricted yaw half-range [rad] when IMU heading prior is valid (< 2.0 s)
       step_xy: 0.30                     # Global coarse XY grid step [m]
       step_yaw: 0.3                     # Global coarse yaw grid step [rad]
       downsample_stride: 2              # Point cloud decimation stride during global search
