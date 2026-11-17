@@ -117,7 +117,7 @@ public:
     void clear() { points_.clear(); initialized_ = false; }
     bool backwards(int64_t reference) const
     {
-        return initialized_ && reference <= last_reference_;
+        return initialized_ && reference < last_reference_;
     }
     bool append(const std::vector<TimedScanPoint>& points, int64_t reference)
     {
