@@ -115,7 +115,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `matching_params.fine_refine` / `levels` | `true` / `2` | 2 段の $5 \times 5 \times 5$ サブボクセル精密探索（`0.05 m` $\to$ `0.002 m`）。 |
 | `matching_params.max_dist_thresh` | `0.25` | マッチング評価時の点ごとの ESDF 残差打ち切り距離 [m]。 |
 | `matching_params.dynamic_dist_thresh` | `0.15` | `/dynamic_cloud` として抽出するマップ表面からの距離閾値 [m]。 |
-| `matching_params.cost_threshold_3d` | `0.202` | 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.202\text{ m}$)。 |
+| `matching_params.cost_threshold_3d` | `0.23` | ローカル追従時の 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.23\text{ m}$)。 |
 | `matching_params.cost_threshold_2d` | `0.04` | 2D LiDAR 独立残差合格しきい値 [m] ($C_{\text{2D}} < 0.04\text{ m}$、ヒステリシス切り離しは $2\times = 0.08\text{ m}$)。 |
 | `matching_params.inlier_dist_thresh` | `0.08` | マップ壁面から `0.08 m` (8 cm) 以内の点をインライアと判定。 |
 | `matching_params.min_inliers` | `350` | インライア合格判定に必要な最小インライア点数 ($N_{\text{inlier}} \ge 350$)。 |
@@ -134,6 +134,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `global_search.top_k_candidates` | `4` | グローバル復帰探索時にNMSで抽出して精密化する上位候補数。 |
 | `global_search.uniqueness_ratio` | `0.960` | 曖昧なグローバル一致を棄却する Top-1/Top-2 コスト比上限 (`best_cost <= uniqueness_ratio * second_best_cost`、$180^\circ$ 点対称ツインを除外、`1.0` で無効化)。 |
 | `global_search.verify_frames` | `3` | グローバル復帰を確定して TF/推定姿勢の出力を再開する前に、トライアル状態で要求する連続ローカル検証フレーム数。 |
+| `global_search.cost_threshold_3d` | `0.202` | グローバル探索復帰および Trial 検証時に適用する厳格な 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.202\text{ m}$)。 |
 | `global_search.lost_count_thresh` | `25` | グローバル全域探索へ移行する連続失敗フレーム数。 |
 
 ## 6. 設計図一覧

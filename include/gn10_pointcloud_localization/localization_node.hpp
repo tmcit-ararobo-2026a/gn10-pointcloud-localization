@@ -118,6 +118,7 @@ private:
     int global_top_k_candidates_{4};
     float global_uniqueness_ratio_{0.95f};
     int global_verify_frames_{2};
+    float global_cost_threshold_3d_{0.202f};
     int lost_threshold_count_{5};
     double global_search_interval_sec_{0.5};
     rclcpp::Time last_global_search_stamp_;

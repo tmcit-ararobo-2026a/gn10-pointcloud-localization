@@ -118,6 +118,7 @@ if (Is Robot Lost? (`is_lost_ == true` and no fresh prior)) then (YES: Global Re
             * `downsample_stride` / `top_k_candidates`: **2** / **4**
             * `uniqueness_ratio`: **0.960** (1.0 disables)
             * `verify_frames`: **3** (consecutive trial confirmation frames)
+            * `cost_threshold_3d`: **0.202 m** (strict 3D recovery threshold)
             * `lost_count_thresh`: **25** (interval: 0.5 s)
         end note
     }
@@ -153,7 +154,7 @@ partition "5. Match Acceptance & Safety TF Gating (`isPoseMatchAccepted`)" #FCE4
     note right
         **Acceptance Thresholds (`matching_params.*`)**
         * **3D Pass (`N_3d >= min_3d_points`)**:
-          `cost_3d < cost_threshold_3d (0.202 m)` **OR**
+          `cost_3d < cost_threshold_3d (0.23 m local / 0.202 m global)` **OR**
           (`inliers >= min_inliers (350)` AND `inlier_cost < inlier_cost_thresh (0.040 m)`
            AND `inlier_ratio >= min_inlier_ratio (0.20)` AND `cost_3d < max_inlier_accept_cost (0.230 m)`)
         * **2D Pass (`N_2d >= min_2d_points`)**:

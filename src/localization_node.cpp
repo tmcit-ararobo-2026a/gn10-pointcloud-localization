@@ -172,6 +172,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("global_search.top_k_candidates", 4);
     this->declare_parameter("global_search.uniqueness_ratio", 0.95);
     this->declare_parameter("global_search.verify_frames", 2);
+    this->declare_parameter("global_search.cost_threshold_3d", 0.202);
     this->declare_parameter("global_search.lost_count_thresh", 5);
     this->declare_parameter("global_search.interval_sec", 0.5);
 
@@ -301,6 +302,8 @@ void LocalizationNode::declareAndGetParameters()
     global_verify_frames_ = std::max(
         1, static_cast<int>(this->get_parameter("global_search.verify_frames").as_int())
     );
+    global_cost_threshold_3d_ =
+        static_cast<float>(this->get_parameter("global_search.cost_threshold_3d").as_double());
     lost_threshold_count_ = this->get_parameter("global_search.lost_count_thresh").as_int();
     global_search_interval_sec_ =
         std::max(0.1, this->get_parameter("global_search.interval_sec").as_double());
@@ -1187,7 +1190,8 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                 imu_snapshot.delta(active_trial_stamp.nanoseconds(), reference_ns, trial_rot)) {
                 trial_pose.yaw = normalizeAngle(trial_pose.yaw + static_cast<float>(trial_rot));
             }
-            MatchingParams trial_match_params = active_match_params;
+            MatchingParams trial_match_params  = active_match_params;
+            trial_match_params.cost_threshold_3d = global_cost_threshold_3d_;
             trial_match_params.range_xy *= 1.5f;
 
             const bool trial_matched = solver_->processPointCloud(
@@ -1265,6 +1269,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             has_imu_yaw_prior ? std::min(global_range_yaw_diff_, global_recovery_yaw_diff_)
                               : global_range_yaw_diff_;
 
+        MatchingParams gs_match_params  = active_match_params;
+        gs_match_params.cost_threshold_3d = global_cost_threshold_3d_;
+
         best_pose = global_searcher_->search(
             *solver_,
             accumulated_points,
@@ -1273,7 +1280,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             imu_samples,
             stride,
             active_filter_params,
-            active_match_params,
+            gs_match_params,
             current_prior_yaw,
             effective_yaw_diff,
             best_cost,
@@ -1284,7 +1291,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
         const bool gs_accepted =
             std::isfinite(best_cost) && (best_cost < std::numeric_limits<float>::max() / 2.0f) &&
-            is_global_recovery_accepted(active_match_params, inlier_count, inlier_cost);
+            is_global_recovery_accepted(gs_match_params, inlier_count, inlier_cost);
 
         if (gs_accepted) {
             if (global_verify_frames_ <= 1) {
@@ -2211,7 +2218,8 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             name == "matching_params.max_inlier_accept_cost" ||
             name == "matching_params.cost_threshold" ||
             name == "matching_params.cost_threshold_3d" ||
-            name == "matching_params.cost_threshold_2d"
+            name == "matching_params.cost_threshold_2d" ||
+            name == "global_search.cost_threshold_3d"
         ) {
             const double val = param.as_double();
             if (!std::isfinite(val) || val <= 0.0) {
@@ -2370,6 +2378,8 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             update_global_search_cfg = true;
         } else if (name == "global_search.verify_frames") {
             global_verify_frames_ = static_cast<int>(param.as_int());
+        } else if (name == "global_search.cost_threshold_3d") {
+            global_cost_threshold_3d_ = static_cast<float>(param.as_double());
         } else if (name == "global_search.lost_count_thresh") {
             lost_threshold_count_ = static_cast<int>(param.as_int());
 

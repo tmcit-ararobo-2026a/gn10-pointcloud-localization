@@ -115,7 +115,7 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 | `matching_params.fine_refine` / `levels` | `true` / `2` | 2-stage $5 \times 5 \times 5$ sub-voxel refinement (`0.05 m` $\to$ `0.002 m`). |
 | `matching_params.max_dist_thresh` | `0.25` | Per-point Huber/L1 residual distance clipping ceiling [m]. |
 | `matching_params.dynamic_dist_thresh` | `0.15` | Distance threshold [m] above which points are extracted as `/dynamic_cloud`. |
-| `matching_params.cost_threshold_3d` | `0.202` | Independent 3D LiDAR mean residual acceptance threshold [m] ($C_{\text{3D}} < 0.202\text{ m}$). |
+| `matching_params.cost_threshold_3d` | `0.23` | Independent 3D LiDAR mean residual acceptance threshold [m] for local tracking ($C_{\text{3D}} < 0.23\text{ m}$). |
 | `matching_params.cost_threshold_2d` | `0.04` | Independent 2D LiDAR mean residual acceptance threshold [m] ($C_{\text{2D}} < 0.04\text{ m}$, hysteresis detachment at $2\times = 0.08\text{ m}$). |
 | `matching_params.inlier_dist_thresh` | `0.08` | Distance threshold [m] to classify an obstacle point as a wall inlier. |
 | `matching_params.min_inliers` | `350` | Minimum inlier point count for inlier-based acceptance ($N_{\text{inlier}} \ge 350$). |
@@ -134,6 +134,7 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 | `global_search.top_k_candidates` | `4` | Number of Top-K spatially distinct local minima refined via NMS during global recovery. |
 | `global_search.uniqueness_ratio` | `0.960` | Top-1/Top-2 cost margin threshold (`best_cost <= uniqueness_ratio * second_best_cost`, excluding $180^\circ$ antipodal symmetry twin) to reject ambiguous global matches (`1.0` disables). |
 | `global_search.verify_frames` | `3` | Consecutive local verification frames required in trial state before committing global recovery and resuming TF/pose output. |
+| `global_search.cost_threshold_3d` | `0.202` | Independent 3D LiDAR mean residual threshold [m] enforced during Global Search recovery and trial verification ($C_{\text{3D}} < 0.202\text{ m}$). |
 | `global_search.lost_count_thresh` | `25` | Consecutive failed frame threshold before triggering full-field global search. |
 
 ## 6. Diagrams

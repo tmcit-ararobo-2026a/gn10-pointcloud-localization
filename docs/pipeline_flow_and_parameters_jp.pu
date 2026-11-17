@@ -118,6 +118,7 @@ if (ロスト状態か？ (`is_lost_ == true` かつ外部 Prior なし)) then (
             * `downsample_stride` / `top_k_candidates`: **2** / **4**
             * `uniqueness_ratio`: **0.960** (1.0 で無効化)
             * `verify_frames`: **3** (Trial 連続検証フレーム数)
+            * `cost_threshold_3d`: **0.202 m** (グローバル復帰・検証用 3D しきい値)
             * `lost_count_thresh`: **25** (interval: 0.5 s)
         end note
     }
@@ -153,7 +154,7 @@ partition "5. マッチング合否判定と安全 TF 配信制御 (`isPoseMatch
     note right
         **合否判定しきい値 (`matching_params.*`)**
         * **3D 合格条件 (`N_3d >= min_3d_points`)**:
-          `cost_3d < cost_threshold_3d (0.202 m)` **または**
+          `cost_3d < cost_threshold_3d (追従 0.23 m / 大域復帰 0.202 m)` **または**
           (`inliers >= min_inliers (350)` かつ `inlier_cost < inlier_cost_thresh (0.040 m)`
            かつ `inlier_ratio >= min_inlier_ratio (0.20)` かつ `cost_3d < max_inlier_accept_cost (0.230 m)`)
         * **2D 合格条件 (`N_2d >= min_2d_points`)**:
