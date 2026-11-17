@@ -178,11 +178,41 @@ void testGpuDeskewLargeImuBuffer()
     std::cout << "[Test] testGpuDeskewLargeImuBuffer PASSED!" << std::endl;
 }
 
+void testScanAccumulatorBackwards()
+{
+    std::cout << "[Test] testScanAccumulatorBackwards starting..." << std::endl;
+
+    ScanAccumulator acc(0.10);
+    const int64_t t0 = 1793413750000000000LL;
+    const int64_t t1 = t0 + 10000000LL;
+
+    // Uninitialized accumulator never reports backwards
+    assert(!acc.backwards(t0));
+
+    std::vector<TimedScanPoint> pts1{TimedScanPoint{1.0f, 0.0f, 0.5f, t0}};
+    acc.append(pts1, t1);
+
+    // Strictly increasing timestamp is not backwards
+    assert(!acc.backwards(t1 + 10000000LL));
+
+    // Duplicate timestamp (reference == last_reference_) must NOT be treated as backwards
+    assert(!acc.backwards(t1));
+    std::vector<TimedScanPoint> pts2{TimedScanPoint{2.0f, 0.0f, 0.5f, t1}};
+    acc.append(pts2, t1);
+    assert(acc.points().size() == 2);
+
+    // Strictly earlier timestamp (reference < last_reference_) IS backwards
+    assert(acc.backwards(t1 - 1));
+
+    std::cout << "[Test] testScanAccumulatorBackwards PASSED!" << std::endl;
+}
+
 int main()
 {
     testNormalizeAngle();
     testYawHistoryDeltaBounds();
     testGpuDeskewLargeImuBuffer();
+    testScanAccumulatorBackwards();
     std::cout << "All angle and IMU bounds tests PASSED successfully!" << std::endl;
     return 0;
 }
