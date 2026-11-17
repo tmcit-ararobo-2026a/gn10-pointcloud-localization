@@ -41,6 +41,7 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
     search_config.step_yaw          = global_step_yaw_;
     search_config.downsample_stride = global_downsample_stride_;
     search_config.top_k_candidates  = global_top_k_candidates_;
+    search_config.uniqueness_ratio  = global_uniqueness_ratio_;
 
     global_searcher_ = std::make_unique<GlobalSearcher>(search_config, this->get_logger());
 
@@ -167,6 +168,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("global_search.step_yaw", 0.2618);
     this->declare_parameter("global_search.downsample_stride", 2);
     this->declare_parameter("global_search.top_k_candidates", 4);
+    this->declare_parameter("global_search.uniqueness_ratio", 0.95);
     this->declare_parameter("global_search.lost_count_thresh", 5);
     this->declare_parameter("global_search.interval_sec", 0.5);
 
@@ -287,6 +289,9 @@ void LocalizationNode::declareAndGetParameters()
     );
     global_top_k_candidates_ = std::max(
         1, static_cast<int>(this->get_parameter("global_search.top_k_candidates").as_int())
+    );
+    global_uniqueness_ratio_ = static_cast<float>(
+        this->get_parameter("global_search.uniqueness_ratio").as_double()
     );
     lost_threshold_count_ = this->get_parameter("global_search.lost_count_thresh").as_int();
     global_search_interval_sec_ =
@@ -1120,7 +1125,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                 inlier_cost
             );
         }
-    } else if (!matched) {
+    } else if (!is_lost_ && !matched) {
         matched = solver_->processPointCloud(
             accumulated_points,
             h_transform,
@@ -2013,6 +2018,13 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
                 result.reason     = name + " must be > 0";
                 return result;
             }
+        } else if (name == "global_search.uniqueness_ratio") {
+            const double val = param.as_double();
+            if (!std::isfinite(val) || val <= 0.0 || val > 1.0) {
+                result.successful = false;
+                result.reason     = "global_search.uniqueness_ratio must be in (0.0, 1.0]";
+                return result;
+            }
         } else if (name == "lidar_2d.time_offset_sec") {
             if (!std::isfinite(param.as_double())) {
                 result.successful = false;
@@ -2134,6 +2146,9 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         } else if (name == "global_search.top_k_candidates") {
             global_top_k_candidates_ = static_cast<int>(param.as_int());
             update_global_search_cfg = true;
+        } else if (name == "global_search.uniqueness_ratio") {
+            global_uniqueness_ratio_ = static_cast<float>(param.as_double());
+            update_global_search_cfg = true;
         } else if (name == "global_search.lost_count_thresh") {
             lost_threshold_count_ = static_cast<int>(param.as_int());
 
@@ -2188,6 +2203,7 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         cfg.step_yaw           = global_step_yaw_;
         cfg.downsample_stride  = global_downsample_stride_;
         cfg.top_k_candidates   = global_top_k_candidates_;
+        cfg.uniqueness_ratio   = global_uniqueness_ratio_;
         global_searcher_->setConfig(cfg);
         RCLCPP_INFO(this->get_logger(), "[DynamicReconfigure] GlobalSearcher config synchronized.");
     }

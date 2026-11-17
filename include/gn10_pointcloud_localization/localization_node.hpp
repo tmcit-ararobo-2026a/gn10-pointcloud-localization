@@ -115,6 +115,7 @@ private:
     float global_step_yaw_{0.2618f};
     int global_downsample_stride_{2};
     int global_top_k_candidates_{4};
+    float global_uniqueness_ratio_{0.95f};
     int lost_threshold_count_{5};
     double global_search_interval_sec_{0.5};
     rclcpp::Time last_global_search_stamp_;

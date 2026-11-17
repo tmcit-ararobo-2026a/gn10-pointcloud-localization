@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <functional>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <vector>
@@ -18,6 +19,7 @@ struct GlobalSearchConfig {
     float step_yaw{0.2618f};
     int downsample_stride{2};
     int top_k_candidates{4};
+    float uniqueness_ratio{0.95f};
 };
 
 class GlobalSearcher
@@ -70,6 +72,19 @@ public:
     );
 
 private:
+    PoseCandidate runCoarseAndRefineSearch(
+        PoseSolver& solver,
+        const GlobalSearchConfig& config,
+        int coarse_obstacle_count,
+        const std::function<int()>& prepare_full_cloud,
+        const MatchingParams& match_params,
+        float prior_yaw,
+        float max_yaw_diff,
+        float& out_best_cost,
+        int* out_inlier_count,
+        float* out_inlier_cost
+    );
+
     mutable std::mutex config_mutex_;
     GlobalSearchConfig config_;
     rclcpp::Logger logger_;

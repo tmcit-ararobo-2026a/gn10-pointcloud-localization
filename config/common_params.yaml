@@ -134,6 +134,7 @@
       step_yaw: 0.3                     # Global coarse yaw grid step [rad]
       downsample_stride: 2              # Point cloud decimation stride during global search
       top_k_candidates: 4               # Number of spatially separated Top-K coarse peaks to fine-refine
+      uniqueness_ratio: 0.95            # Top-1/Top-2 margin threshold for borderline global matches (1.0 disables)
       lost_count_thresh: 25             # Consecutive failed frames before entering LOST state & triggering global search
 
     # =========================================================================

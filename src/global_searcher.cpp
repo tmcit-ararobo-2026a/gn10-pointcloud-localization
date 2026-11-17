@@ -22,6 +22,19 @@ bool hasSufficientGlobalSearchPoints(
            (solver.obstacleCount2D() >= match_params.min_2d_points);
 }
 
+void setSearchFailureOutputs(
+    float& out_best_cost, int* out_inlier_count, float* out_inlier_cost
+)
+{
+    out_best_cost = std::numeric_limits<float>::max();
+    if (out_inlier_count != nullptr) {
+        *out_inlier_count = 0;
+    }
+    if (out_inlier_cost != nullptr) {
+        *out_inlier_cost = 1.0f;
+    }
+}
+
 }  // namespace
 
 GlobalSearcher::GlobalSearcher(const GlobalSearchConfig& config, rclcpp::Logger logger)
@@ -91,156 +104,26 @@ PoseCandidate GlobalSearcher::search(
             solver.obstacleCount2D(),
             match_params.min_2d_points
         );
-        out_best_cost = std::numeric_limits<float>::max();
-        if (out_inlier_count != nullptr) {
-            *out_inlier_count = 0;
-        }
-        if (out_inlier_cost != nullptr) {
-            *out_inlier_cost = 1.0f;
-        }
+        setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
 
-    // Center global search window around field midpoint and IMU prior yaw
-    PoseCandidate center_pose;
-    center_pose.x   = (config.range_min_x + config.range_max_x) * 0.5f;
-    center_pose.y   = (config.range_min_y + config.range_max_y) * 0.5f;
-    center_pose.yaw = prior_yaw;
-
-    float range_x   = (config.range_max_x - config.range_min_x) * 0.5f;
-    float range_y   = (config.range_max_y - config.range_min_y) * 0.5f;
-    float range_yaw = max_yaw_diff;
-
-    std::vector<PoseCandidate> top_coarse_poses;
-    const int top_k = std::max(1, config.top_k_candidates);
-
-    // Execute coarse global search and extract Top-K NMS candidates
-    bool ok = solver.evaluateGlobalSDF(
+    return runCoarseAndRefineSearch(
+        solver,
+        config,
         obstacle_count,
-        center_pose,
-        range_x,
-        range_y,
-        config.step_xy,
-        range_yaw,
-        config.step_yaw,
+        [&]() {
+            return solver.prepareObstacleCloud(
+                h_raw_cloud, h_transform, filter_params, extra_base_link_points
+            );
+        },
         match_params,
-        top_coarse_poses,
-        top_k
-    );
-
-    if (!ok || top_coarse_poses.empty()) {
-        RCLCPP_ERROR(logger_, "[GlobalSearch] GPU Global Search Failed.");
-        out_best_cost = std::numeric_limits<float>::max();
-        if (out_inlier_count != nullptr) {
-            *out_inlier_count = 0;
-        }
-        if (out_inlier_cost != nullptr) {
-            *out_inlier_cost = 1.0f;
-        }
-        return PoseCandidate{0.0f, 0.0f, 0.0f};
-    }
-
-    // Prepare full-resolution obstacle cloud once on GPU for refining all Top-K candidates
-    int full_obstacle_count = solver.prepareObstacleCloud(
-        h_raw_cloud, h_transform, filter_params, extra_base_link_points
-    );
-
-    std::vector<float> dummy_dynamic;
-    PoseCandidate best_refined_pose{0.0f, 0.0f, 0.0f};
-    float best_refined_cost        = std::numeric_limits<float>::max();
-    float best_cost_3d             = std::numeric_limits<float>::max();
-    float best_cost_2d             = std::numeric_limits<float>::max();
-    int best_refined_inliers       = 0;
-    float best_refined_inlier_cost = 1.0f;
-    bool found_accepted            = false;
-
-    for (const auto& coarse_candidate : top_coarse_poses) {
-        PoseCandidate cand_pose{};
-        float cand_cost       = std::numeric_limits<float>::max();
-        int cand_inliers      = 0;
-        float cand_inlier_cost = 1.0f;
-
-        bool matched = solver.matchObstacleCloud(
-            full_obstacle_count,
-            match_params,
-            coarse_candidate,
-            dummy_dynamic,
-            cand_pose,
-            cand_cost,
-            &cand_inliers,
-            &cand_inlier_cost,
-            false
-        );
-        if (!matched) {
-            continue;
-        }
-
-        // Reject candidate if refined pose falls outside configured field bounds
-        if (cand_pose.x < config.range_min_x || cand_pose.x > config.range_max_x ||
-            cand_pose.y < config.range_min_y || cand_pose.y > config.range_max_y) {
-            continue;
-        }
-
-        cand_pose.yaw = normalizeAngle(cand_pose.yaw);
-
-        const bool is_accepted = match_params.isMatchAccepted(
-            solver.lastCost3D(),
-            solver.lastCost2D(),
-            solver.obstacleCount3D(),
-            solver.obstacleCount2D(),
-            cand_inliers,
-            cand_inlier_cost
-        );
-        if (is_accepted && cand_cost < best_refined_cost) {
-            found_accepted           = true;
-            best_refined_pose        = cand_pose;
-            best_refined_cost        = cand_cost;
-            best_refined_inliers     = cand_inliers;
-            best_refined_inlier_cost = cand_inlier_cost;
-            best_cost_3d             = solver.lastCost3D();
-            best_cost_2d             = solver.lastCost2D();
-        }
-    }
-
-    if (!found_accepted) {
-        RCLCPP_WARN(
-            logger_,
-            "[GlobalSearch] None of the Top-%zu candidates satisfied strict acceptance criteria.",
-            top_coarse_poses.size()
-        );
-        solver.setLastCosts(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
-        out_best_cost = std::numeric_limits<float>::max();
-        if (out_inlier_count != nullptr) {
-            *out_inlier_count = 0;
-        }
-        if (out_inlier_cost != nullptr) {
-            *out_inlier_cost = 1.0f;
-        }
-        return PoseCandidate{0.0f, 0.0f, 0.0f};
-    }
-
-    solver.setLastCosts(best_cost_3d, best_cost_2d);
-
-    out_best_cost = best_refined_cost;
-    if (out_inlier_count != nullptr) {
-        *out_inlier_count = best_refined_inliers;
-    }
-    if (out_inlier_cost != nullptr) {
-        *out_inlier_cost = best_refined_inlier_cost;
-    }
-
-    RCLCPP_INFO(
-        logger_,
-        "[GlobalSearch] Complete (refined %zu candidates). Best Pose: (%.2f, %.2f, %.2f rad), Cost: %.4f, Inliers: %d",
-        top_coarse_poses.size(),
-        best_refined_pose.x,
-        best_refined_pose.y,
-        best_refined_pose.yaw,
+        prior_yaw,
+        max_yaw_diff,
         out_best_cost,
-        best_refined_inliers
+        out_inlier_count,
+        out_inlier_cost
     );
-
-    return best_refined_pose;
 }
 
 PoseCandidate GlobalSearcher::search(
@@ -309,16 +192,47 @@ PoseCandidate GlobalSearcher::search(
             solver.obstacleCount2D(),
             match_params.min_2d_points
         );
-        out_best_cost = std::numeric_limits<float>::max();
-        if (out_inlier_count != nullptr) {
-            *out_inlier_count = 0;
-        }
-        if (out_inlier_cost != nullptr) {
-            *out_inlier_cost = 1.0f;
-        }
+        setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
 
+    return runCoarseAndRefineSearch(
+        solver,
+        config,
+        obstacle_count,
+        [&]() {
+            return solver.prepareObstacleCloud(
+                timed_points,
+                h_transform,
+                deskew_params,
+                imu_samples,
+                base_stride,
+                filter_params,
+                extra_base_link_points
+            );
+        },
+        match_params,
+        prior_yaw,
+        max_yaw_diff,
+        out_best_cost,
+        out_inlier_count,
+        out_inlier_cost
+    );
+}
+
+PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
+    PoseSolver& solver,
+    const GlobalSearchConfig& config,
+    int coarse_obstacle_count,
+    const std::function<int()>& prepare_full_cloud,
+    const MatchingParams& match_params,
+    float prior_yaw,
+    float max_yaw_diff,
+    float& out_best_cost,
+    int* out_inlier_count,
+    float* out_inlier_cost
+)
+{
     // Center global search window around field midpoint and IMU prior yaw
     PoseCandidate center_pose;
     center_pose.x   = (config.range_min_x + config.range_max_x) * 0.5f;
@@ -334,7 +248,7 @@ PoseCandidate GlobalSearcher::search(
 
     // Execute coarse global search and extract Top-K NMS candidates
     bool ok = solver.evaluateGlobalSDF(
-        obstacle_count,
+        coarse_obstacle_count,
         center_pose,
         range_x,
         range_y,
@@ -348,35 +262,27 @@ PoseCandidate GlobalSearcher::search(
 
     if (!ok || top_coarse_poses.empty()) {
         RCLCPP_ERROR(logger_, "[GlobalSearch] GPU Global Search Failed.");
-        out_best_cost = std::numeric_limits<float>::max();
-        if (out_inlier_count != nullptr) {
-            *out_inlier_count = 0;
-        }
-        if (out_inlier_cost != nullptr) {
-            *out_inlier_cost = 1.0f;
-        }
+        setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
 
-    // Prepare full-resolution deskewed 3D + 2D obstacle cloud once on GPU for local refinement
-    int full_obstacle_count = solver.prepareObstacleCloud(
-        timed_points,
-        h_transform,
-        deskew_params,
-        imu_samples,
-        base_stride,
-        filter_params,
-        extra_base_link_points
-    );
+    // Prepare full-resolution obstacle cloud once on GPU for refining all Top-K candidates
+    const int full_obstacle_count = prepare_full_cloud();
+
+    struct RefinedCandidate {
+        PoseCandidate pose;
+        float cost;
+        float cost_3d;
+        float cost_2d;
+        int inliers;
+        float inlier_cost;
+        bool accepted;
+    };
 
     std::vector<float> dummy_dynamic;
-    PoseCandidate best_refined_pose{0.0f, 0.0f, 0.0f};
-    float best_refined_cost        = std::numeric_limits<float>::max();
-    float best_cost_3d             = std::numeric_limits<float>::max();
-    float best_cost_2d             = std::numeric_limits<float>::max();
-    int best_refined_inliers       = 0;
-    float best_refined_inlier_cost = 1.0f;
-    bool found_accepted            = false;
+    std::vector<RefinedCandidate> refined_candidates;
+    refined_candidates.reserve(top_coarse_poses.size());
+    int best_idx = -1;
 
     for (const auto& coarse_candidate : top_coarse_poses) {
         PoseCandidate cand_pose{};
@@ -415,54 +321,132 @@ PoseCandidate GlobalSearcher::search(
             cand_inliers,
             cand_inlier_cost
         );
-        if (is_accepted && cand_cost < best_refined_cost) {
-            found_accepted           = true;
-            best_refined_pose        = cand_pose;
-            best_refined_cost        = cand_cost;
-            best_refined_inliers     = cand_inliers;
-            best_refined_inlier_cost = cand_inlier_cost;
-            best_cost_3d             = solver.lastCost3D();
-            best_cost_2d             = solver.lastCost2D();
+
+        refined_candidates.push_back({
+            cand_pose,
+            cand_cost,
+            solver.lastCost3D(),
+            solver.lastCost2D(),
+            cand_inliers,
+            cand_inlier_cost,
+            is_accepted,
+        });
+
+        if (is_accepted) {
+            if (best_idx < 0) {
+                best_idx = static_cast<int>(refined_candidates.size()) - 1;
+            } else {
+                const auto& cur_best = refined_candidates[best_idx];
+                const bool is_antipodal =
+                    (std::hypot(cand_pose.x + cur_best.pose.x, cand_pose.y + cur_best.pose.y) <
+                     0.80f) &&
+                    (std::abs(normalizeAngle(
+                         cand_pose.yaw - (cur_best.pose.yaw + static_cast<float>(M_PI))
+                     )) < 0.40f);
+                const bool nearly_equal_antipodal =
+                    is_antipodal && (std::abs(cand_cost - cur_best.cost) < 0.005f) &&
+                    (std::abs(normalizeAngle(cand_pose.yaw - prior_yaw)) <
+                     std::abs(normalizeAngle(cur_best.pose.yaw - prior_yaw)));
+                if (cand_cost < cur_best.cost - 0.005f ||
+                    (!is_antipodal && cand_cost < cur_best.cost) ||
+                    nearly_equal_antipodal) {
+                    best_idx = static_cast<int>(refined_candidates.size()) - 1;
+                }
+            }
         }
     }
 
-    if (!found_accepted) {
+    if (best_idx < 0) {
         RCLCPP_WARN(
             logger_,
             "[GlobalSearch] None of the Top-%zu candidates satisfied strict acceptance criteria.",
             top_coarse_poses.size()
         );
         solver.setLastCosts(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
-        out_best_cost = std::numeric_limits<float>::max();
-        if (out_inlier_count != nullptr) {
-            *out_inlier_count = 0;
-        }
-        if (out_inlier_cost != nullptr) {
-            *out_inlier_cost = 1.0f;
-        }
+        setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
 
-    solver.setLastCosts(best_cost_3d, best_cost_2d);
+    const RefinedCandidate& best = refined_candidates[best_idx];
 
-    out_best_cost = best_refined_cost;
+    // Check Top-1 vs Top-2 uniqueness margin (excluding the 180-deg antipodal symmetry twin)
+    // and minimum 3D inlier ratio for borderline matches.
+    float second_best_cost = std::numeric_limits<float>::infinity();
+    for (size_t i = 0; i < refined_candidates.size(); ++i) {
+        if (i == static_cast<size_t>(best_idx)) {
+            continue;
+        }
+        const auto& cand    = refined_candidates[i];
+        const float dist_xy = std::hypot(cand.pose.x - best.pose.x, cand.pose.y - best.pose.y);
+        const float dyaw    = std::abs(normalizeAngle(cand.pose.yaw - best.pose.yaw));
+        const bool is_antipodal_twin =
+            (std::hypot(cand.pose.x + best.pose.x, cand.pose.y + best.pose.y) < 0.80f) &&
+            (std::abs(normalizeAngle(cand.pose.yaw - (best.pose.yaw + static_cast<float>(M_PI)))) <
+             0.40f);
+        if (!is_antipodal_twin && (dist_xy > 0.30f || dyaw > 0.25f)) {
+            second_best_cost = std::min(second_best_cost, cand.cost);
+        }
+    }
+
+    const bool high_confidence_3d =
+        (solver.obstacleCount3D() >= match_params.min_3d_points) &&
+        (best.cost_3d < 0.88f * match_params.cost_threshold_3d);
+    const bool high_confidence_2d =
+        (solver.obstacleCount2D() >= match_params.min_2d_points) &&
+        (best.cost_2d < 0.75f * match_params.cost_threshold_2d);
+    const bool is_high_confidence = high_confidence_3d || high_confidence_2d;
+
+    if (!is_high_confidence) {
+        const bool fails_uniqueness =
+            (config.uniqueness_ratio < 1.0f) && std::isfinite(second_best_cost) &&
+            (best.cost > config.uniqueness_ratio * second_best_cost);
+        const float inlier_ratio_3d =
+            (solver.obstacleCount3D() > 0)
+                ? (static_cast<float>(best.inliers) / static_cast<float>(solver.obstacleCount3D()))
+                : 1.0f;
+        const bool fails_borderline_inliers =
+            (solver.obstacleCount3D() >= match_params.min_3d_points) && (inlier_ratio_3d < 0.12f);
+
+        if (fails_uniqueness || fails_borderline_inliers) {
+            RCLCPP_WARN(
+                logger_,
+                "[GlobalSearch] Top-1 candidate rejected by borderline check "
+                "(best: %.4f, second: %.4f, ratio: %.3f/%0.3f, 3d_inlier_ratio: %.1f%%).",
+                best.cost,
+                second_best_cost,
+                std::isfinite(second_best_cost) ? (best.cost / std::max(1e-6f, second_best_cost))
+                                                : 0.0f,
+                config.uniqueness_ratio,
+                inlier_ratio_3d * 100.0f
+            );
+            solver.setLastCosts(
+                std::numeric_limits<float>::max(), std::numeric_limits<float>::max()
+            );
+            setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
+            return PoseCandidate{0.0f, 0.0f, 0.0f};
+        }
+    }
+
+    solver.setLastCosts(best.cost_3d, best.cost_2d);
+
+    out_best_cost = best.cost;
     if (out_inlier_count != nullptr) {
-        *out_inlier_count = best_refined_inliers;
+        *out_inlier_count = best.inliers;
     }
     if (out_inlier_cost != nullptr) {
-        *out_inlier_cost = best_refined_inlier_cost;
+        *out_inlier_cost = best.inlier_cost;
     }
 
     RCLCPP_INFO(
         logger_,
         "[GlobalSearch] Complete (refined %zu candidates). Best Pose: (%.2f, %.2f, %.2f rad), Cost: %.4f, Inliers: %d",
         top_coarse_poses.size(),
-        best_refined_pose.x,
-        best_refined_pose.y,
-        best_refined_pose.yaw,
+        best.pose.x,
+        best.pose.y,
+        best.pose.yaw,
         out_best_cost,
-        best_refined_inliers
+        best.inliers
     );
 
-    return best_refined_pose;
+    return best.pose;
 }
