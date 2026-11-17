@@ -248,7 +248,7 @@ void testTimeOffsetAndAlignment()
     YawHistory imu;
     int64_t base_ns = 4000LL * 1000000000LL;
     imu.add(base_ns - 100000000LL, 0.0);
-    imu.add(base_ns + 500000000LL, 0.0);
+    imu.add(base_ns + 200000000LL, 0.0);
 
     LaserScanDeskewConfig config;
     config.enable_deskew = true;
@@ -303,6 +303,28 @@ void testTimeOffsetAndAlignment()
     // Unrealistic scan durations (> 1.0s) are safely ignored (time_inc = 0 -> start_stamp_ns)
     assert(corrupted_ref_ns == base_ns);
     std::cout << "  [TimeIncrementGuard] Corrupted time_increment safely ignored without fake frequency assumptions." << std::endl;
+
+    // 4. Guard test: alignPointsToTimestamp must not apply translation without rotation when YawHistory::delta() fails
+    YawHistory empty_imu;
+    std::vector<float> unaligned_empty = alignPointsToTimestamp(
+        points_2d, t_2d_ns, t_3d_ns, empty_imu, 2.0f, 0.0f
+    );
+    assert(unaligned_empty.empty());
+
+    // Extrapolation within 200ms (e.g. 150ms) succeeds with IMU rotation + translation
+    int64_t t_150ms_ns = t_2d_ns + 150000000LL;
+    std::vector<float> aligned_150ms = alignPointsToTimestamp(
+        points_2d, t_2d_ns, t_150ms_ns, rot_imu, 1.0f, 0.0f
+    );
+    assert(aligned_150ms.size() == 3);
+
+    // Extrapolation beyond 200ms (e.g. 250ms past last IMU sample) fails safely and returns empty
+    int64_t t_250ms_past_ns = t_3d_ns + 250000000LL;
+    std::vector<float> unaligned_stale = alignPointsToTimestamp(
+        points_2d, t_2d_ns, t_250ms_past_ns, rot_imu, 2.0f, 0.0f
+    );
+    assert(unaligned_stale.empty());
+    std::cout << "  [DeltaGuard] Unsynchronized 2D scan safely rejected when YawHistory::delta() fails." << std::endl;
 
     std::cout << "[Test] testTimeOffsetAndAlignment PASSED!" << std::endl;
 }

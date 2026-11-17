@@ -92,14 +92,14 @@ private:
         if (samples_.empty()) return false;
         const auto& first = samples_.front();
         const auto& last = samples_.back();
-        // Allow up to 100ms extrapolation to tolerate jitter between LiDAR and IMU packets
+        // Allow up to 200ms extrapolation to match max accepted 2D scan age and tolerate packet jitter
         if (t < first.stamp) {
             angle = first.angle + first.rate*seconds(t-first.stamp);
-            return (first.stamp - t <= 100000000);
+            return (first.stamp - t <= 200000000);
         }
         if (t >= last.stamp) {
             angle = last.angle + last.rate*seconds(t-last.stamp);
-            return (t - last.stamp <= 100000000);
+            return (t - last.stamp <= 200000000);
         }
         auto hi = std::upper_bound(samples_.begin(), samples_.end(), t,
                                    [](int64_t t, const Sample& s) { return t < s.stamp; });
