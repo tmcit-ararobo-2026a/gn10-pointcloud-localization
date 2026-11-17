@@ -198,6 +198,18 @@ if(BUILD_TESTING)
   target_compile_options(independent_2d_cost_test PRIVATE -UNDEBUG)
   add_test(NAME independent_2d_cost COMMAND independent_2d_cost_test)
   set_tests_properties(independent_2d_cost PROPERTIES SKIP_RETURN_CODE 77)
+
+  add_executable(global_search_test
+    tests/test_global_search.cpp
+    src/pose_solver.cpp
+    src/global_searcher.cpp
+  )
+  target_include_directories(global_search_test PRIVATE include)
+  target_link_libraries(global_search_test gn10_cuda_lib gn10_esdf_lib CUDA::cudart)
+  ament_target_dependencies(global_search_test rclcpp)
+  target_compile_options(global_search_test PRIVATE -UNDEBUG)
+  add_test(NAME global_search COMMAND global_search_test)
+  set_tests_properties(global_search PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # Export libraries for downstream packages

@@ -3,8 +3,26 @@
 
 #include "gn10_pointcloud_localization/global_searcher.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+
+namespace {
+
+bool hasSufficientGlobalSearchPoints(
+    const PoseSolver& solver,
+    const MatchingParams& match_params,
+    int effective_stride,
+    int& out_min_coarse_3d
+)
+{
+    const int safe_stride = std::max(1, effective_stride);
+    out_min_coarse_3d     = std::max(20, match_params.min_3d_points / safe_stride);
+    return (solver.obstacleCount3D() >= out_min_coarse_3d) ||
+           (solver.obstacleCount2D() >= match_params.min_2d_points);
+}
+
+}  // namespace
 
 GlobalSearcher::GlobalSearcher(const GlobalSearchConfig& config, rclcpp::Logger logger)
     : config_(config), logger_(logger)
@@ -61,14 +79,17 @@ PoseCandidate GlobalSearcher::search(
         solver.obstacleCount2D()
     );
 
-    if (obstacle_count <= match_params.min_3d_points) {
+    int min_coarse_3d = 0;
+    if (!hasSufficientGlobalSearchPoints(solver, match_params, stride, min_coarse_3d)) {
         RCLCPP_WARN(
             logger_,
-            "[GlobalSearch] Too few obstacle points (%d <= %d). Search aborted. "
+            "[GlobalSearch] Too few obstacle points (3D: %d < %d, 2D: %d < %d). Search aborted. "
             "Consider reducing 'filter_params.robot_radius' or 'global_search.downsample_stride', "
             "or check 'ground_z_thresh' / TF alignment.",
-            obstacle_count,
-            match_params.min_3d_points
+            solver.obstacleCount3D(),
+            min_coarse_3d,
+            solver.obstacleCount2D(),
+            match_params.min_2d_points
         );
         out_best_cost = std::numeric_limits<float>::max();
         if (out_inlier_count != nullptr) {
@@ -276,14 +297,17 @@ PoseCandidate GlobalSearcher::search(
         solver.obstacleCount2D()
     );
 
-    if (obstacle_count <= match_params.min_3d_points) {
+    int min_coarse_3d = 0;
+    if (!hasSufficientGlobalSearchPoints(solver, match_params, combined_stride, min_coarse_3d)) {
         RCLCPP_WARN(
             logger_,
-            "[GlobalSearch] Too few obstacle points (%d <= %d). Search aborted. "
+            "[GlobalSearch] Too few obstacle points (3D: %d < %d, 2D: %d < %d). Search aborted. "
             "Consider reducing 'filter_params.robot_radius' or 'global_search.downsample_stride', "
             "or check 'ground_z_thresh' / TF alignment.",
-            obstacle_count,
-            match_params.min_3d_points
+            solver.obstacleCount3D(),
+            min_coarse_3d,
+            solver.obstacleCount2D(),
+            match_params.min_2d_points
         );
         out_best_cost = std::numeric_limits<float>::max();
         if (out_inlier_count != nullptr) {
