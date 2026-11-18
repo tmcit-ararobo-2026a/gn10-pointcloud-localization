@@ -258,7 +258,7 @@ def _spin_executor_thread(node: Node) -> tuple[MultiThreadedExecutor, threading.
     return executor, stop_event, t
 
 
-def _summarize_resources(res_df: pd.DataFrame | None) -> dict[str, Any]:
+def _summarize_resources(res_df: pd.DataFrame | None, cum_cpu_pct: float | None = None) -> dict[str, Any]:
     if res_df is None or len(res_df) == 0:
         return {}
     out: dict[str, Any] = {}
@@ -273,6 +273,8 @@ def _summarize_resources(res_df: pd.DataFrame | None) -> dict[str, Any]:
             vals = res_df[col].dropna().to_numpy(dtype=float)
             if len(vals) > 0:
                 out[out_key] = float(fn(vals))
+    if cum_cpu_pct is not None and np.isfinite(cum_cpu_pct):
+        out["cpu_node_mean_pct"] = float(cum_cpu_pct)
     return out
 
 
@@ -426,32 +428,60 @@ def _run_gn10_method(
     log_path = out_dir / f"{suite_name}__{method['label']}.log"
     listener = EvalListener(ref_data["tf_static_msgs"])
     executor, stop_evt, th = _spin_executor_thread(listener)
+    log_f = open(log_path, "w", encoding="utf-8")
     node_proc = subprocess.Popen(
         cmd,
         env=env,
-        stdout=open(log_path, "w", encoding="utf-8"),
+        stdout=log_f,
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
-    monitor = SystemGPUMonitor(target_process_name="gn10_pointcloud_localization_node", sample_interval_s=0.1)
+    monitor = SystemGPUMonitor(
+        target_process_name="gn10_pointcloud_localization_node",
+        sample_interval_s=0.1,
+        target_pid=node_proc.pid,
+    )
     monitor.start()
     bag_proc = None
     try:
-        time.sleep(2.0)
+        ready = False
+        wait_deadline = time.monotonic() + 15.0
+        while time.monotonic() < wait_deadline:
+            log_f.flush()
+            if "Publishing localization telemetry on:" in log_path.read_text(encoding="utf-8", errors="ignore"):
+                ready = True
+                break
+            if node_proc.poll() is not None:
+                break
+            time.sleep(0.05)
+        if not ready:
+            raise RuntimeError(f"gn10 node failed to initialize for {suite_name}::{method['label']}")
+        time.sleep(0.2)
         listener.active = True
-        bag_proc = _play_bag(bag_path, offset_s, rate, env, dataset_cfg.get("play_topics"))
+        play_topics = dataset_cfg.get("play_topics") or ["/livox/lidar", "/livox/imu", "/lakibeam/scan"]
+        bag_proc = _play_bag(bag_path, offset_s, rate, env, play_topics)
         _wait_bag_or_duration(bag_proc, duration_s / max(rate, 0.1) + 3.0)
         time.sleep(0.5)
     finally:
         terminate_process_group(bag_proc)
         terminate_process_group(node_proc)
+        log_f.close()
         monitor.stop()
         stop_evt.set()
         th.join(timeout=2.0)
         executor.remove_node(listener)
         listener.destroy_node()
 
-    est_poses = sorted(listener.poses_3d, key=lambda r: r[0])
+    raw_poses = listener.poses_3d
+    dedup_poses: dict[int, tuple[int, float, float, float, float, float, float, float]] = {}
+    for row in raw_poses:
+        dedup_poses[row[0]] = row
+    if len(dedup_poses) != len(raw_poses):
+        raise RuntimeError(
+            f"Duplicate pose timestamps detected in {suite_name}::{method['label']} "
+            f"({len(raw_poses)} raw vs {len(dedup_poses)} unique) — aborting to prevent contaminated metrics!"
+        )
+    est_poses = [dedup_poses[k] for k in sorted(dedup_poses.keys())]
     est_tum = out_dir / f"{suite_name}__{method['label']}_est_tum.txt"
     save_tum_file(est_poses, est_tum)
     ate = compute_ate_rpe_metrics(est_poses, ref_data["poses_3d"])
@@ -469,7 +499,7 @@ def _run_gn10_method(
         "est_poses_count": len(est_poses),
         **ate,
         **_summarize_latencies(lat_vals),
-        **_summarize_resources(res_df),
+        **_summarize_resources(res_df, monitor.get_cumulative_cpu_pct()),
     }
 
 
@@ -518,10 +548,11 @@ def _run_dll_method(
     init_x, init_y, init_z, init_yaw = init_pose
     init_a = init_yaw if abs(init_yaw) > 1e-4 else 1e-4
 
+    cloud_topic = method.get("cloud_topic", suite_cfg["cloud_topic"])
     params: dict[str, Any] = {
         "use_sim_time": True,
         "map_path": str(map_bt),
-        "in_cloud": suite_cfg["cloud_topic"],
+        "in_cloud": cloud_topic,
         "global_frame_id": "map",
         "odom_frame_id": "odom",
         "base_frame_id": "base_link",
@@ -550,12 +581,14 @@ def _run_dll_method(
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
-    monitor = SystemGPUMonitor(target_process_name="dll_node", sample_interval_s=0.1)
+    monitor = SystemGPUMonitor(
+        target_pid=node_proc.pid, target_process_name="dll_node", sample_interval_s=0.1
+    )
     monitor.start()
     bag_proc = None
     try:
         time.sleep(2.5)
-        topics = [suite_cfg["cloud_topic"]]
+        topics = list(method.get("play_topics") or suite_cfg.get("play_topics") or [cloud_topic])
         bag_proc = _play_bag(bag_path, offset_s, rate, env, topics)
         _wait_bag_or_duration(bag_proc, duration_s / max(rate, 0.1) + 4.0)
         time.sleep(0.5)
@@ -583,7 +616,7 @@ def _run_dll_method(
         "est_poses_count": len(est_poses),
         **ate,
         **_summarize_latencies(lat_vals),
-        **_summarize_resources(res_df),
+        **_summarize_resources(res_df, cum_cpu_pct=monitor.get_cumulative_cpu_pct()),
     }
 
 
@@ -627,7 +660,9 @@ def _run_lidar_loc_method(
         "publish_tf": True,
     }
     params.update(method.get("params", {}))
-    remaps = ["-r", f"/cloud:={suite_cfg['cloud_topic']}", "-r", f"/imu:={suite_cfg['imu_topic']}"]
+    cloud_topic = method.get("cloud_topic", suite_cfg["cloud_topic"])
+    imu_topic = method.get("imu_topic", suite_cfg["imu_topic"])
+    remaps = ["-r", f"/cloud:={cloud_topic}", "-r", f"/imu:={imu_topic}"]
     cmd = [loc_bin, "--ros-args", *_ros_param_cli_args(params), *remaps]
     log_path = out_dir / f"{suite_name}__{method['label']}.log"
 
@@ -645,7 +680,11 @@ def _run_lidar_loc_method(
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
-    monitor = SystemGPUMonitor(target_process_name="lidar_localization_node", sample_interval_s=0.1)
+    monitor = SystemGPUMonitor(
+        target_pid=node_proc.pid,
+        target_process_name="lidar_localization_node",
+        sample_interval_s=0.1,
+    )
     monitor.start()
     bag_proc = None
     try:
@@ -672,9 +711,11 @@ def _run_lidar_loc_method(
                 stderr=subprocess.DEVNULL,
                 timeout=15,
             )
-        topics = [suite_cfg["cloud_topic"]]
-        if params.get("use_imu_preintegration", False):
-            topics.append(suite_cfg["imu_topic"])
+        topics = [cloud_topic]
+        if params.get("use_imu_preintegration", False) or params.get(
+            "use_continuous_time_deskew", False
+        ):
+            topics.append(imu_topic)
         bag_proc = _play_bag(bag_path, offset_s, rate, env, topics)
         _wait_bag_or_duration(bag_proc, duration_s / max(rate, 0.1) + 4.0)
         time.sleep(0.5)
@@ -703,7 +744,7 @@ def _run_lidar_loc_method(
         "rejected_frames": rejected_cnt,
         **ate,
         **_summarize_latencies(lat_vals),
-        **_summarize_resources(res_df),
+        **_summarize_resources(res_df, cum_cpu_pct=monitor.get_cumulative_cpu_pct()),
     }
 
 
@@ -728,6 +769,34 @@ def _extract_bag_static_transforms(bag_path: Path) -> dict[str, np.ndarray]:
     return out
 
 
+def _extract_point_timestamps_ns(msg: Any, valid_mask: np.ndarray, fallback_ns: int) -> np.ndarray:
+    """Return per-point timestamps in integer nanoseconds for PointCloud2 messages."""
+    n_pts = len(valid_mask)
+    ts_field = next((f for f in msg.fields if f.name in ("timestamp", "time", "t")), None)
+    if ts_field is None or ts_field.offset + (8 if ts_field.datatype == 8 else 4) > msg.point_step:
+        return np.full(int(valid_mask.sum()), fallback_ns, dtype=np.int64)
+    arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(-1, msg.point_step)[valid_mask]
+    hdr_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
+    if ts_field.datatype == 8:  # FLOAT64
+        vals = np.frombuffer(arr[:, ts_field.offset : ts_field.offset + 8].tobytes(), dtype=np.float64)
+        vals = np.where(np.isfinite(vals), vals, 0.0)
+        # Heuristic: > 1e12 is nanoseconds (epoch or >1000s), > 1e5 is microseconds/relative seconds? Check magnitude vs hdr_ns
+        if np.median(vals) > 1e12 or (hdr_ns < 1e12 and np.median(vals) > 1e6):
+            pts_ns = np.rint(vals).astype(np.int64)
+        elif np.median(vals) < 10.0 and hdr_ns > 0:
+            pts_ns = hdr_ns + np.rint(vals * 1e9).astype(np.int64)
+        else:
+            pts_ns = np.rint(vals * 1e9).astype(np.int64)
+        return pts_ns
+    if ts_field.datatype == 7:  # FLOAT32 relative seconds
+        vals = np.frombuffer(arr[:, ts_field.offset : ts_field.offset + 4].tobytes(), dtype=np.float32).astype(np.float64)
+        return hdr_ns + np.rint(np.where(np.isfinite(vals), vals, 0.0) * 1e9).astype(np.int64)
+    if ts_field.datatype == 6:  # UINT32 nanoseconds offset
+        vals = np.frombuffer(arr[:, ts_field.offset : ts_field.offset + 4].tobytes(), dtype=np.uint32).astype(np.int64)
+        return hdr_ns + vals
+    return np.full(int(valid_mask.sum()), fallback_ns, dtype=np.int64)
+
+
 def _run_kiss_icp_method(
     method: dict[str, Any],
     bag_path: Path,
@@ -747,7 +816,8 @@ def _run_kiss_icp_method(
     cfg = load_config(None)
     cfg.data.min_range = float(method.get("min_range", 0.45))
     cfg.data.max_range = float(method.get("max_range", 30.0))
-    cfg.data.deskew = False
+    use_deskew = bool(method.get("deskew", False))
+    cfg.data.deskew = use_deskew
     if "voxel_size" in method:
         cfg.mapping.voxel_size = float(method["voxel_size"])
     od = KissICP(cfg)
@@ -760,7 +830,7 @@ def _run_kiss_icp_method(
 
     est_poses: list[tuple[int, float, float, float, float, float, float, float]] = []
     lat_vals: list[float] = []
-    cloud_topic = suite_cfg["cloud_topic"]
+    cloud_topic = method.get("cloud_topic", suite_cfg["cloud_topic"])
 
     with AnyReader([bag_path], default_typestore=ts) as reader:
         conns = [c for c in reader.connections if c.topic == cloud_topic]
@@ -775,21 +845,34 @@ def _run_kiss_icp_method(
             stamp_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
             arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(-1, msg.point_step)
             xyz = np.frombuffer(arr[:, :12].tobytes(), dtype=np.float32).reshape(-1, 3)
-            xyz = xyz[np.isfinite(xyz).all(axis=1)]
+            valid = np.isfinite(xyz).all(axis=1)
+            xyz = xyz[valid]
+            if len(xyz) == 0:
+                continue
             frame_id = msg.header.frame_id.lstrip("/")
             if frame_id != "base_link" and frame_id in tfs:
                 T_bl = tfs[frame_id]
                 pts_base = (T_bl[:3, :3] @ xyz.astype(np.float64).T).T + T_bl[:3, 3]
             else:
                 pts_base = xyz.astype(np.float64)
-            timestamps = np.zeros(len(pts_base), dtype=np.float64)
+            if use_deskew:
+                pts_ns = _extract_point_timestamps_ns(msg, valid, stamp_ns)
+                t0_ns = int(pts_ns.min())
+                t1_ns = int(pts_ns.max())
+                span_ns = max(t1_ns - t0_ns, 1)
+                timestamps = (pts_ns - t0_ns).astype(np.float64) / float(span_ns)
+                # KISS-ICP deskews points onto the end timestamp (normalized t=1.0).
+                out_stamp_ns = t1_ns
+            else:
+                timestamps = np.zeros(len(pts_base), dtype=np.float64)
+                out_stamp_ns = stamp_ns
             t0 = time.perf_counter()
             od.register_frame(pts_base, timestamps)
             lat_vals.append((time.perf_counter() - t0) * 1000.0)
             T_odom = od.last_pose
             T_map = T_map_base0 @ T_odom
             qx, qy, qz, qw = _rot_matrix_to_quat(T_map[:3, :3])
-            est_poses.append((stamp_ns, float(T_map[0, 3]), float(T_map[1, 3]), float(T_map[2, 3]), qx, qy, qz, qw))
+            est_poses.append((out_stamp_ns, float(T_map[0, 3]), float(T_map[1, 3]), float(T_map[2, 3]), qx, qy, qz, qw))
 
     est_tum = out_dir / f"{suite_name}__{method['label']}_est_tum.txt"
     save_tum_file(est_poses, est_tum)
@@ -856,22 +939,25 @@ def run_tracking_command(args: argparse.Namespace) -> None:
                 continue
             idx += 1
             mtype = method["type"]
+            play_bag_path = _resolve_repo_or_user_path(
+                method.get("bag_file", suite_cfg.get("bag_file", ds_cfg["default_bag_path"]))
+            )
             print(f"[compare] suite={suite_name} method={method['label']} domain={domain_base + idx}", flush=True)
             if mtype == "kiss_icp":
                 row = _run_kiss_icp_method(
-                    method, bag_path, ref_data, init_ref_3d, offset_s, duration_s, suite_cfg, out_dir, suite_name
+                    method, play_bag_path, ref_data, init_ref_3d, offset_s, duration_s, suite_cfg, out_dir, suite_name
                 )
             else:
                 env = _enter_isolated_domain(domain_base + idx, ext_ws)
                 try:
                     if mtype == "gn10":
                         row = _run_gn10_method(
-                            method, ds_cfg, bag_path, ref_data, init_pose, offset_s, duration_s, rate, out_dir, suite_name, env
+                            method, ds_cfg, play_bag_path, ref_data, init_pose, offset_s, duration_s, rate, out_dir, suite_name, env
                         )
                     elif mtype == "dll":
                         row = _run_dll_method(
                             method,
-                            bag_path,
+                            play_bag_path,
                             ref_data,
                             init_pose,
                             offset_s,
@@ -887,7 +973,7 @@ def run_tracking_command(args: argparse.Namespace) -> None:
                     elif mtype == "lidar_loc":
                         row = _run_lidar_loc_method(
                             method,
-                            bag_path,
+                            play_bag_path,
                             ref_data,
                             init_pose,
                             offset_s,
@@ -986,12 +1072,56 @@ def _write_pcd_xyz(path: Path, pts: np.ndarray) -> None:
         f.write(pts32.tobytes())
 
 
+def _integrate_base_imu_yaws(
+    reader: Any,
+    imu_topic: str,
+    t_min_ns: int,
+    t_max_ns: int,
+    tfs: dict[str, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Integrate base-frame yaw angle (rad) from /livox/imu over [t_min_ns, t_max_ns]."""
+    imu_conns = [c for c in reader.connections if c.topic == imu_topic]
+    if not imu_conns:
+        return np.array([], dtype=np.int64), np.array([], dtype=np.float64)
+    stamps: list[int] = []
+    omegas: list[float] = []
+    for c, _, raw in reader.messages(connections=imu_conns, start=t_min_ns):
+        msg = reader.deserialize(raw, c.msgtype)
+        stamp_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
+        if stamp_ns < t_min_ns:
+            continue
+        if stamp_ns > t_max_ns:
+            break
+        w = np.array(
+            [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z],
+            dtype=np.float64,
+        )
+        frame = msg.header.frame_id.lstrip("/")
+        if frame != "base_link" and frame in tfs:
+            w = tfs[frame][:3, :3] @ w
+        stamps.append(stamp_ns)
+        omegas.append(float(w[2]))
+    if len(stamps) < 2:
+        return np.array(stamps, dtype=np.int64), np.zeros(len(stamps), dtype=np.float64)
+    st_arr = np.asarray(stamps, dtype=np.int64)
+    om_arr = np.asarray(omegas, dtype=np.float64)
+    order = np.argsort(st_arr, kind="mergesort")
+    st_arr = st_arr[order]
+    om_arr = om_arr[order]
+    dt_s = np.diff(st_arr) * 1e-9
+    yaws = np.zeros_like(om_arr)
+    yaws[1:] = np.cumsum(0.5 * (om_arr[:-1] + om_arr[1:]) * dt_s)
+    return st_arr, yaws
+
+
 def _extract_single_scan_pcd(
     bag_path: Path,
     offset_s: float,
     out_pcd: Path,
     robot_radius: float,
     min_z_filter: float,
+    accum_window_s: float = 0.0,
+    imu_topic: str = "/livox/imu",
 ) -> bool:
     from rosbags.highlevel import AnyReader
     from rosbags.typesys import Stores, get_typestore
@@ -1001,23 +1131,80 @@ def _extract_single_scan_pcd(
     with AnyReader([bag_path], default_typestore=ts) as r:
         t_target = r.start_time + int(offset_s * 1e9)
         conns = [c for c in r.connections if c.topic in ("/livox/lidar", "/filtered_points")]
-        for c, t, raw in r.messages(connections=conns, start=t_target):
-            if t < t_target:
-                continue
+        if accum_window_s <= 0.0:
+            for c, t, raw in r.messages(connections=conns, start=t_target):
+                if t < t_target:
+                    continue
+                msg = r.deserialize(raw, c.msgtype)
+                arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(-1, msg.point_step)
+                xyz = np.frombuffer(arr[:, :12].tobytes(), dtype=np.float32).reshape(-1, 3)
+                xyz = xyz[np.isfinite(xyz).all(axis=1)]
+                frame = msg.header.frame_id.lstrip("/")
+                if frame != "base_link" and frame in tfs:
+                    T_bl = tfs[frame]
+                    pts = (T_bl[:3, :3] @ xyz.astype(np.float64).T).T + T_bl[:3, 3]
+                else:
+                    pts = xyz.astype(np.float64)
+                r_xy = np.linalg.norm(pts[:, :2], axis=1)
+                pts = pts[(r_xy > robot_radius) & (pts[:, 2] >= min_z_filter) & (pts[:, 2] <= 2.9)]
+                _write_pcd_xyz(out_pcd, pts)
+                return len(pts) > 0
+            return False
+
+        accum_ns = int(round(accum_window_s * 1e9))
+        # Match gn10: integrate packets ending at the first scan at/after t_target over [ref - accum_ns, ref].
+        packets: list[tuple[np.ndarray, np.ndarray]] = []
+        t_ref_ns = 0
+        for c, t, raw in r.messages(connections=conns, start=max(r.start_time, t_target - accum_ns - 50_000_000)):
             msg = r.deserialize(raw, c.msgtype)
+            hdr_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
             arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(-1, msg.point_step)
             xyz = np.frombuffer(arr[:, :12].tobytes(), dtype=np.float32).reshape(-1, 3)
-            xyz = xyz[np.isfinite(xyz).all(axis=1)]
+            valid = np.isfinite(xyz).all(axis=1)
+            xyz = xyz[valid]
+            if len(xyz) == 0:
+                if t >= t_target and packets:
+                    break
+                continue
             frame = msg.header.frame_id.lstrip("/")
             if frame != "base_link" and frame in tfs:
                 T_bl = tfs[frame]
                 pts = (T_bl[:3, :3] @ xyz.astype(np.float64).T).T + T_bl[:3, 3]
             else:
                 pts = xyz.astype(np.float64)
-            r_xy = np.linalg.norm(pts[:, :2], axis=1)
-            pts = pts[(r_xy > robot_radius) & (pts[:, 2] >= min_z_filter) & (pts[:, 2] <= 2.9)]
-            _write_pcd_xyz(out_pcd, pts)
-            return len(pts) > 0
+            pts_ns = _extract_point_timestamps_ns(msg, valid, hdr_ns)
+            packets.append((pts, pts_ns))
+            t_ref_ns = max(t_ref_ns, int(pts_ns.max()))
+            if t >= t_target:
+                break
+        if not packets:
+            return False
+        all_pts = np.vstack([p for p, _ in packets])
+        all_ns = np.concatenate([ts_arr for _, ts_arr in packets])
+        keep = all_ns >= (t_ref_ns - accum_ns)
+        all_pts = all_pts[keep]
+        all_ns = all_ns[keep]
+        if len(all_pts) == 0:
+            return False
+
+        imu_st, imu_yaws = _integrate_base_imu_yaws(
+            r, imu_topic, int(all_ns.min()) - 100_000_000, t_ref_ns + 100_000_000, tfs
+        )
+        if len(imu_st) >= 2:
+            yaw_ref = float(np.interp(t_ref_ns, imu_st, imu_yaws))
+            yaw_pts = np.interp(all_ns, imu_st, imu_yaws)
+            dtheta = yaw_pts - yaw_ref
+            c_th = np.cos(dtheta)
+            s_th = np.sin(dtheta)
+            x_new = c_th * all_pts[:, 0] - s_th * all_pts[:, 1]
+            y_new = s_th * all_pts[:, 0] + c_th * all_pts[:, 1]
+            all_pts[:, 0] = x_new
+            all_pts[:, 1] = y_new
+
+        r_xy = np.linalg.norm(all_pts[:, :2], axis=1)
+        all_pts = all_pts[(r_xy > robot_radius) & (all_pts[:, 2] >= min_z_filter) & (all_pts[:, 2] <= 2.9)]
+        _write_pcd_xyz(out_pcd, all_pts)
+        return len(all_pts) > 0
     return False
 
 
@@ -1065,6 +1252,8 @@ def run_global_compare_command(args: argparse.Namespace) -> None:
                     scan_pcd,
                     float(sc_cfg.get("robot_radius", 0.45)),
                     float(sc_cfg.get("min_z_filter", 0.05)),
+                    accum_window_s=float(sc_cfg.get("accum_window_s", 0.0)),
+                    imu_topic=str(sc_cfg.get("imu_topic", "/livox/imu")),
                 )
                 if not ok:
                     continue

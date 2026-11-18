@@ -253,6 +253,244 @@ tracking_suites:
         max_range: 20.0
         voxel_size: 0.25
 
+  unity_physics_gt_fair:
+    dataset: "unity_nhk_dynamic_clean"
+    bag_file: "~/external_datasets/rosbag_unity_nhk_dynamic_accum10hz"
+    offset_s: 0.0
+    duration_s: 36.5
+    rate: 1.0
+    cloud_topic: "/livox/lidar"
+    imu_topic: "/livox/imu"
+    methods:
+      - label: "gn10_3d2d"
+        type: "gn10"
+        bag_file: "~/rosbag_unity_nhk_dynamic_clean"
+        map_type: "json"
+        map_file: "map/nhk2026_map.json"
+        params:
+          lidar_2d.enable: true
+          lidar_2d.deskew: true
+      - label: "gn10_3d_only"
+        type: "gn10"
+        bag_file: "~/rosbag_unity_nhk_dynamic_clean"
+        map_type: "json"
+        map_file: "map/nhk2026_map.json"
+        params:
+          lidar_2d.enable: false
+      - label: "lidar_loc_ndt_mid360_fair"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "NDT_OMP"
+          ndt_resolution: 1.0
+          ndt_step_size: 0.1
+          ndt_num_threads: 4
+          ndt_max_iterations: 30
+          score_threshold: 25.0
+          voxel_leaf_size: 0.25
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          scan_period: 0.1
+          cloud_queue_depth: 1
+          min_scan_interval_sec: 0.0
+          use_odom: false
+          use_twist_prediction: true
+          twist_prediction_use_angular_velocity: false
+          max_twist_prediction_dt: 0.25
+          predict_pose_from_previous_delta: true
+          use_imu_preintegration: true
+          imu_accel_scale: 9.80665
+          imu_preintegration_use_base_frame_transform: true
+          imu_dual_queue_enabled: true
+          use_continuous_time_deskew: true
+          point_timestamp_unit: "auto"
+          enable_map_odom_tf: true
+      - label: "lidar_loc_gicp_mid360_fair"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "GICP_OMP"
+          gicp_corr_randomness: 20
+          gicp_max_correspondence_distance: 2.0
+          score_threshold: 25.0
+          voxel_leaf_size: 0.25
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          scan_period: 0.1
+          cloud_queue_depth: 1
+          min_scan_interval_sec: 0.0
+          use_odom: false
+          use_twist_prediction: true
+          twist_prediction_use_angular_velocity: false
+          max_twist_prediction_dt: 0.25
+          predict_pose_from_previous_delta: true
+          use_imu_preintegration: true
+          imu_accel_scale: 9.80665
+          imu_preintegration_use_base_frame_transform: true
+          imu_dual_queue_enabled: true
+          use_continuous_time_deskew: true
+          point_timestamp_unit: "auto"
+          enable_map_odom_tf: true
+      - label: "dll_accum_raw"
+        type: "dll"
+        map_file: "~/external_datasets/nhk2026_cad_floor_zpad.bt"
+        shift_xyz: [-5.45, -5.85, -1.0]
+        params:
+          use_imu: false
+          align_method: 1
+          update_rate: 20.0
+          update_min_time: 0.04
+          update_min_d: 0.01
+          update_min_a: 0.01
+          solver_max_iter: 75
+          solver_max_threads: 4
+      - label: "dll_accum_deskew"
+        type: "dll"
+        cloud_topic: "/livox/lidar_deskewed"
+        map_file: "~/external_datasets/nhk2026_cad_floor_zpad.bt"
+        shift_xyz: [-5.45, -5.85, -1.0]
+        params:
+          use_imu: false
+          align_method: 1
+          update_rate: 20.0
+          update_min_time: 0.04
+          update_min_d: 0.01
+          update_min_a: 0.01
+          solver_max_iter: 75
+          solver_max_threads: 4
+      - label: "kiss_icp_accum_cv"
+        type: "kiss_icp"
+        deskew: true
+        min_range: 0.45
+        max_range: 20.0
+        voxel_size: 0.25
+      - label: "kiss_icp_accum_imu"
+        type: "kiss_icp"
+        cloud_topic: "/livox/lidar_deskewed"
+        deskew: false
+        min_range: 0.45
+        max_range: 20.0
+        voxel_size: 0.25
+
+  national_human_3d_fair:
+    dataset: "national_clean"
+    bag_file: "~/external_datasets/rosbag_national_test_run_clean_accum10hz"
+    offset_s: 120.0
+    duration_s: 60.0
+    rate: 1.0
+    cloud_topic: "/livox/lidar"
+    imu_topic: "/livox/imu"
+    methods:
+      - label: "gn10_3d2d"
+        type: "gn10"
+        bag_file: "~/rosbag_national_test_run_clean"
+        map_type: "json"
+        map_file: "map/nhk2026_map.json"
+        params:
+          lidar_2d.enable: true
+          lidar_2d.deskew: true
+      - label: "gn10_3d_only"
+        type: "gn10"
+        bag_file: "~/rosbag_national_test_run_clean"
+        map_type: "json"
+        map_file: "map/nhk2026_map.json"
+        params:
+          lidar_2d.enable: false
+      - label: "lidar_loc_ndt_mid360_fair"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "NDT_OMP"
+          ndt_resolution: 1.0
+          ndt_step_size: 0.1
+          ndt_num_threads: 4
+          ndt_max_iterations: 30
+          score_threshold: 25.0
+          voxel_leaf_size: 0.25
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          scan_period: 0.1
+          cloud_queue_depth: 1
+          min_scan_interval_sec: 0.0
+          use_odom: false
+          use_twist_prediction: true
+          twist_prediction_use_angular_velocity: false
+          max_twist_prediction_dt: 0.25
+          predict_pose_from_previous_delta: true
+          use_imu_preintegration: true
+          imu_accel_scale: 9.80665
+          imu_preintegration_use_base_frame_transform: true
+          imu_dual_queue_enabled: true
+          use_continuous_time_deskew: true
+          point_timestamp_unit: "auto"
+          enable_map_odom_tf: true
+      - label: "lidar_loc_gicp_mid360_fair"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "GICP_OMP"
+          gicp_corr_randomness: 20
+          gicp_max_correspondence_distance: 2.0
+          score_threshold: 25.0
+          voxel_leaf_size: 0.25
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          scan_period: 0.1
+          cloud_queue_depth: 1
+          min_scan_interval_sec: 0.0
+          use_odom: false
+          use_twist_prediction: true
+          twist_prediction_use_angular_velocity: false
+          max_twist_prediction_dt: 0.25
+          predict_pose_from_previous_delta: true
+          use_imu_preintegration: true
+          imu_accel_scale: 9.80665
+          imu_preintegration_use_base_frame_transform: true
+          imu_dual_queue_enabled: true
+          use_continuous_time_deskew: true
+          point_timestamp_unit: "auto"
+          enable_map_odom_tf: true
+      - label: "dll_accum_raw"
+        type: "dll"
+        map_file: "~/external_datasets/nhk2026_cad_floor_zpad.bt"
+        shift_xyz: [-5.45, -5.85, -1.0]
+        params:
+          use_imu: false
+          align_method: 1
+          update_rate: 20.0
+          update_min_time: 0.04
+          update_min_d: 0.01
+          update_min_a: 0.01
+          solver_max_iter: 75
+          solver_max_threads: 4
+      - label: "dll_accum_deskew"
+        type: "dll"
+        cloud_topic: "/livox/lidar_deskewed"
+        map_file: "~/external_datasets/nhk2026_cad_floor_zpad.bt"
+        shift_xyz: [-5.45, -5.85, -1.0]
+        params:
+          use_imu: false
+          align_method: 1
+          update_rate: 20.0
+          update_min_time: 0.04
+          update_min_d: 0.01
+          update_min_a: 0.01
+          solver_max_iter: 75
+          solver_max_threads: 4
+      - label: "kiss_icp_accum_cv"
+        type: "kiss_icp"
+        deskew: true
+        min_range: 0.45
+        max_range: 20.0
+        voxel_size: 0.25
+      - label: "kiss_icp_accum_imu"
+        type: "kiss_icp"
+        cloud_topic: "/livox/lidar_deskewed"
+        deskew: false
+        min_range: 0.45
+        max_range: 20.0
+        voxel_size: 0.25
+
 global_search_suites:
   unity_nhk_gs:
     dataset: "unity_nhk_dynamic_clean"
@@ -266,6 +504,21 @@ global_search_suites:
     src_voxel: 0.05
     min_z_filter: 0.05
     robot_radius: 0.45
+    accum_window_s: 0.0
+  unity_nhk_gs_accum:
+    dataset: "unity_nhk_dynamic_clean"
+    manifest: "benchmarks/manifests/unity_gt_scenarios.yaml"
+    map_pcd: "~/external_datasets/unity_nhk_scanned_map.pcd"
+    min_res: 0.15
+    max_level: 4
+    score_thresh_pct: 0.30
+    timeout_ms: 2000
+    rp_deg: 0.0
+    src_voxel: 0.05
+    min_z_filter: 0.05
+    robot_radius: 0.45
+    accum_window_s: 0.10
+    imu_topic: "/livox/imu"
   national_n21_gs:
     dataset_in: "national_clean"
     dataset_full: "national_full"
@@ -279,3 +532,19 @@ global_search_suites:
     src_voxel: 0.05
     min_z_filter: 0.05
     robot_radius: 0.45
+    accum_window_s: 0.0
+  national_n21_gs_accum:
+    dataset_in: "national_clean"
+    dataset_full: "national_full"
+    manifest: "benchmarks/manifests/n21_scenarios.yaml"
+    map_pcd: "~/external_datasets/nhk2026_cad_nofloor.pcd"
+    min_res: 0.15
+    max_level: 4
+    score_thresh_pct: 0.30
+    timeout_ms: 2000
+    rp_deg: 0.0
+    src_voxel: 0.05
+    min_z_filter: 0.05
+    robot_radius: 0.45
+    accum_window_s: 0.10
+    imu_topic: "/livox/imu"

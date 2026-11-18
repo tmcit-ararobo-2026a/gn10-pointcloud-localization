@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <vector>
@@ -36,6 +37,15 @@ public:
     {
         std::lock_guard<std::mutex> lock(config_mutex_);
         return config_;
+    }
+
+    /**
+     * @brief Returns wall-clock duration [ms] of the most recent search() call.
+     */
+    double lastSearchTimeMs() const
+    {
+        std::lock_guard<std::mutex> lock(config_mutex_);
+        return last_search_time_ms_;
     }
 
     PoseCandidate search(
@@ -79,10 +89,13 @@ private:
         float max_yaw_diff,
         float& out_best_cost,
         int* out_inlier_count,
-        float* out_inlier_cost
+        float* out_inlier_cost,
+        std::chrono::steady_clock::time_point search_start_tp,
+        double prep_time_ms
     );
 
     mutable std::mutex config_mutex_;
     GlobalSearchConfig config_;
+    double last_search_time_ms_{0.0};
     rclcpp::Logger logger_;
 };

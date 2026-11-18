@@ -119,22 +119,37 @@ python3 benchmarks/runners/run_ablation_suite.py \
   --outdir benchmarks/results/hdl501
 ```
 
-## 7. External SOTA Baseline Comparisons (Step 4 & Step 5)
+## 7. External SOTA Baseline Comparisons & Fair 10 Hz / 0.10 s Protocol
 
-To preserve strict `Apache-2.0` licensing inside `gn10-pointcloud-localization`, all external baseline repositories (`robotics-upo/dll` [BSD-3-Clause], `rsasaki0109/lidar_localization_ros2` + `ndt_omp_ros2` [BSD-2-Clause], `KOKIAOKI/3d_bbs` [MIT], and `octomap` [BSD]) are built outside this repository in `~/external_baselines_ws`. Generate `.pcd` / `.bt` maps and launch isolated localhost comparisons via `benchmarks/runners/run_baseline_compare.py` and `benchmarks/manifests/baselines.yaml`:
+To preserve strict `Apache-2.0` licensing inside `gn10-pointcloud-localization`, all external baseline repositories (`robotics-upo/dll` [BSD-3-Clause], `rsasaki0109/lidar_localization_ros2` + `ndt_omp_ros2` [BSD-2-Clause], `KOKIAOKI/3d_bbs` [MIT], and `octomap` [BSD]) are built outside this repository in `~/external_baselines_ws`.
+
+Notice that Livox Mid-360 bags record 50 Hz packets (20 ms, ~4k pts/packet) whereas `gn10` internally accumulates a `0.10 s` window (~20k pts). To evaluate both raw packet input and genuinely fair `0.10 s` (`10 Hz`) scan input (with IMU preintegration + continuous-time deskewing enabled on `lidar_localization_ros2` and both IMU/constant-velocity deskewing tested on `DLL` / `KISS-ICP` / `3D-BBS`), generate the 10 Hz bags once with `benchmarks/tools/accumulate_livox_bag.py`:
 
 ```bash
+# Always run unit tests with ROS 2 + workspace setup sourced so CUDA/test shared libs resolve cleanly
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ctest --test-dir build/gn10_pointcloud_localization --output-on-failure -V
+
 # Optional: sample CAD JSON geometry into PCD for external PCD/OctoMap baselines
 python3 benchmarks/tools/json_map_to_pcd.py \
   map/nhk2026_map.json ~/external_datasets/nhk2026_cad_floor.pcd --include-floor
 
-# Trajectory tracking & CPU/RAM/power comparison (gn10, DLL, NDT_OMP, GICP_OMP, KISS-ICP)
+# Generate 10 Hz (0.10 s) accumulated + IMU-deskewed bags (strictly excludes GT/reference topics)
+python3 benchmarks/tools/accumulate_livox_bag.py \
+  --input ~/rosbag_unity_nhk_dynamic_clean \
+  --output ~/external_datasets/rosbag_unity_nhk_dynamic_accum10hz --overwrite
+python3 benchmarks/tools/accumulate_livox_bag.py \
+  --input ~/rosbag_national_test_run_clean \
+  --output ~/external_datasets/rosbag_national_test_run_clean_accum10hz --overwrite
+
+# Trajectory tracking & CPU/RAM/power comparison (raw 20ms & fair 0.10s suites + HDL-501)
 python3 benchmarks/runners/run_baseline_compare.py tracking \
   --external-ws ~/external_baselines_ws \
-  --suites unity_physics_gt,hdl_501_eval \
+  --suites unity_physics_gt,unity_physics_gt_fair,hdl_501_eval,national_human_3d,national_human_3d_fair \
   --output-dir benchmarks/results/baseline_compare
 
-# Global localization & out-of-arena safety rejection (gn10 vs 3D-BBS GPU/CPU)
+# Global localization & out-of-arena safety rejection (single-packet & 0.10s accumulated 3D-BBS vs gn10)
 python3 benchmarks/runners/run_baseline_compare.py global-compare \
   --external-ws ~/external_baselines_ws \
   --output-dir benchmarks/results/baseline_compare

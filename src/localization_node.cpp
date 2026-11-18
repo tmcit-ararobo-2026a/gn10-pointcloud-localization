@@ -1300,11 +1300,13 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             is_global_recovery_accepted(gs_match_params, inlier_count, inlier_cost);
 
         if (gs_accepted) {
+            const double gs_search_ms = global_searcher_->lastSearchTimeMs();
             if (global_verify_frames_ <= 1) {
                 commit_recovery(best_pose);
                 RCLCPP_INFO(
                     this->get_logger(),
-                    "[GlobalSearch] Successfully recovered from lost state. (cost: %.4f, inliers: %d, inlier_cost: %.4f, yaw_diff: %.2f)",
+                    "[GlobalSearch] Successfully recovered from lost state. (search: %.2f ms, cost: %.4f, inliers: %d, inlier_cost: %.4f, yaw_diff: %.2f)",
+                    gs_search_ms,
                     best_cost,
                     inlier_count,
                     inlier_cost,
@@ -1323,8 +1325,9 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
                 dynamic_pts.clear();
                 RCLCPP_INFO(
                     this->get_logger(),
-                    "[GlobalSearch] Candidate entered trial verification (1/%d frames, cost: %.4f, 3D: %.4f, inliers: %d).",
+                    "[GlobalSearch] Candidate entered trial verification (1/%d frames, search: %.2f ms, cost: %.4f, 3D: %.4f, inliers: %d).",
                     global_verify_frames_,
+                    gs_search_ms,
                     best_cost,
                     solver_->lastCost3D(),
                     inlier_count

@@ -53,7 +53,6 @@ https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
 ```bash
 sudo apt update
 sudo apt install -y \
-  libceres-dev \
   libeigen3-dev \
   nlohmann-json3-dev \
   libpcl-dev \
@@ -63,6 +62,9 @@ sudo apt install -y \
 cd ~/ros2_ws
 colcon build --symlink-install --packages-select gn10_pointcloud_localization
 source install/setup.bash
+
+# 単体テスト（事前に ROS 2 とワークスペースの setup.bash を source すること）
+ctest --test-dir build/gn10_pointcloud_localization --output-on-failure -V
 ```
 
 ## 4. 使い方

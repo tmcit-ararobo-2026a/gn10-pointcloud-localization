@@ -38,14 +38,25 @@ import shutil
 
 
 class SystemGPUMonitor:
-    def __init__(self, target_process_name="gn10_pointcloud_localization_node", sample_interval_s=0.05):
+    def __init__(
+        self,
+        target_process_name="gn10_pointcloud_localization_node",
+        sample_interval_s=0.05,
+        target_pid=None,
+    ):
         self.target_name = target_process_name
         self.interval = sample_interval_s
         self.running = False
         self.thread = None
         self.records = []
-        self.target_pid = None
+        self._pid_lock = threading.Lock()
+        self._explicit_pid = target_pid
+        self.target_pid = target_pid
         self._target_proc = None
+        self._first_cpu_times = None
+        self._last_cpu_times = None
+        self._first_cpu_wall = None
+        self._last_cpu_wall = None
 
         # Check GPU monitoring backend (prefer tegrastats on Jetson because JetPack 6 ships nvidia-smi returning N/A)
         self.backend = "none"
@@ -73,7 +84,37 @@ class SystemGPUMonitor:
         }
         self._tegra_warned = False
 
+    def set_target_pid(self, pid):
+        with self._pid_lock:
+            self._explicit_pid = pid
+            self.target_pid = pid
+            self._target_proc = None
+            self._first_cpu_times = None
+            self._last_cpu_times = None
+            self._first_cpu_wall = None
+            self._last_cpu_wall = None
+
+    def get_cumulative_cpu_pct(self):
+        with self._pid_lock:
+            if (
+                self._first_cpu_times is None
+                or self._last_cpu_times is None
+                or self._first_cpu_wall is None
+                or self._last_cpu_wall is None
+            ):
+                return np.nan
+            wall_dt = self._last_cpu_wall - self._first_cpu_wall
+            if wall_dt <= 1e-6:
+                return np.nan
+            cpu_dt = (
+                (self._last_cpu_times.user + self._last_cpu_times.system)
+                - (self._first_cpu_times.user + self._first_cpu_times.system)
+            )
+            return float(max(0.0, cpu_dt / wall_dt * 100.0))
+
     def find_target_pid(self):
+        if self._explicit_pid is not None:
+            return self._explicit_pid if psutil.pid_exists(self._explicit_pid) else None
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
                 cmdline = proc.info.get('cmdline') or []
@@ -212,32 +253,56 @@ class SystemGPUMonitor:
             now = time.time() - start_time
 
             # Locate target process PID and reuse Process instance so cpu_percent(interval=None) accumulates delta
-            if self.target_pid is None or not psutil.pid_exists(self.target_pid):
-                self.target_pid = self.find_target_pid()
-                self._target_proc = None
-                if self.target_pid:
+            with self._pid_lock:
+                explicit = self._explicit_pid
+                if explicit is not None and self.target_pid != explicit:
+                    self.target_pid = explicit
+                    self._target_proc = None
+                if self.target_pid is None or not psutil.pid_exists(self.target_pid):
+                    self.target_pid = self.find_target_pid()
+                    self._target_proc = None
+                if self.target_pid and self._target_proc is None:
                     try:
-                        self._target_proc = psutil.Process(self.target_pid)
-                        self._target_proc.cpu_percent(interval=None)
+                        proc = psutil.Process(self.target_pid)
+                        proc.cpu_percent(interval=None)
+                        self._target_proc = proc
+                        now_mono = time.monotonic()
+                        ct = proc.cpu_times()
+                        if self._first_cpu_times is None:
+                            self._first_cpu_times = ct
+                            self._first_cpu_wall = now_mono
+                        self._last_cpu_times = ct
+                        self._last_cpu_wall = now_mono
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         self.target_pid = None
                         self._target_proc = None
+                active_proc = self._target_proc
 
             proc_cpu = np.nan
             proc_rss_mb = np.nan
             proc_vms_mb = np.nan
             proc_threads = np.nan
 
-            if self._target_proc is not None:
+            if active_proc is not None:
                 try:
-                    proc_cpu = self._target_proc.cpu_percent(interval=None)
-                    mem_info = self._target_proc.memory_info()
+                    now_mono = time.monotonic()
+                    proc_cpu = active_proc.cpu_percent(interval=None)
+                    ct = active_proc.cpu_times()
+                    with self._pid_lock:
+                        if self._first_cpu_times is None:
+                            self._first_cpu_times = ct
+                            self._first_cpu_wall = now_mono
+                        self._last_cpu_times = ct
+                        self._last_cpu_wall = now_mono
+                    mem_info = active_proc.memory_info()
                     proc_rss_mb = mem_info.rss / (1024.0 * 1024.0)
                     proc_vms_mb = mem_info.vms / (1024.0 * 1024.0)
-                    proc_threads = self._target_proc.num_threads()
+                    proc_threads = active_proc.num_threads()
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    self.target_pid = None
-                    self._target_proc = None
+                    with self._pid_lock:
+                        if self._explicit_pid is None:
+                            self.target_pid = None
+                        self._target_proc = None
 
             sys_cpu_pct = psutil.cpu_percent(interval=None)
             sys_mem = psutil.virtual_memory()
