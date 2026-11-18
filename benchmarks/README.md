@@ -10,7 +10,7 @@ By default, `colcon build` does **not** build benchmark binaries (`BUILD_BENCHMA
 source /opt/ros/humble/setup.bash
 cd ~/ros2_ws
 colcon build --packages-select gn10_pointcloud_localization --symlink-install \
-  --cmake-args -DBUILD_BENCHMARKS=ON
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
 ```
 
 Run the 5-way ESDF lookup microbenchmark (`CUDA tex3D`, `Global 8-fetch`, `Global Nearest`, `Analytic FieldSDF`, and optional `CPU OpenMP Trilinear`):
@@ -24,13 +24,13 @@ Run the 5-way ESDF lookup microbenchmark (`CUDA tex3D`, `Global 8-fetch`, `Globa
 
 ## 2. Running End-to-End Pipeline & Resource Harness
 
-Optional Python dependencies (for plotting / pandas / YAML):
+Optional Python dependencies (all permissive licenses; no GPL libraries imported):
 
 ```bash
 pip3 install -r benchmarks/requirements.txt
 ```
 
-Run a trial (isolated localhost DDS so Wi-Fi never interferes):
+Run a single trial (isolated localhost DDS so Wi-Fi never interferes):
 
 ```bash
 python3 scripts/benchmark_harness.py run \
@@ -40,7 +40,24 @@ python3 scripts/benchmark_harness.py run \
   --outdir benchmarks/results
 ```
 
-## 3. Running Global Search & Safety Suite
+## 3. Running Reproducible Ablation & Multi-Dataset Suite
+
+Run all configured suites (`human_approach_3d`, `deskew_2d_ablation`, `full_national_tracking`, `opponent_match_edited`) and automatically generate Markdown, LaTeX, and TUM trajectory files:
+
+```bash
+python3 benchmarks/runners/run_ablation_suite.py \
+  --outdir benchmarks/results/ablation_desktop
+```
+
+Evaluate any exported TUM trajectory against a reference TUM trajectory using the pure Apache-2.0 evaluator (and optionally pass the exported `.txt` files to external CLI tools):
+
+```bash
+python3 benchmarks/analysis/evaluate_trajectories.py evaluate \
+  --est benchmarks/results/ablation_desktop/full_national_tracking__production_v122_3d2d_est_tum.txt \
+  --ref benchmarks/results/ablation_desktop/full_national_tracking__production_v122_3d2d_ref_tum.txt
+```
+
+## 4. Running Global Search & Safety Suite
 
 ```bash
 python3 benchmarks/runners/run_global_search_eval.py \
@@ -50,28 +67,26 @@ python3 benchmarks/runners/run_global_search_eval.py \
 
 To include Group C out-of-arena scenarios (`t >= 285 s`), pass the full bag containing out-of-arena segments (`~/rosbag_national_test_run`).
 
-## 4. Running on Jetson Orin Nano via SSH (Zero Wi-Fi DDS Jitter)
+## 5. Running on Jetson Orin Nano via SSH (Zero Wi-Fi DDS Jitter)
 
 Never play `ros2 bag play` over Wi-Fi DDS from a remote PC. Copy the trimmed `zstd` bags once to Jetson local storage and execute locally over SSH:
 
 ```bash
 # 1. From host PC (once):
-scp -r ~/rosbag_national_test_run_clean ~/rosbagjetson6_edited_clean jetson@<JETSON_IP>:~/
+rsync -av ~/rosbag_national_test_run_clean ~/rosbagjetson6_edited_clean ararobo@<JETSON_IP>:~/
 
-# 2. Inside Jetson SSH session (locked clocks for deterministic benchmark comparison):
-sudo nvpmodel -m 2     # Select 25W / MAXN_SUPER mode (verify ID with `sudo nvpmodel -q`)
-sudo jetson_clocks     # Lock GPU/CPU/EMC clocks for repeatable microbenchmark & latency p95/p99
+# 2. Inside Jetson SSH session (optional clock lock on 25W MAXN_SUPER for deterministic microbenchmarks):
+sudo nvpmodel -m 2     # Verify active mode ID with `sudo nvpmodel -q`
+sudo jetson_clocks     # Lock GPU/CPU/EMC clocks for repeatable p95/p99
 
 export ROS_LOCALHOST_ONLY=1
 export ROS_DOMAIN_ID=77
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 
-python3 scripts/benchmark_harness.py run \
-  --bag ~/rosbag_national_test_run_clean \
-  --duration 120 \
-  --label jetson_25w_locked \
-  --outdir benchmarks/results
+python3 benchmarks/runners/run_ablation_suite.py \
+  --suites full_national_tracking opponent_match_edited \
+  --outdir benchmarks/results/jetson_25w
 ```
 
-Also run a second pass with `jetson_clocks` disabled (reboot or default boot state) to record real-world `VDD_IN` wattage and thermal behavior via `tegrastats`.
+Also record a pass under default DVFS (`jetson_clocks` OFF) to measure real-world `VDD_IN` board power (`[W]`) and energy per frame (`[mJ/frame]`) via `tegrastats`.

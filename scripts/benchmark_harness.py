@@ -47,18 +47,17 @@ class SystemGPUMonitor:
         self.target_pid = None
         self._target_proc = None
 
-        # Check GPU monitoring backend
+        # Check GPU monitoring backend (prefer tegrastats on Jetson because JetPack 6 ships nvidia-smi returning N/A)
         self.backend = "none"
-        if shutil.which("nvidia-smi"):
+        if shutil.which("tegrastats") or os.path.exists("/usr/bin/tegrastats"):
+            self.backend = "tegrastats"
+            self.tegrastats_bin = shutil.which("tegrastats") or "/usr/bin/tegrastats"
+        elif shutil.which("nvidia-smi"):
             try:
                 subprocess.check_output(["nvidia-smi", "-L"], stderr=subprocess.DEVNULL, timeout=1.0)
                 self.backend = "nvidia-smi"
             except Exception:
                 pass
-
-        if self.backend == "none" and (shutil.which("tegrastats") or os.path.exists("/usr/bin/tegrastats")):
-            self.backend = "tegrastats"
-            self.tegrastats_bin = shutil.which("tegrastats") or "/usr/bin/tegrastats"
 
         self._tegra_lock = threading.Lock()
         self._tegra_proc = None

@@ -5,18 +5,16 @@
 """
 Reproducible Global Search Recovery & Safety Rejection Evaluator.
 
-Supports both uncompressed and zstd-compressed ROS 2 bags via rosbag2_py,
+Supports both uncompressed and zstd-compressed ROS 2 bags via ros_eval_common,
 declarative scenario YAML manifests, isolated localhost DDS execution,
 and structured pass/fail validation output.
 """
 
 import argparse
-import bisect
 import json
 import math
 import os
 import re
-import signal
 import subprocess
 import sys
 import tempfile
@@ -24,205 +22,19 @@ import threading
 import time
 from pathlib import Path
 
-import yaml
 import rclpy
-import rosbag2_py
-from ament_index_python.packages import get_package_prefix, get_package_share_directory
-from geometry_msgs.msg import PoseWithCovarianceStamped
-from gn10_pointcloud_localization.msg import LocalizationTelemetry
-from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from rclpy.serialization import deserialize_message
-from rosgraph_msgs.msg import Clock
-from tf2_msgs.msg import TFMessage
+import yaml
 
-
-def yaw_from_quat(q):
-    return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-
-
-def wrap_angle(angle_rad):
-    return (angle_rad + math.pi) % (2.0 * math.pi) - math.pi
-
-
-def open_rosbag_reader(bag_path: Path):
-    """Opens either SequentialReader or SequentialCompressionReader based on metadata.yaml."""
-    storage_opts = rosbag2_py.StorageOptions(uri=str(bag_path), storage_id="sqlite3")
-    conv_opts = rosbag2_py.ConverterOptions("cdr", "cdr")
-
-    meta_file = bag_path / "metadata.yaml"
-    is_compressed = False
-    if meta_file.exists():
-        with open(meta_file, "r") as mf:
-            meta = yaml.safe_load(mf) or {}
-        bag_info = meta.get("rosbag2_bagfile_information", {})
-        comp_mode = str(bag_info.get("compression_mode", "")).strip().lower()
-        comp_fmt = str(bag_info.get("compression_format", "")).strip().lower()
-        is_compressed = bool(comp_fmt) and comp_mode not in ("", "none")
-
-    reader = (
-        rosbag2_py.SequentialCompressionReader() if is_compressed else rosbag2_py.SequentialReader()
-    )
-    reader.open(storage_opts, conv_opts)
-    return reader
-
-
-def load_reference_from_bag(bag_path: Path, ref_topic: str = "/platform_constraint"):
-    """Reads reference poses and /tf_static using rosbag2_py (supports zstd and raw bags)."""
-    reader = open_rosbag_reader(bag_path)
-
-    metadata = reader.get_metadata()
-    bag_duration_s = metadata.duration.nanoseconds * 1e-9
-
-    stamps = []
-    poses = []
-    tf_static_msgs = []
-    ts_first = None
-
-    while reader.has_next():
-        topic, data, ts_ns = reader.read_next()
-        if ts_first is None:
-            ts_first = ts_ns
-        if topic == ref_topic:
-            msg = deserialize_message(data, PoseWithCovarianceStamped)
-            p = msg.pose.pose.position
-            yaw = yaw_from_quat(msg.pose.pose.orientation)
-            header_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
-            stamps.append(header_ns)
-            poses.append((p.x, p.y, yaw, (ts_ns - ts_first) * 1e-9))
-        elif topic == "/tf_static":
-            tf_static_msgs.append(deserialize_message(data, TFMessage))
-
-    return bag_duration_s, stamps, poses, tf_static_msgs
-
-
-def lookup_ref_by_stamp(stamps, poses, target_ns):
-    if not stamps:
-        return (0.0, 0.0, 0.0, 0.0), float("inf")
-    idx = bisect.bisect_left(stamps, target_ns)
-    if idx == 0:
-        cand = 0
-    elif idx >= len(stamps):
-        cand = len(stamps) - 1
-    else:
-        cand = idx if abs(stamps[idx] - target_ns) < abs(stamps[idx - 1] - target_ns) else idx - 1
-    dt = abs(stamps[cand] - target_ns) * 1e-9
-    return poses[cand], dt
-
-
-def lookup_ref_by_offset(poses, offset_s):
-    if not poses:
-        return 0.0, 0.0, 0.0
-    best = min(poses, key=lambda item: abs(item[3] - offset_s))
-    return best[0], best[1], best[2]
-
-
-class EvalListener(Node):
-    """Collects localized poses, telemetry, and simulation clock while broadcasting /tf_static."""
-
-    def __init__(self, tf_static_msgs):
-        super().__init__("global_search_eval_listener")
-        self._lock = threading.Lock()
-        self.poses = []
-        self.telems = []
-        self.clock_start_ns = None
-        self.clock_last_ns = None
-        self.active = False
-
-        qos_be = QoSProfile(depth=200, reliability=ReliabilityPolicy.BEST_EFFORT)
-        qos_static = QoSProfile(
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
-        self.pub_tf_static = self.create_publisher(TFMessage, "/tf_static", qos_static)
-        merged_static = TFMessage()
-        for msg in tf_static_msgs:
-            merged_static.transforms.extend(msg.transforms)
-        self._merged_static = merged_static
-
-        self.create_subscription(Clock, "/clock", self._clock_cb, qos_be)
-        self.create_subscription(
-            PoseWithCovarianceStamped, "/platform_constraint", self._pose_cb, qos_be
-        )
-        self.create_subscription(LocalizationTelemetry, "/localization/telemetry", self._telem_cb, 200)
-        self.create_timer(0.02, self.publish_static_tf)
-
-    def reset(self):
-        with self._lock:
-            self.poses.clear()
-            self.telems.clear()
-            self.clock_start_ns = None
-            self.clock_last_ns = None
-            self.active = True
-
-    def stop_recording(self):
-        with self._lock:
-            self.active = False
-            return list(self.poses), list(self.telems)
-
-    def publish_static_tf(self):
-        if self._merged_static.transforms:
-            self.pub_tf_static.publish(self._merged_static)
-
-    def _clock_cb(self, msg):
-        with self._lock:
-            if not self.active or not self.telems:
-                return
-            ns = int(msg.clock.sec) * 10**9 + int(msg.clock.nanosec)
-            if self.clock_last_ns is not None and abs(ns - self.clock_last_ns) > 2 * 10**9:
-                self.clock_start_ns = ns
-            if self.clock_start_ns is None:
-                self.clock_start_ns = ns
-            self.clock_last_ns = ns
-
-    def sim_elapsed(self):
-        with self._lock:
-            if self.clock_start_ns is None or self.clock_last_ns is None:
-                return 0.0
-            return (self.clock_last_ns - self.clock_start_ns) * 1e-9
-
-    def _pose_cb(self, msg):
-        with self._lock:
-            if not self.active:
-                return
-            stamp_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
-            p = msg.pose.pose.position
-            yaw = yaw_from_quat(msg.pose.pose.orientation)
-            self.poses.append((stamp_ns, p.x, p.y, yaw))
-
-    def _telem_cb(self, msg):
-        with self._lock:
-            if not self.active:
-                return
-            stamp_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
-            self.telems.append({
-                "stamp_ns": stamp_ns,
-                "best_cost": msg.best_cost,
-                "cost_3d": msg.cost_3d,
-                "cost_2d": msg.cost_2d,
-                "inliers": msg.inlier_count,
-                "obs_3d": msg.obstacle_count_3d,
-                "obs_2d": msg.obstacle_count_2d,
-                "accepted": msg.match_accepted,
-                "is_lost": msg.is_lost,
-                "global_recovered": msg.global_recovered,
-            })
-
-
-def terminate_process_group(proc):
-    if proc is None or proc.poll() is not None:
-        return
-    try:
-        pgid = os.getpgid(proc.pid)
-        os.killpg(pgid, signal.SIGINT)
-        proc.wait(timeout=2.0)
-    except Exception:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            proc.wait(timeout=2.0)
-        except Exception:
-            pass
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ros_eval_common import (
+    EvalListener,
+    load_reference_from_bag,
+    lookup_ref_by_offset,
+    lookup_ref_by_stamp,
+    resolve_localization_paths,
+    terminate_process_group,
+    wrap_angle,
+)
 
 
 def run_scenario(sc, bag_path: Path, listener: EvalListener, ref_stamps, ref_poses, args):
@@ -236,12 +48,8 @@ def run_scenario(sc, bag_path: Path, listener: EvalListener, ref_stamps, ref_pos
     init_y = sc.get("init_y", y0)
     init_yaw = wrap_angle(sc.get("init_yaw_override", yaw0 + sc.get("yaw_perturb", 0.0)))
 
-    pkg_prefix = get_package_prefix("gn10_pointcloud_localization")
-    share_dir = get_package_share_directory("gn10_pointcloud_localization")
-    node_bin = os.path.join(
-        pkg_prefix, "lib", "gn10_pointcloud_localization", "gn10_pointcloud_localization_node"
-    )
-    params_path = args.params_file or os.path.join(share_dir, "config", "common_params.yaml")
+    node_bin, _, default_params = resolve_localization_paths()
+    params_path = args.params_file or default_params
 
     launch_cmd = [
         node_bin,
@@ -317,7 +125,7 @@ def run_scenario(sc, bag_path: Path, listener: EvalListener, ref_stamps, ref_pos
             time.sleep(0.05)
 
         time.sleep(0.1)
-        poses, telems = listener.stop_recording()
+        poses, _, telems = listener.stop_recording()
     finally:
         terminate_process_group(bag_proc)
         terminate_process_group(node_proc)
@@ -390,7 +198,7 @@ def main():
     parser.add_argument("--bag", required=True, help="Path to ROS 2 bag directory")
     parser.add_argument("--manifest", default=str(default_manifest), help="Scenario YAML manifest")
     parser.add_argument("--out-json", required=True, help="Output JSON results file")
-    parser.add_argument("--groups", nargs="*", default=None, help="Filter scenario groups (e.g. A_3D_Only B_3D_2D)")
+    parser.add_argument("--groups", nargs="*", default=None, help="Filter scenario groups")
     parser.add_argument("--limit", type=int, default=0, help="Run at most N scenarios")
     parser.add_argument("--rate", type=float, default=4.0, help="Default rosbag playback rate")
     parser.add_argument("--domain-id", default="77", help="Isolated ROS_DOMAIN_ID")
@@ -415,7 +223,11 @@ def main():
     if not args.no_localhost_only:
         os.environ["ROS_LOCALHOST_ONLY"] = "1"
 
-    bag_duration_s, ref_stamps, ref_poses, tf_static_msgs = load_reference_from_bag(bag_path)
+    bag_data = load_reference_from_bag(bag_path)
+    bag_duration_s = bag_data["bag_duration_s"]
+    ref_stamps = bag_data["stamps"]
+    ref_poses = bag_data["poses"]
+    tf_static_msgs = bag_data["tf_static_msgs"]
 
     executable_scenarios = []
     skipped = []

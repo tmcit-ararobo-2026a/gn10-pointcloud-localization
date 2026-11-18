@@ -1,0 +1,80 @@
+# Copyright 2026 Gento Aiba and contributors
+# SPDX-License-Identifier: Apache-2.0
+# Declarative ablation and multi-dataset tracking evaluation matrix.
+
+suites:
+  human_approach_3d:
+    dataset: "national_clean"
+    offset_s: 0.0
+    duration_s: 65.0
+    rate: 1.0
+    initial_local_search: true
+    runs:
+      - label: "no_voxel_clipped_l1"
+        params:
+          lidar_2d.enable: false
+          filter_params.voxel_size: 0.0
+          matching_params.robust_loss_type: 0
+      - label: "voxel_008_welsch_006"
+        params:
+          lidar_2d.enable: false
+          filter_params.voxel_size: 0.08
+          matching_params.robust_loss_type: 1
+          matching_params.robust_loss_sigma: 0.06
+
+  deskew_2d_ablation:
+    dataset: "national_clean"
+    offset_s: 75.0
+    duration_s: 50.0
+    rate: 1.0
+    initial_local_search: true
+    runs:
+      - label: "2d_deskew_off"
+        params:
+          lidar_2d.enable: true
+          lidar_2d.deskew: false
+      - label: "2d_deskew_on"
+        params:
+          lidar_2d.enable: true
+          lidar_2d.deskew: true
+      - label: "3d_only_baseline"
+        params:
+          lidar_2d.enable: false
+
+  full_national_tracking:
+    dataset: "national_clean"
+    offset_s: 0.0
+    duration_s: 280.0
+    rate: 1.0
+    initial_local_search: false
+    runs:
+      - label: "production_v122_3d2d"
+        params:
+          lidar_2d.enable: true
+          lidar_2d.deskew: true
+          filter_params.voxel_size: 0.08
+          matching_params.robust_loss_type: 1
+      - label: "production_v122_3d_only"
+        params:
+          lidar_2d.enable: false
+          filter_params.voxel_size: 0.08
+          matching_params.robust_loss_type: 1
+
+  opponent_match_edited:
+    dataset: "jetson6_edited_clean"
+    offset_s: 0.0
+    duration_s: 175.0
+    rate: 1.0
+    initial_local_search: true
+    runs:
+      - label: "edited_no_voxel_l1"
+        params:
+          lidar_2d.enable: false
+          filter_params.voxel_size: 0.0
+          matching_params.robust_loss_type: 0
+      - label: "edited_production_v122"
+        params:
+          lidar_2d.enable: false
+          filter_params.voxel_size: 0.08
+          matching_params.robust_loss_type: 1
+          matching_params.robust_loss_sigma: 0.06
