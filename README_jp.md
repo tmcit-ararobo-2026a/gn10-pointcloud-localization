@@ -105,6 +105,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `esdf.min_z` / `max_z` | `-0.20` / `4.00` | ESDF クロップ範囲の Z 下限/上限 [m]。 |
 | `scan_accumulation.window_s` | `0.10` | 3D LiDAR 点群の蓄積時間窓 [s]（スキャン末尾時刻へ運動補正）。 |
 | `filter_params.ground_z_thresh` | `0.06` | `base_link` 基準の床面除去高さ閾値 [m]。 |
+| `filter_params.voxel_size` | `0.08` | GPU 3D Voxel 重心均等化のボクセル辺長 [m]（近距離 $1/r^2$ 密度バイアスを除去、`<= 0` で無効化）。 |
 | `filter_params.robot_radius` | `0.80` | 自己機体除外半径 [m]（XY 平面）。 |
 | `filter_params.robot_height_min` / `max` | `0.0` / `1.2` | 自己機体除外の高さ範囲 [m]（Z 方向）。 |
 | `filter_params.max_range` | `12.0` | センサの最大有効距離 [m]。 |
@@ -125,6 +126,8 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `matching_params.weight_2d_lidar` | `0.40` | Combined モード時の 2D LiDAR 独立残差項の基本重み係数 $w_{\text{2D,base}}$。 |
 | `matching_params.min_2d_points` / `target_2d_points` | `30` / `200` | 2D 残差有効化の最小点数と、100% 視野角重み付けとなる基準 2D 点数。 |
 | `matching_params.min_3d_points` | `50` | 最小 3D 障害物点数（これ未満の場合はフル探索窓の 2D 単独モード $w_{\text{2D}} = 1.0$ へ移行）。 |
+| `matching_params.robust_loss_type` | `1` | ローカル追従時の点単位 ESDF ロバスト損失（`0`: Clipped L1, `1`: Welsch, `2`: Cauchy。Global Search・Trial 検証は `0` を使用）。 |
+| `matching_params.robust_loss_sigma` | `0.06` | Welsch / Cauchy ロバスト損失のスケールパラメータ $\sigma$ [m]（未マップ動的物体・人の寄与を減衰）。 |
 | `matching_params.dynamic_yaw_expansion` | `false` | 急旋回（$|\omega_z| > 0.50\text{ rad/s}$）時に Yaw 探索窓を最大 `0.60 rad` まで動的拡大（係数 `0.5`）。 |
 | `velocity_estimation.enable` | `true` | EMA 平滑化（$\alpha = 0.6$）つき並進速度推定と等速外挿の有効化（`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0`）。 |
 | `lidar_2d.enable` / `deskew` | `true` / `true` | Lakibeam 2D LiDAR の有効化と、回転・並進歪み補正および 3D 基準時刻への同期補正。 |

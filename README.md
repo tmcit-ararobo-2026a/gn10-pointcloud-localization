@@ -105,6 +105,7 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 | `esdf.min_z` / `max_z` | `-0.20` / `4.00` | ESDF crop minimum/maximum Z coordinate [m]. |
 | `scan_accumulation.window_s` | `0.10` | 3D LiDAR accumulation window [s] (deskewed to newest point timestamp). |
 | `filter_params.ground_z_thresh` | `0.06` | Floor plane removal height threshold [m] relative to `base_link`. |
+| `filter_params.voxel_size` | `0.08` | GPU 3D voxel centroid equalization edge length [m] (eliminates near-field $1/r^2$ density bias; `<= 0` disables). |
 | `filter_params.robot_radius` | `0.80` | Robot chassis self-exclusion radius [m] (XY plane). |
 | `filter_params.robot_height_min` / `max` | `0.0` / `1.2` | Robot chassis self-exclusion height range [m] (Z direction). |
 | `filter_params.max_range` | `12.0` | Maximum effective detection range [m]. |
@@ -125,6 +126,8 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 | `matching_params.weight_2d_lidar` | `0.40` | Base weight $w_{\text{2D,base}}$ of 2D LiDAR residual term in Combined mode. |
 | `matching_params.min_2d_points` / `target_2d_points` | `30` / `200` | Minimum 2D point threshold and reference point count for 100% FoV scaling. |
 | `matching_params.min_3d_points` | `50` | Minimum 3D obstacle points (falls back to full-window 2D-only mode $w_{\text{2D}} = 1.0$ if fewer). |
+| `matching_params.robust_loss_type` | `1` | Per-point ESDF robust loss for local tracking (`0`: Clipped L1, `1`: Welsch, `2`: Cauchy; Global Search & trial verification use `0`). |
+| `matching_params.robust_loss_sigma` | `0.06` | Scale parameter $\sigma$ [m] for Welsch / Cauchy robust loss (attenuates unmapped dynamic/human obstacles). |
 | `matching_params.dynamic_yaw_expansion` | `false` | Dynamically widens yaw search window up to `0.60 rad` during fast turns ($|\omega_z| > 0.50\text{ rad/s}$, factor `0.5`). |
 | `velocity_estimation.enable` | `true` | Enables linear velocity estimation with EMA smoothing ($\alpha = 0.6$) and constant-velocity extrapolation (`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0`). |
 | `lidar_2d.enable` / `deskew` | `true` / `true` | Enables Lakibeam 2D LiDAR, rotational/translational deskew, and time synchronization to 3D reference timestamp. |

@@ -91,6 +91,7 @@ partition "2. Motion Prediction & Spatiotemporal Alignment (`cloudCallback`)" #F
 partition "3. GPU Deskew, Ground Filter & 2D Fusion (`prepareObstacleCloud`)" #E0F7FA {
     :Upload raw 3D timed points (`d_timed_in_`) & up to **2048** IMU samples (`d_imu_samples_`);
     :Launch **`filterGroundWithDeskewKernel` (CUDA)**:\n1. Static TF `livox_frame -> base_link` (calibrated sensor TF)\n2. Binary-search IMU quadratic interpolation + velocity deskew (`+/-100 ms` clamp)\n3. Max range filter (`dist <= max_range`)\n4. Robot footprint self-filter (`r <= robot_radius` & `z in [height_min, height_max]`)\n5. Ground / Obstacle split (`z <= ground_z_thresh` -> Ground, else -> 3D Obstacle);
+    :Launch **`launchVoxelCentroidEqualization` (CUDA)** when `voxel_size > 0`:\nOpen-addressing GPU hash table (`atomicCAS` + centroid compaction) to eliminate near-field 1/r^2 density bias;
     :Append aligned 2D LiDAR points (`num_2d_obstacles_`) after 3D obstacles (`num_3d_obstacles_`) in `d_obstacle_`;
     note right
         **Filter Parameters (`filter_params.*`)**
@@ -98,6 +99,7 @@ partition "3. GPU Deskew, Ground Filter & 2D Fusion (`prepareObstacleCloud`)" #E
         * `robot_radius`: robot structure radius
         * `robot_height_min / max`: robot structure clearance
         * `ground_z_thresh`: **0.06 m**
+        * `voxel_size`: **0.08 m** (3D voxel centroid equalization)
         * `max_points`: point buffer capacity
     end note
 }
@@ -105,8 +107,8 @@ partition "3. GPU Deskew, Ground Filter & 2D Fusion (`prepareObstacleCloud`)" #E
 if (Is Robot Lost? (`is_lost_ == true` and no fresh prior)) then (YES: Global Recovery)
     partition "4A. Global Search Recovery (`GlobalSearcher::search`)" #FFEBEE {
         :Select yaw search half-range: `recovery_yaw_diff` (`0.40 rad`) if IMU heading prior\nis valid (`< 10.0 s` since last match or initial prior); fall back to `range_yaw_diff` (`3.1415 rad`) on failure;
-        :Stage 1: Downsample cloud (`downsample_stride`) & evaluate coarse 3D grid\nacross field bounds (`step_xy`, `step_yaw`) and select **Top-K (`top_k_candidates`)** via **3D NMS**;
-        :Stage 2: Run full-resolution `matchObstacleCloud` around each Top-K peak\n(**3D LiDAR primacy**: normalize failed-2D / 2D-only fallback costs back to `cost_3d` scale when `N_3d >= min_3d_points`);
+        :Stage 1: Evaluate coarse 3D grid across field bounds (`step_xy`, `step_yaw`)\non voxel-equalized 3D obstacles (`Clipped L1`) & select **Top-K (`top_k_candidates`)** via **3D NMS**;
+        :Stage 2: Run `matchObstacleCloud` (`Clipped L1`) around each Top-K peak\n(**3D LiDAR primacy**: normalize failed-2D / 2D-only fallback costs back to `cost_3d` scale when `N_3d >= min_3d_points`);
         :Stage 3: **Top-1/Top-2 Uniqueness Check**: reject if `best.cost > uniqueness_ratio * second_best_cost`\n(excluding 180 deg antipodal symmetry twin);
         :Stage 4: **Multi-Frame Trial Verification**: require `verify_frames` (`3`) consecutive frames\npassing `is_global_recovery_accepted` (`1.5x` local window) before clearing `is_lost_`;
         note right
@@ -115,7 +117,7 @@ if (Is Robot Lost? (`is_lost_ == true` and no fresh prior)) then (YES: Global Re
             * `range_yaw_diff`: **3.1415 rad** (fallback / priorless yaw half-range)
             * `recovery_yaw_diff`: **0.40 rad** (IMU heading prior yaw half-range)
             * `step_xy` / `step_yaw`: **0.30 m** / **0.3 rad**
-            * `downsample_stride` / `top_k_candidates`: **2** / **4**
+            * `top_k_candidates`: **4**
             * `uniqueness_ratio`: **0.960** (1.0 disables)
             * `verify_frames`: **3** (consecutive trial confirmation frames)
             * `cost_threshold_3d`: **0.202 m** (strict 3D recovery threshold)
