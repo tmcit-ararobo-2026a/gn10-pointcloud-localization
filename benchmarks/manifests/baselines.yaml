@@ -1,0 +1,281 @@
+# Copyright 2026 Gento Aiba and contributors
+# SPDX-License-Identifier: Apache-2.0
+# Declarative external SOTA baseline comparison suites (Step 4 & Step 5).
+
+external_binaries:
+  dll_node: "install/dll/lib/dll/dll_node"
+  lidar_localization_node: "install/lidar_localization_ros2/lib/lidar_localization_ros2/lidar_localization_node"
+  bbs3d_bench: "build_bench_tools/bbs3d_bench"
+
+tracking_suites:
+  unity_physics_gt:
+    dataset: "unity_nhk_dynamic_clean"
+    offset_s: 0.0
+    duration_s: 36.5
+    rate: 1.0
+    cloud_topic: "/livox/lidar"
+    imu_topic: "/livox/imu"
+    methods:
+      - label: "gn10_3d2d"
+        type: "gn10"
+        map_type: "json"
+        map_file: "map/nhk2026_map.json"
+        params:
+          lidar_2d.enable: true
+          lidar_2d.deskew: true
+      - label: "gn10_3d_only"
+        type: "gn10"
+        map_type: "json"
+        map_file: "map/nhk2026_map.json"
+        params:
+          lidar_2d.enable: false
+      - label: "gn10_pcd_esdf_3d"
+        type: "gn10"
+        map_type: "esdf"
+        map_file: "~/external_datasets/unity_nhk_scanned_map.esdf"
+        params:
+          lidar_2d.enable: false
+      - label: "lidar_loc_ndt_noimu"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "NDT_OMP"
+          ndt_resolution: 0.5
+          ndt_step_size: 0.1
+          ndt_num_threads: 4
+          ndt_max_iterations: 35
+          score_threshold: 50.0
+          voxel_leaf_size: 0.15
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          use_odom: false
+          use_imu_preintegration: false
+          predict_pose_from_previous_delta: true
+          use_continuous_time_deskew: false
+          enable_map_odom_tf: true
+      - label: "lidar_loc_ndt_omp"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "NDT_OMP"
+          ndt_resolution: 0.8
+          ndt_step_size: 0.1
+          ndt_num_threads: 4
+          ndt_max_iterations: 35
+          score_threshold: 25.0
+          voxel_leaf_size: 0.15
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          use_odom: false
+          use_imu_preintegration: true
+          imu_accel_scale: 9.81
+          imu_preintegration_use_base_frame_transform: true
+          use_continuous_time_deskew: false
+          enable_map_odom_tf: true
+      - label: "lidar_loc_gicp_omp"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "GICP_OMP"
+          gicp_corr_randomness: 20
+          gicp_max_correspondence_distance: 2.0
+          score_threshold: 25.0
+          voxel_leaf_size: 0.15
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          use_odom: false
+          use_imu_preintegration: true
+          imu_accel_scale: 9.81
+          imu_preintegration_use_base_frame_transform: true
+          use_continuous_time_deskew: false
+          enable_map_odom_tf: true
+      - label: "dll"
+        type: "dll"
+        map_file: "~/external_datasets/nhk2026_cad_floor_zpad.bt"
+        shift_xyz: [-5.45, -5.85, -1.0]
+        params:
+          use_imu: false
+          align_method: 1
+          update_rate: 20.0
+          update_min_time: 0.04
+          update_min_d: 0.01
+          update_min_a: 0.01
+          solver_max_iter: 75
+          solver_max_threads: 4
+      - label: "kiss_icp"
+        type: "kiss_icp"
+        min_range: 0.45
+        max_range: 20.0
+        voxel_size: 0.25
+
+  hdl_501_eval:
+    dataset: "hdl_501_eval"
+    offset_s: 0.0
+    duration_s: 45.0
+    rate: 1.0
+    cloud_topic: "/filtered_points"
+    imu_topic: "/imu/data"
+    methods:
+      - label: "gn10_3d_only"
+        type: "gn10"
+        map_type: "esdf"
+        map_file: "~/external_datasets/hdl_501_map.esdf"
+        params:
+          lidar_2d.enable: false
+          filter_params.voxel_size: 0.08
+          matching_params.robust_loss_type: 1
+          matching_params.robust_loss_sigma: 0.08
+      - label: "lidar_loc_ndt_omp"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/hdl_501_map.pcd"
+        params:
+          registration_method: "NDT_OMP"
+          ndt_resolution: 1.0
+          ndt_step_size: 0.1
+          ndt_num_threads: 4
+          ndt_max_iterations: 35
+          score_threshold: 25.0
+          voxel_leaf_size: 0.15
+          scan_min_range: 0.40
+          scan_max_range: 18.0
+          use_odom: false
+          use_imu_preintegration: false
+          use_continuous_time_deskew: false
+          enable_map_odom_tf: true
+      - label: "lidar_loc_gicp_omp"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/hdl_501_map.pcd"
+        params:
+          registration_method: "GICP_OMP"
+          gicp_corr_randomness: 20
+          gicp_max_correspondence_distance: 2.0
+          score_threshold: 25.0
+          voxel_leaf_size: 0.15
+          scan_min_range: 0.40
+          scan_max_range: 18.0
+          use_odom: false
+          use_imu_preintegration: false
+          use_continuous_time_deskew: false
+          enable_map_odom_tf: true
+      - label: "dll"
+        type: "dll"
+        map_file: "~/external_datasets/hdl_501_map.bt"
+        shift_xyz: [-12.16, -18.0, 0.08]
+        params:
+          use_imu: false
+          align_method: 1
+          update_rate: 20.0
+          update_min_time: 0.04
+          update_min_d: 0.01
+          update_min_a: 0.01
+          solver_max_iter: 75
+          solver_max_threads: 4
+      - label: "kiss_icp"
+        type: "kiss_icp"
+        min_range: 0.40
+        max_range: 18.0
+        voxel_size: 0.30
+
+  national_human_3d:
+    dataset: "national_clean"
+    offset_s: 120.0
+    duration_s: 60.0
+    rate: 1.0
+    cloud_topic: "/livox/lidar"
+    imu_topic: "/livox/imu"
+    methods:
+      - label: "gn10_3d2d"
+        type: "gn10"
+        map_type: "json"
+        map_file: "map/nhk2026_map.json"
+        params:
+          lidar_2d.enable: true
+          lidar_2d.deskew: true
+      - label: "gn10_3d_only"
+        type: "gn10"
+        map_type: "json"
+        map_file: "map/nhk2026_map.json"
+        params:
+          lidar_2d.enable: false
+      - label: "lidar_loc_ndt_noimu"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "NDT_OMP"
+          ndt_resolution: 0.5
+          ndt_step_size: 0.1
+          ndt_num_threads: 4
+          ndt_max_iterations: 35
+          score_threshold: 50.0
+          voxel_leaf_size: 0.15
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          use_odom: false
+          use_imu_preintegration: false
+          predict_pose_from_previous_delta: true
+          use_continuous_time_deskew: false
+          enable_map_odom_tf: true
+      - label: "lidar_loc_ndt_omp"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "NDT_OMP"
+          ndt_resolution: 0.8
+          ndt_step_size: 0.1
+          ndt_num_threads: 4
+          ndt_max_iterations: 35
+          score_threshold: 25.0
+          voxel_leaf_size: 0.15
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          use_odom: false
+          use_imu_preintegration: true
+          imu_accel_scale: 9.81
+          imu_preintegration_use_base_frame_transform: true
+          use_continuous_time_deskew: false
+          enable_map_odom_tf: true
+      - label: "dll"
+        type: "dll"
+        map_file: "~/external_datasets/nhk2026_cad_floor_zpad.bt"
+        shift_xyz: [-5.45, -5.85, -1.0]
+        params:
+          use_imu: false
+          align_method: 1
+          update_rate: 20.0
+          update_min_time: 0.04
+          update_min_d: 0.01
+          update_min_a: 0.01
+          solver_max_iter: 75
+          solver_max_threads: 4
+      - label: "kiss_icp"
+        type: "kiss_icp"
+        min_range: 0.45
+        max_range: 20.0
+        voxel_size: 0.25
+
+global_search_suites:
+  unity_nhk_gs:
+    dataset: "unity_nhk_dynamic_clean"
+    manifest: "benchmarks/manifests/unity_gt_scenarios.yaml"
+    map_pcd: "~/external_datasets/unity_nhk_scanned_map.pcd"
+    min_res: 0.15
+    max_level: 4
+    score_thresh_pct: 0.30
+    timeout_ms: 2000
+    rp_deg: 0.0
+    src_voxel: 0.05
+    min_z_filter: 0.05
+    robot_radius: 0.45
+  national_n21_gs:
+    dataset_in: "national_clean"
+    dataset_full: "national_full"
+    manifest: "benchmarks/manifests/n21_scenarios.yaml"
+    map_pcd: "~/external_datasets/nhk2026_cad_nofloor.pcd"
+    min_res: 0.15
+    max_level: 4
+    score_thresh_pct: 0.30
+    timeout_ms: 2000
+    rp_deg: 0.0
+    src_voxel: 0.05
+    min_z_filter: 0.05
+    robot_radius: 0.45
