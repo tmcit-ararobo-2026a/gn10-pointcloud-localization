@@ -47,7 +47,9 @@ bool launchESDFMatcher(
     float* out_cost_3d       = nullptr,
     float* out_cost_2d       = nullptr,
     std::vector<float>* out_all_costs = nullptr,
-    int point_stride         = 1
+    int point_stride         = 1,
+    int robust_loss_type     = 0,
+    float robust_loss_sigma  = 0.08f
 );
 
 #ifdef __cplusplus

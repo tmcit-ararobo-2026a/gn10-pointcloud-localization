@@ -56,6 +56,7 @@
       robot_height_min: 0.0             # Robot self-filter minimum height Z [m]
       robot_height_max: 1.2             # Robot self-filter maximum height Z [m]
       ground_z_thresh: 0.06             # Ground classification threshold Z [m] (points <= 0.06 m are floor)
+      voxel_size: 0.08                  # 3D voxel centroid equalization edge length [m] (<= 0 disables)
       max_points: 200000                # Maximum point buffer capacity on GPU
 
     # =========================================================================
@@ -95,6 +96,8 @@
       min_2d_points: 30                 # Minimum valid 2D LiDAR points required to activate 2D matching
       target_2d_points: 200             # Reference 2D point count for full FoV scaling (fov_scale = min(1, N_2d/200))
       min_3d_points: 50                 # Minimum 3D obstacle points required to activate 3D matching
+      robust_loss_type: 1               # Per-point ESDF robust loss: 0=Clipped L1, 1=Welsch, 2=Cauchy
+      robust_loss_sigma: 0.06           # Scale parameter sigma [m] for Welsch/Cauchy robust loss
       dynamic_yaw_expansion: false      # Dynamically widen search_range_yaw during fast rotation
       dynamic_yaw_omega_thresh: 0.5     # Angular velocity threshold |omega_z| [rad/s] to start yaw window expansion
       dynamic_yaw_factor: 0.5           # Scaling factor [s]: expanded_yaw = range_yaw + (|omega_z| - omega_thresh) * factor
@@ -133,7 +136,6 @@
       recovery_yaw_diff: 0.40           # Restricted yaw half-range [rad] when IMU heading prior is valid (< 2.0 s)
       step_xy: 0.30                     # Global coarse XY grid step [m]
       step_yaw: 0.3                     # Global coarse yaw grid step [rad]
-      downsample_stride: 2              # Point cloud decimation stride during global search
       top_k_candidates: 4               # Number of spatially separated Top-K coarse peaks to fine-refine
       uniqueness_ratio: 0.960           # Top-1/Top-2 margin threshold for borderline global matches (1.0 disables)
       verify_frames: 3                  # Consecutive frames required to confirm borderline global recovery candidates

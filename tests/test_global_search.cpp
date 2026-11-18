@@ -36,7 +36,6 @@ void testGlobalSearchDownsampledThreshold()
     search_cfg.range_max_y       = 1.0f;
     search_cfg.step_xy           = 0.25f;
     search_cfg.step_yaw          = 0.25f;
-    search_cfg.downsample_stride = 2;
     search_cfg.top_k_candidates  = 2;
     // Featureless single flat wall has shift-invariant cost along Y; disable uniqueness here.
     search_cfg.uniqueness_ratio  = 1.0f;
@@ -70,8 +69,7 @@ void testGlobalSearchDownsampledThreshold()
         0.0f, 0.0f, 1.0f, 0.0f
     };
 
-    // 1. 250 full-res 3D points with stride=2 -> 125 downsampled points >= (200 / 2 = 100).
-    // Must NOT abort (previously aborted because 125 <= 200).
+    // 1. 250 3D points >= min_3d_points (200). Must NOT abort.
     std::vector<float> cloud_250;
     cloud_250.reserve(250 * 3);
     for (int i = 0; i < 250; ++i) {
@@ -87,8 +85,7 @@ void testGlobalSearchDownsampledThreshold()
     assert(best_cost < match_params.cost_threshold_3d);
     assert(std::abs(pose.x) < 0.2f);
 
-    // 2. 100 full-res 3D points with stride=2 -> 50 downsampled points < 100, and no 2D points.
-    // Must abort cleanly.
+    // 2. 100 3D points < min_3d_points (200), and no 2D points. Must abort cleanly.
     std::vector<float> cloud_100(cloud_250.begin(), cloud_250.begin() + 100 * 3);
     best_cost = 0.0f;
     searcher.search(
@@ -96,7 +93,7 @@ void testGlobalSearchDownsampledThreshold()
     );
     assert(best_cost == std::numeric_limits<float>::max());
 
-    // 3. Same 100 3D points (50 downsampled < 100), but 60 2D points (>= min_2d_points=50).
+    // 3. Same 100 3D points (< 200), but 60 2D points (>= min_2d_points=50).
     // Must NOT abort and should find a low-cost pose using 2D coverage.
     std::vector<float> cloud_2d;
     cloud_2d.reserve(60 * 3);
@@ -155,7 +152,6 @@ void testGlobalSearchUniquenessCheck()
     search_cfg.range_max_y       = 3.0f;
     search_cfg.step_xy           = 0.25f;
     search_cfg.step_yaw          = 0.15f;
-    search_cfg.downsample_stride = 1;
     search_cfg.top_k_candidates  = 4;
     search_cfg.uniqueness_ratio  = 0.95f;
 

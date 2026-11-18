@@ -40,7 +40,6 @@ LocalizationNode::LocalizationNode() : Node("gn10_localization_node")
     search_config.range_max_y       = global_range_max_y_;
     search_config.step_xy           = global_step_xy_;
     search_config.step_yaw          = global_step_yaw_;
-    search_config.downsample_stride = global_downsample_stride_;
     search_config.top_k_candidates  = global_top_k_candidates_;
     search_config.uniqueness_ratio  = global_uniqueness_ratio_;
 
@@ -99,6 +98,7 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("filter_params.robot_height_min", 0.0);
     this->declare_parameter("filter_params.robot_height_max", 1.2);
     this->declare_parameter("filter_params.ground_z_thresh", 0.08);
+    this->declare_parameter("filter_params.voxel_size", 0.08);
     this->declare_parameter("filter_params.max_points", 200000);
     this->declare_parameter("scan_accumulation.window_s", 0.10);
     this->declare_parameter("scan_accumulation.timestamp_field", "timestamp");
@@ -138,6 +138,8 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.min_inlier_ratio", 0.30);
     this->declare_parameter("matching_params.max_inlier_accept_cost", 0.22);
     this->declare_parameter("matching_params.weight_2d_lidar", 0.40);
+    this->declare_parameter("matching_params.robust_loss_type", 1);
+    this->declare_parameter("matching_params.robust_loss_sigma", 0.08);
     this->declare_parameter("matching_params.min_2d_points", 30);
     this->declare_parameter("matching_params.target_2d_points", 200);
     this->declare_parameter("matching_params.min_3d_points", 50);
@@ -168,7 +170,6 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("global_search.recovery_yaw_diff", 0.40);
     this->declare_parameter("global_search.step_xy", 0.30);
     this->declare_parameter("global_search.step_yaw", 0.2618);
-    this->declare_parameter("global_search.downsample_stride", 2);
     this->declare_parameter("global_search.top_k_candidates", 4);
     this->declare_parameter("global_search.uniqueness_ratio", 0.95);
     this->declare_parameter("global_search.verify_frames", 2);
@@ -197,6 +198,8 @@ void LocalizationNode::declareAndGetParameters()
         static_cast<float>(this->get_parameter("filter_params.robot_height_max").as_double());
     filter_params_.ground_z_thresh =
         static_cast<float>(this->get_parameter("filter_params.ground_z_thresh").as_double());
+    filter_params_.voxel_size =
+        static_cast<float>(this->get_parameter("filter_params.voxel_size").as_double());
 
     match_params_.range_xy =
         static_cast<float>(this->get_parameter("matching_params.search_range_xy").as_double());
@@ -249,6 +252,11 @@ void LocalizationNode::declareAndGetParameters()
     match_params_.target_2d_points =
         this->get_parameter("matching_params.target_2d_points").as_int();
     match_params_.min_3d_points = this->get_parameter("matching_params.min_3d_points").as_int();
+    match_params_.robust_loss_type =
+        static_cast<int>(this->get_parameter("matching_params.robust_loss_type").as_int());
+    match_params_.robust_loss_sigma = static_cast<float>(
+        this->get_parameter("matching_params.robust_loss_sigma").as_double()
+    );
     dynamic_yaw_expansion_ = this->get_parameter("matching_params.dynamic_yaw_expansion").as_bool();
     dynamic_yaw_omega_thresh_ = static_cast<float>(
         this->get_parameter("matching_params.dynamic_yaw_omega_thresh").as_double()
@@ -290,9 +298,6 @@ void LocalizationNode::declareAndGetParameters()
     global_step_xy_ = static_cast<float>(this->get_parameter("global_search.step_xy").as_double());
     global_step_yaw_ =
         static_cast<float>(this->get_parameter("global_search.step_yaw").as_double());
-    global_downsample_stride_ = std::max(
-        1, static_cast<int>(this->get_parameter("global_search.downsample_stride").as_int())
-    );
     global_top_k_candidates_ = std::max(
         1, static_cast<int>(this->get_parameter("global_search.top_k_candidates").as_int())
     );
@@ -371,7 +376,7 @@ void LocalizationNode::declareAndGetParameters()
         "2D LiDAR (enable=%s, deskew=%s, weight=%.2f, min_2d_pts=%d, tf_wait=%.3fs, time_offset=%.3fs), "
         "Dynamic yaw expansion (enable=%s, omega_thresh=%.2frad/s, factor=%.2fs, max=%.2frad), "
         "Velocity estimation (enable=%s, window=%.2fs, min_dt=%.2fs, max_dt=%.2fs, max_v=%.1fm/s), "
-        "Global search (step_xy=%.2fm, step_yaw=%.2frad, downsample=%d, lost_thresh=%d)",
+        "Global search (step_xy=%.2fm, step_yaw=%.2frad, lost_thresh=%d)",
         match_params_.range_xy,
         match_params_.range_yaw,
         match_params_.cost_threshold_3d,
@@ -394,7 +399,6 @@ void LocalizationNode::declareAndGetParameters()
         velocity_max_linear_,
         global_step_xy_,
         global_step_yaw_,
-        global_downsample_stride_,
         lost_threshold_count_
     );
 }
@@ -1192,6 +1196,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             }
             MatchingParams trial_match_params  = active_match_params;
             trial_match_params.cost_threshold_3d = global_cost_threshold_3d_;
+            trial_match_params.robust_loss_type  = 0;
             trial_match_params.range_xy *= 1.5f;
 
             const bool trial_matched = solver_->processPointCloud(
@@ -1271,6 +1276,7 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
         MatchingParams gs_match_params  = active_match_params;
         gs_match_params.cost_threshold_3d = global_cost_threshold_3d_;
+        gs_match_params.robust_loss_type  = 0;
 
         best_pose = global_searcher_->search(
             *solver_,
@@ -2196,7 +2202,6 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
                 return result;
             }
         } else if (
-            name == "global_search.downsample_stride" ||
             name == "global_search.lost_count_thresh" || name == "global_search.top_k_candidates" ||
             name == "global_search.verify_frames" || name == "matching_params.min_3d_points" ||
             name == "matching_params.min_2d_points" || name == "matching_params.target_2d_points" ||
@@ -2248,6 +2253,27 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             if (!std::isfinite(val) || val <= 0.0 || val > M_PI) {
                 result.successful = false;
                 result.reason     = "global_search.recovery_yaw_diff must be in (0.0, pi]";
+                return result;
+            }
+        } else if (name == "matching_params.robust_loss_type") {
+            const int loss_type = static_cast<int>(param.as_int());
+            if (loss_type < 0 || loss_type > 2) {
+                result.successful = false;
+                result.reason     = "matching_params.robust_loss_type must be in [0, 2]";
+                return result;
+            }
+        } else if (name == "matching_params.robust_loss_sigma") {
+            const double val = param.as_double();
+            if (!std::isfinite(val) || val <= 0.0) {
+                result.successful = false;
+                result.reason     = "matching_params.robust_loss_sigma must be > 0";
+                return result;
+            }
+        } else if (name == "filter_params.voxel_size") {
+            const double val = param.as_double();
+            if (!std::isfinite(val) || val < 0.0) {
+                result.successful = false;
+                result.reason     = "filter_params.voxel_size must be >= 0";
                 return result;
             }
         } else if (name == "lidar_2d.time_offset_sec") {
@@ -2316,6 +2342,10 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             match_params_.target_2d_points = static_cast<int>(param.as_int());
         } else if (name == "matching_params.min_3d_points") {
             match_params_.min_3d_points = static_cast<int>(param.as_int());
+        } else if (name == "matching_params.robust_loss_type") {
+            match_params_.robust_loss_type = static_cast<int>(param.as_int());
+        } else if (name == "matching_params.robust_loss_sigma") {
+            match_params_.robust_loss_sigma = static_cast<float>(param.as_double());
         } else if (name == "matching_params.dynamic_yaw_expansion") {
             dynamic_yaw_expansion_ = param.as_bool();
         } else if (name == "matching_params.dynamic_yaw_omega_thresh") {
@@ -2343,6 +2373,8 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             filter_params_.robot_height_max = static_cast<float>(param.as_double());
         } else if (name == "filter_params.ground_z_thresh") {
             filter_params_.ground_z_thresh = static_cast<float>(param.as_double());
+        } else if (name == "filter_params.voxel_size") {
+            filter_params_.voxel_size = static_cast<float>(param.as_double());
 
             // --- global_search ---
         } else if (name == "global_search.range_min_x") {
@@ -2367,9 +2399,6 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         } else if (name == "global_search.step_yaw") {
             global_step_yaw_         = static_cast<float>(param.as_double());
             update_global_search_cfg = true;
-        } else if (name == "global_search.downsample_stride") {
-            global_downsample_stride_ = static_cast<int>(param.as_int());
-            update_global_search_cfg  = true;
         } else if (name == "global_search.top_k_candidates") {
             global_top_k_candidates_ = static_cast<int>(param.as_int());
             update_global_search_cfg = true;
@@ -2432,7 +2461,6 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
         cfg.range_max_y        = global_range_max_y_;
         cfg.step_xy            = global_step_xy_;
         cfg.step_yaw           = global_step_yaw_;
-        cfg.downsample_stride  = global_downsample_stride_;
         cfg.top_k_candidates   = global_top_k_candidates_;
         cfg.uniqueness_ratio   = global_uniqueness_ratio_;
         global_searcher_->setConfig(cfg);

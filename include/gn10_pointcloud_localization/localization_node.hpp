@@ -114,7 +114,6 @@ private:
     float global_recovery_yaw_diff_{0.40f};
     float global_step_xy_{0.30f};
     float global_step_yaw_{0.2618f};
-    int global_downsample_stride_{2};
     int global_top_k_candidates_{4};
     float global_uniqueness_ratio_{0.95f};
     int global_verify_frames_{2};

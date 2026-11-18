@@ -26,6 +26,19 @@ PoseSolver::PoseSolver(int max_points) : max_points_(max_points)
     cudaMalloc(&d_obstacle_count_, sizeof(int));
     cudaMalloc(&d_transform_, 12 * sizeof(float));
 
+    // Power-of-two capacity >= max(65536, max_points_) for low-load-factor voxel hashing
+    int cap = 65536;
+    while (cap < max_points_) {
+        cap <<= 1;
+    }
+    voxel_hash_capacity_ = cap;
+    cudaMalloc(
+        &d_voxel_hash_keys_, static_cast<size_t>(voxel_hash_capacity_) * sizeof(unsigned long long)
+    );
+    cudaMalloc(&d_voxel_hash_sums_, static_cast<size_t>(voxel_hash_capacity_) * 3 * sizeof(float));
+    cudaMalloc(&d_voxel_hash_counts_, static_cast<size_t>(voxel_hash_capacity_) * sizeof(int));
+    cudaMalloc(&d_voxel_out_count_, sizeof(int));
+
     cudaMallocHost(&h_in_, max_points_ * 3 * sizeof(float));
     cudaMallocHost(&h_timed_in_, max_points_ * sizeof(TimedScanPoint));
 }
@@ -45,6 +58,10 @@ PoseSolver::~PoseSolver()
     cudaFree(d_ground_count_);
     cudaFree(d_obstacle_count_);
     cudaFree(d_transform_);
+    cudaFree(d_voxel_hash_keys_);
+    cudaFree(d_voxel_hash_sums_);
+    cudaFree(d_voxel_hash_counts_);
+    cudaFree(d_voxel_out_count_);
 
     cudaFreeHost(h_in_);
     cudaFreeHost(h_timed_in_);
@@ -184,8 +201,8 @@ float PoseSolver::computeEffectiveWeight2D(const MatchingParams& match_params) c
 
 int PoseSolver::computeCoarsePointStride() const
 {
-    if (num_3d_obstacles_ > 1500) {
-        return std::max(1, num_3d_obstacles_ / 1200);
+    if (num_3d_obstacles_ > 1000) {
+        return std::max(1, (num_3d_obstacles_ + 500) / 1000);
     }
     return 1;
 }
@@ -232,8 +249,8 @@ bool PoseSolver::matchObstacleCloud(
             int* step_inlier_count = nullptr;
             float* step_inlier_cost = nullptr;
             bool output_coarse_dynamic = false;
-            int coarse_point_stride = (active_3d_count > 1500)
-                                          ? std::max(1, active_3d_count / 1200)
+            int coarse_point_stride = (active_3d_count > 1000)
+                                          ? std::max(1, (active_3d_count + 500) / 1000)
                                           : 1;
             if (!match_params.fine_refine) {
                 step_inlier_count = &local_inliers;
@@ -276,7 +293,9 @@ bool PoseSolver::matchObstacleCloud(
                     (!match_params.fine_refine) ? out_c3d : nullptr,
                     (!match_params.fine_refine) ? out_c2d : nullptr,
                     nullptr,
-                    coarse_point_stride
+                    coarse_point_stride,
+                    match_params.robust_loss_type,
+                    match_params.robust_loss_sigma
                 );
             } else {
                 matched = launchFieldSDFMatcher(
@@ -349,7 +368,11 @@ bool PoseSolver::matchObstacleCloud(
                             active_2d_count,
                             weight_2d,
                             is_final_level ? out_c3d : nullptr,
-                            is_final_level ? out_c2d : nullptr
+                            is_final_level ? out_c2d : nullptr,
+                            nullptr,
+                            1,
+                            match_params.robust_loss_type,
+                            match_params.robust_loss_sigma
                         );
                     } else {
                         matched = launchFieldSDFMatcher(
@@ -606,6 +629,24 @@ int PoseSolver::prepareObstacleCloud(
         cudaStreamSynchronize(stream_);
         h_ground_count   = std::min(h_ground_count, max_points_);
         h_obstacle_count = std::min(h_obstacle_count, max_points_);
+        if (filter_params.voxel_size > 0.0f && h_obstacle_count > 0) {
+            int h_voxel_count = 0;
+            launchVoxelCentroidEqualization(
+                stream_,
+                d_obstacle_,
+                h_obstacle_count,
+                max_points_,
+                filter_params.voxel_size,
+                d_voxel_hash_keys_,
+                d_voxel_hash_sums_,
+                d_voxel_hash_counts_,
+                voxel_hash_capacity_,
+                d_voxel_out_count_,
+                &h_voxel_count
+            );
+            cudaStreamSynchronize(stream_);
+            h_obstacle_count = std::min(h_voxel_count, max_points_);
+        }
     }
     auto t_gf_end = std::chrono::high_resolution_clock::now();
     last_metrics_.time_ground_filter_ms =
@@ -692,6 +733,24 @@ int PoseSolver::prepareObstacleCloud(
         cudaStreamSynchronize(stream_);
         h_ground_count   = std::min(h_ground_count, max_points_);
         h_obstacle_count = std::min(h_obstacle_count, max_points_);
+        if (filter_params.voxel_size > 0.0f && h_obstacle_count > 0) {
+            int h_voxel_count = 0;
+            launchVoxelCentroidEqualization(
+                stream_,
+                d_obstacle_,
+                h_obstacle_count,
+                max_points_,
+                filter_params.voxel_size,
+                d_voxel_hash_keys_,
+                d_voxel_hash_sums_,
+                d_voxel_hash_counts_,
+                voxel_hash_capacity_,
+                d_voxel_out_count_,
+                &h_voxel_count
+            );
+            cudaStreamSynchronize(stream_);
+            h_obstacle_count = std::min(h_voxel_count, max_points_);
+        }
     }
     auto t_gf_end = std::chrono::high_resolution_clock::now();
     last_metrics_.time_ground_filter_ms =
@@ -807,7 +866,9 @@ bool PoseSolver::evaluateGlobalSDF(
             nullptr,
             nullptr,
             &all_costs,
-            coarse_point_stride
+            coarse_point_stride,
+            0,
+            match_params.robust_loss_sigma
         );
     } else {
         ok = launchFieldSDFMatcher(
@@ -941,7 +1002,9 @@ bool PoseSolver::evaluateGlobalSDF(
             nullptr,
             nullptr,
             nullptr,
-            coarse_point_stride
+            coarse_point_stride,
+            0,
+            match_params.robust_loss_sigma
         );
     }
 

@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <functional>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <vector>
@@ -17,7 +16,6 @@ struct GlobalSearchConfig {
     float range_max_y{5.70f};
     float step_xy{0.30f};
     float step_yaw{0.2618f};
-    int downsample_stride{2};
     int top_k_candidates{4};
     float uniqueness_ratio{0.95f};
 };
@@ -75,8 +73,7 @@ private:
     PoseCandidate runCoarseAndRefineSearch(
         PoseSolver& solver,
         const GlobalSearchConfig& config,
-        int coarse_obstacle_count,
-        const std::function<int()>& prepare_full_cloud,
+        int obstacle_count,
         const MatchingParams& match_params,
         float prior_yaw,
         float max_yaw_diff,

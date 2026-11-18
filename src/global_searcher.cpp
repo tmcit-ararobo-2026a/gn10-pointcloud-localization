@@ -9,16 +9,9 @@
 
 namespace {
 
-bool hasSufficientGlobalSearchPoints(
-    const PoseSolver& solver,
-    const MatchingParams& match_params,
-    int effective_stride,
-    int& out_min_coarse_3d
-)
+bool hasSufficientGlobalSearchPoints(const PoseSolver& solver, const MatchingParams& match_params)
 {
-    const int safe_stride = std::max(1, effective_stride);
-    out_min_coarse_3d     = std::max(20, match_params.min_3d_points / safe_stride);
-    return (solver.obstacleCount3D() >= out_min_coarse_3d) ||
+    return (solver.obstacleCount3D() >= match_params.min_3d_points) ||
            (solver.obstacleCount2D() >= match_params.min_2d_points);
 }
 
@@ -61,46 +54,28 @@ PoseCandidate GlobalSearcher::search(
     GlobalSearchConfig config = getConfig();
 
     const size_t total_points = h_raw_cloud.size() / 3;
-    int stride = config.downsample_stride;
-    if (stride < 1) {
-        stride = 1;
-    }
 
-    // Downsample raw 3D point cloud for coarse global grid search
-    std::vector<float> search_cloud;
-    search_cloud.reserve((total_points / stride) * 3);
-
-    for (size_t point_index = 0; point_index < total_points; point_index += stride) {
-        search_cloud.push_back(h_raw_cloud[point_index * 3 + 0]);
-        search_cloud.push_back(h_raw_cloud[point_index * 3 + 1]);
-        search_cloud.push_back(h_raw_cloud[point_index * 3 + 2]);
-    }
-
-    // Prepare 3D + 2D obstacle cloud on GPU for coarse evaluation
+    // Prepare 3D + 2D obstacle cloud on GPU (voxel-equalized when voxel_size > 0)
     int obstacle_count = solver.prepareObstacleCloud(
-        search_cloud, h_transform, filter_params, extra_base_link_points
+        h_raw_cloud, h_transform, filter_params, extra_base_link_points
     );
 
     RCLCPP_INFO(
         logger_,
-        "[GlobalSearch] Points Summary - Raw: %zu, Downsampled (stride=%d): %zu, Obstacles: %d (3D: %d, 2D: %d)",
+        "[GlobalSearch] Points Summary - Raw: %zu, Obstacles: %d (3D: %d, 2D: %d)",
         total_points,
-        stride,
-        search_cloud.size() / 3,
         obstacle_count,
         solver.obstacleCount3D(),
         solver.obstacleCount2D()
     );
 
-    int min_coarse_3d = 0;
-    if (!hasSufficientGlobalSearchPoints(solver, match_params, stride, min_coarse_3d)) {
+    if (!hasSufficientGlobalSearchPoints(solver, match_params)) {
         RCLCPP_WARN(
             logger_,
             "[GlobalSearch] Too few obstacle points (3D: %d < %d, 2D: %d < %d). Search aborted. "
-            "Consider reducing 'filter_params.robot_radius' or 'global_search.downsample_stride', "
-            "or check 'ground_z_thresh' / TF alignment.",
+            "Consider reducing 'filter_params.robot_radius' or check 'ground_z_thresh' / TF alignment.",
             solver.obstacleCount3D(),
-            min_coarse_3d,
+            match_params.min_3d_points,
             solver.obstacleCount2D(),
             match_params.min_2d_points
         );
@@ -112,11 +87,6 @@ PoseCandidate GlobalSearcher::search(
         solver,
         config,
         obstacle_count,
-        [&]() {
-            return solver.prepareObstacleCloud(
-                h_raw_cloud, h_transform, filter_params, extra_base_link_points
-            );
-        },
         match_params,
         prior_yaw,
         max_yaw_diff,
@@ -148,47 +118,35 @@ PoseCandidate GlobalSearcher::search(
     GlobalSearchConfig config = getConfig();
 
     const size_t total_points = timed_points.size();
-    int base_stride = stride;
-    if (base_stride < 1) {
-        base_stride = 1;
-    }
-    int downsample_factor = config.downsample_stride;
-    if (downsample_factor < 1) {
-        downsample_factor = 1;
-    }
-    int combined_stride = base_stride * downsample_factor;
+    const int base_stride     = std::max(1, stride);
 
-    // Prepare deskewed 3D + 2D obstacle cloud on GPU for coarse evaluation
+    // Prepare deskewed 3D + 2D obstacle cloud on GPU
     int obstacle_count = solver.prepareObstacleCloud(
         timed_points,
         h_transform,
         deskew_params,
         imu_samples,
-        combined_stride,
+        base_stride,
         filter_params,
         extra_base_link_points
     );
 
     RCLCPP_INFO(
         logger_,
-        "[GlobalSearch] Points Summary - Raw: %zu, Downsampled (stride=%d): %zu, Obstacles: %d (3D: %d, 2D: %d)",
+        "[GlobalSearch] Points Summary - Raw: %zu, Obstacles: %d (3D: %d, 2D: %d)",
         total_points,
-        combined_stride,
-        total_points / combined_stride,
         obstacle_count,
         solver.obstacleCount3D(),
         solver.obstacleCount2D()
     );
 
-    int min_coarse_3d = 0;
-    if (!hasSufficientGlobalSearchPoints(solver, match_params, combined_stride, min_coarse_3d)) {
+    if (!hasSufficientGlobalSearchPoints(solver, match_params)) {
         RCLCPP_WARN(
             logger_,
             "[GlobalSearch] Too few obstacle points (3D: %d < %d, 2D: %d < %d). Search aborted. "
-            "Consider reducing 'filter_params.robot_radius' or 'global_search.downsample_stride', "
-            "or check 'ground_z_thresh' / TF alignment.",
+            "Consider reducing 'filter_params.robot_radius' or check 'ground_z_thresh' / TF alignment.",
             solver.obstacleCount3D(),
-            min_coarse_3d,
+            match_params.min_3d_points,
             solver.obstacleCount2D(),
             match_params.min_2d_points
         );
@@ -200,17 +158,6 @@ PoseCandidate GlobalSearcher::search(
         solver,
         config,
         obstacle_count,
-        [&]() {
-            return solver.prepareObstacleCloud(
-                timed_points,
-                h_transform,
-                deskew_params,
-                imu_samples,
-                base_stride,
-                filter_params,
-                extra_base_link_points
-            );
-        },
         match_params,
         prior_yaw,
         max_yaw_diff,
@@ -223,8 +170,7 @@ PoseCandidate GlobalSearcher::search(
 PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
     PoseSolver& solver,
     const GlobalSearchConfig& config,
-    int coarse_obstacle_count,
-    const std::function<int()>& prepare_full_cloud,
+    int obstacle_count,
     const MatchingParams& match_params,
     float prior_yaw,
     float max_yaw_diff,
@@ -248,7 +194,7 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
 
     // Execute coarse global search and extract Top-K NMS candidates
     bool ok = solver.evaluateGlobalSDF(
-        coarse_obstacle_count,
+        obstacle_count,
         center_pose,
         range_x,
         range_y,
@@ -265,9 +211,6 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
         setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
-
-    // Prepare full-resolution obstacle cloud once on GPU for refining all Top-K candidates
-    const int full_obstacle_count = prepare_full_cloud();
 
     struct RefinedCandidate {
         PoseCandidate pose;
@@ -291,7 +234,7 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
         float cand_inlier_cost = 1.0f;
 
         bool matched = solver.matchObstacleCloud(
-            full_obstacle_count,
+            obstacle_count,
             match_params,
             coarse_candidate,
             dummy_dynamic,
