@@ -11,9 +11,9 @@ Successfully deployed for autonomous navigation and positioning in NHK Robocon 2
 ## 1. Overview & Key Features
 
 - GPU-accelerated self-localization optimized for Jetson Orin Nano.
-- Matches point clouds against a continuous Euclidean Signed Distance Field (ESDF) rather than point-to-point, providing clean extensibility and low computational overhead.
+- Matches point clouds against a continuous 3D Truncated Unsigned Surface Euclidean Distance Field (EDF; referred to as `ESDF` in parameter and file names) rather than point-to-point, providing clean extensibility and low computational overhead.
 - Evaluates distance queries in $\mathcal{O}(1)$ time per point via GPU 3D Texture Memory and hardware trilinear interpolation.
-- Supports automatic ESDF map generation from `.pcd` point clouds and `.json` CAD geometric definitions via a dedicated binary format.
+- Supports automatic map generation from `.pcd` point clouds and `.json` CAD geometric definitions via a dedicated `.esdf` binary format (stores raw IEEE 754 `float32` voxels capable of signed storage, while map generation and scan-matching evaluation use non-negative surface distances $d \in [0, d_{\max}]$ so solid obstacles do not pull points inward and thin walls `< resolution` or raw `.pcd` maps avoid sign-aliasing).
 - Built for ROS 2 Humble for straightforward integration across robotic projects.
 - Features real-time dynamic obstacle filtering that separates non-map objects and publishes them to `/dynamic_cloud`.
 - Instead of relying on odometry, the system performs high-speed matching against a static map; this minimizes systematic error bias and enables real-time position estimation within that static map.
@@ -23,13 +23,13 @@ https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
 ## 2. System Architecture & Localization Algorithm
 
 ```
-[3D LiDAR (Livox MID360)] ──> [ScanAccumulator (0.10s Deskew)] ──> [GroundFilter (CUDA)] ──> [3D Obstacle Cloud]
-                                                                                                     │
-[2D LiDAR (Lakibeam 1)]   ──> [LaserScanDeskew (Rot + Trans + Time Sync)] ─────────────────> [2D Obstacle Cloud]
-                                                                                                     │
-[IMU + EMA Velocity Extrapolation] ──────────────────────────────────────────────────────────>       ▼
-                                                                                    [ESDF Matcher (CUDA 3D Texture)]
-[3D ESDF Map (GPU Texture)] ─────────────────────────────────────────────────────────────────>       │
+[3D LiDAR (Livox MID360)] ──> [ScanAccumulator (0.10s Deskew)] ──> [GroundFilter + VoxelEqualization (CUDA)] ──> [3D Obstacle Cloud]
+                                                                                                                  │
+[2D LiDAR (Lakibeam 1)]   ──> [LaserScanDeskew (Rot + Trans + Time Sync)] ──────────────────────────────> [2D Obstacle Cloud]
+                                                                                                                  │
+[IMU + EMA Velocity Extrapolation] ─────────────────────────────────────────────────────────────────────>         ▼
+                                                                                     [EDF Matcher (CUDA 3D Texture + Welsch Loss)]
+[3D Distance Map (GPU Texture)] ────────────────────────────────────────────────────────────────────────>         │
       │                                                                                              ▼
       ▼ (Transient Local)                                                   [Anti-Oscillation 3D/2D Fallback & Gating]
 [ESDF Cloud (/esdf_map)]                                                                             │

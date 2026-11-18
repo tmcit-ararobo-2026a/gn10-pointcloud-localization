@@ -25,7 +25,7 @@ title **gn10-pointcloud-localization: 自己位置推定パイプライン全体
 start
 
 partition "0. マップ初期化 (`setupMapData`)" #ECEFF1 {
-    :フィールド形状 (`nhk2026_map.json` / `.pcd` / `.esdf`) を読み込み\n3D ESDF ボクセルグリッドを構築し **CUDA 3D Texture (`tex3D`)** へ転送;
+    :フィールド形状 (`nhk2026_map.json` / `.pcd` / `.esdf`) を読み込み\n3D 非負表面距離場 (Unsigned EDF; `.esdf` 記録形式は符号付き `float32` 対応) を構築し **CUDA 3D Texture (`tex3D`)** へ転送;
     note right
         **マップ・ESDF パラメータ (`esdf.*`)**
         * `map_source_type`: `"json"` | `"pcd"` | `"esdf"`

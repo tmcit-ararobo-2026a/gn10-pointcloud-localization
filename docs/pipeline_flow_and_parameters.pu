@@ -25,7 +25,7 @@ title **gn10-pointcloud-localization: End-to-End Pipeline & Parameter Reference*
 start
 
 partition "0. Map Initialization (`setupMapData`)" #ECEFF1 {
-    :Load Field Geometry (`nhk2026_map.json` / `.pcd` / `.esdf`)\nand generate 3D ESDF Voxel Grid + Upload to **CUDA 3D Texture (`tex3D`)**;
+    :Load Field Geometry (`nhk2026_map.json` / `.pcd` / `.esdf`)\nand generate 3D Distance Field (Unsigned Surface EDF, `float32` `.esdf` storage supports signed) + Upload to **CUDA 3D Texture (`tex3D`)**;
     note right
         **Map & ESDF Parameters (`esdf.*`)**
         * `map_source_type`: `"json"` | `"pcd"` | `"esdf"`

@@ -24,7 +24,7 @@ title **gn10-pointcloud-localization: Mathematical Cost Formulation & Anti-Oscil
 package "1. Per-Point Robust Residual Evaluation (`evaluateESDFKernel`)" #E3F2FD {
     rectangle "**Coordinate Transformation (`base_link` -> `map`)**\nFor candidate pose P_k = (r_x, r_y, r_yaw):\nw_x = cos(r_yaw) * l_x - sin(r_yaw) * l_y + r_x\nw_y = sin(r_yaw) * l_x + cos(r_yaw) * l_y + r_y\nw_z = l_z" as TF_EQ
 
-    rectangle "**Hardware Trilinear ESDF Lookup (`tex3D`) & Robust Loss (`evaluateRobustCost`)**\nd_i = tex3D(u, v, w)\nc_i = max_dist_thresh * (1 - exp(-0.5 * (d_i / sigma)^2))  [Welsch, local tracking, sigma=0.06m]\n  or min(d_i, max_dist_thresh)  [Clipped L1, global search & trial verification]" as CLIP_EQ
+    rectangle "**Hardware Trilinear Distance Lookup (`tex3D`) & Robust Loss (`evaluateRobustCost`)**\nd_i = tex3D(u, v, w) >= 0  (Unsigned Surface EDF evaluated in [0, max_dist]; .esdf binary stores float32)\nc_i = max_dist_thresh * (1 - exp(-0.5 * (d_i / sigma)^2))  [Welsch, local tracking, sigma=0.06m]\n  or min(d_i, max_dist_thresh)  [Clipped L1, global search & trial verification]" as CLIP_EQ
 
     TF_EQ -down-> CLIP_EQ
 }

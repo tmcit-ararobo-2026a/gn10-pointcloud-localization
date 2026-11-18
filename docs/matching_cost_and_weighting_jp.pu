@@ -24,7 +24,7 @@ title **gn10-pointcloud-localization: コスト評価の数理モデルと振動
 package "1. 点単位のロバスト残差評価 (`evaluateESDFKernel`)" #E3F2FD {
     rectangle "**座標変換 (`base_link` -> `map`)**\n候補姿勢 P_k = (r_x, r_y, r_yaw) に対して:\nw_x = cos(r_yaw) * l_x - sin(r_yaw) * l_y + r_x\nw_y = sin(r_yaw) * l_x + cos(r_yaw) * l_y + r_y\nw_z = l_z" as TF_EQ
 
-    rectangle "**ハードウェア三線形補間 ESDF 参照 (`tex3D`) とロバスト損失 (`evaluateRobustCost`)**\nd_i = tex3D(u, v, w)\nc_i = max_dist_thresh * (1 - exp(-0.5 * (d_i / sigma)^2))  [Welsch, ローカル追従, sigma=0.06m]\n  または min(d_i, max_dist_thresh)  [Clipped L1, グローバル探索・Trial検証]" as CLIP_EQ
+    rectangle "**ハードウェア三線形補間 距離場参照 (`tex3D`) とロバスト損失 (`evaluateRobustCost`)**\nd_i = tex3D(u, v, w) >= 0  (評価は非負表面距離 EDF [0, max_dist], .esdf 記録形式は符号付き float32 対応)\nc_i = max_dist_thresh * (1 - exp(-0.5 * (d_i / sigma)^2))  [Welsch, ローカル追従, sigma=0.06m]\n  または min(d_i, max_dist_thresh)  [Clipped L1, グローバル探索・Trial検証]" as CLIP_EQ
 
     TF_EQ -down-> CLIP_EQ
 }
