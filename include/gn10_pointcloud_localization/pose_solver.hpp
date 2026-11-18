@@ -32,6 +32,7 @@ struct GroundFilterParams {
     float robot_height_min{0.0f};
     float robot_height_max{1.2f};
     float ground_z_thresh{0.08f};
+    float voxel_size{0.0f};
 };
 
 struct MatchingParams {
@@ -59,6 +60,8 @@ struct MatchingParams {
     int min_2d_points{30};
     int target_2d_points{200};
     int min_3d_points{50};
+    int robust_loss_type{0};  // 0: Clipped L1, 1: Welsch, 2: Cauchy
+    float robust_loss_sigma{0.08f};
 
     /**
      * @brief Evaluates whether 3D and 2D LiDAR matching satisfies independent cost thresholds and
@@ -267,6 +270,10 @@ public:
     {
         return last_weight_2d_;
     }
+    int lastVoxelDroppedCount() const
+    {
+        return last_voxel_dropped_count_;
+    }
     void setLastCosts(float cost_3d, float cost_2d)
     {
         last_cost_3d_ = cost_3d;
@@ -287,6 +294,12 @@ private:
     float* d_transform_{nullptr};
     int* d_ground_count_{nullptr};
     int* d_obstacle_count_{nullptr};
+    unsigned long long* d_voxel_hash_keys_{nullptr};
+    float* d_voxel_hash_sums_{nullptr};
+    int* d_voxel_hash_counts_{nullptr};
+    int* d_voxel_out_count_{nullptr};
+    int* d_voxel_dropped_count_{nullptr};
+    int voxel_hash_capacity_{262144};
 
     // Host Pinned Memory
     float* h_in_{nullptr};
@@ -295,6 +308,7 @@ private:
     int obstacle_count_{0};
     int num_3d_obstacles_{0};
     int num_2d_obstacles_{0};
+    int last_voxel_dropped_count_{0};
     float last_cost_3d_{0.0f};
     float last_cost_2d_{0.0f};
     float last_weight_2d_{0.0f};

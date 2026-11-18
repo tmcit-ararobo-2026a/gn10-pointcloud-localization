@@ -68,6 +68,30 @@ __device__ inline float queryESDF(
     return tex3D<float>(tex, u, v, w);
 }
 
+/**
+ * @brief Evaluates per-point robust residual cost bounded in [0, max_dist_thresh].
+ *        loss_type: 0 = clipped L1, 1 = Welsch, 2 = Cauchy.
+ */
+__device__ inline float evaluateRobustCost(
+    float d, float max_dist_thresh, int robust_loss_type, float robust_loss_sigma
+)
+{
+    if (d >= max_dist_thresh) {
+        return max_dist_thresh;
+    }
+    if (robust_loss_type == 1 && robust_loss_sigma > 1e-5f) {
+        const float ratio = d / robust_loss_sigma;
+        return max_dist_thresh * (1.0f - expf(-0.5f * ratio * ratio));
+    }
+    if (robust_loss_type == 2 && robust_loss_sigma > 1e-5f) {
+        const float ratio     = d / robust_loss_sigma;
+        const float max_ratio = max_dist_thresh / robust_loss_sigma;
+        const float denom     = log1pf(max_ratio * max_ratio);
+        return (denom > 1e-6f) ? (max_dist_thresh * log1pf(ratio * ratio) / denom) : d;
+    }
+    return d;
+}
+
 // Residual evaluation kernel across all candidate poses using 3D Texture Memory (O(1) lookup).
 // Computes candidate pose directly from blockIdx.x via SearchGrid and broadcasts trigonometry
 // across the block to avoid redundant per-thread cosf/sinf evaluations.
@@ -85,7 +109,9 @@ __global__ void evaluateESDFKernel(
     float field_max_x,
     float field_min_y,
     float field_max_y,
-    int point_stride = 1
+    int point_stride       = 1,
+    int robust_loss_type   = 0,
+    float robust_loss_sigma = 0.08f
 )
 {
     int pose_idx = blockIdx.x;
@@ -130,7 +156,7 @@ __global__ void evaluateESDFKernel(
         if (wx >= field_min_x && wx <= field_max_x && wy >= field_min_y && wy <= field_max_y) {
             // O(1) 3D texture memory lookup with hardware trilinear interpolation
             float d = queryESDF(tex, c_esdf_header, wx, wy, wz);
-            cost_i = fminf(d, max_dist_thresh);
+            cost_i  = evaluateRobustCost(d, max_dist_thresh, robust_loss_type, robust_loss_sigma);
         }
 
         if (i < num_3d_points) {
@@ -229,7 +255,9 @@ __global__ void computeBestPoseMetricsESDFKernel(
     int* __restrict__ out_inlier_count,
     float* __restrict__ out_inlier_dist_sum,
     float* __restrict__ out_cost_3d_sum,
-    float* __restrict__ out_cost_2d_sum
+    float* __restrict__ out_cost_2d_sum,
+    int robust_loss_type    = 0,
+    float robust_loss_sigma = 0.08f
 )
 {
     __shared__ int s_count[256];
@@ -262,7 +290,7 @@ __global__ void computeBestPoseMetricsESDFKernel(
         float cost_i = max_dist_thresh;
         if (wx >= field_min_x && wx <= field_max_x && wy >= field_min_y && wy <= field_max_y) {
             float d = queryESDF(tex, c_esdf_header, wx, wy, wz);
-            cost_i = fminf(d, max_dist_thresh);
+            cost_i  = evaluateRobustCost(d, max_dist_thresh, robust_loss_type, robust_loss_sigma);
             if (d < inlier_dist_thresh && (num_3d_points == 0 || i < num_3d_points)) {
                 s_count[tid] += 1;
                 s_dist[tid] += d;
@@ -534,7 +562,9 @@ bool launchESDFMatcher(
     float* out_cost_3d,
     float* out_cost_2d,
     std::vector<float>* out_all_costs,
-    int point_stride
+    int point_stride,
+    int robust_loss_type,
+    float robust_loss_sigma
 )
 {
     if (num_points <= 0 || !g_esdf_loaded) return false;
@@ -593,7 +623,9 @@ bool launchESDFMatcher(
         field_max_x,
         field_min_y,
         field_max_y,
-        point_stride
+        point_stride,
+        robust_loss_type,
+        robust_loss_sigma
     );
 
     // CUB ArgMin
@@ -653,7 +685,9 @@ bool launchESDFMatcher(
             d_inlier_count,
             d_inlier_dist_sum,
             (out_cost_3d || out_cost_2d) ? d_cost_3d_sum : nullptr,
-            (out_cost_3d || out_cost_2d) ? d_cost_2d_sum : nullptr
+            (out_cost_3d || out_cost_2d) ? d_cost_2d_sum : nullptr,
+            robust_loss_type,
+            robust_loss_sigma
         );
         int h_count         = 0;
         float h_dist_sum    = 0.0f;

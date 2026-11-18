@@ -86,3 +86,35 @@ void launchGroundFilterWithDeskew(
     int* h_ground_count,
     int* h_obstacle_count
 );
+
+/**
+ * @brief Performs GPU-side 3D voxel centroid equalization on an obstacle point cloud
+ *        using an open-addressing hash table to eliminate near-field 1/r^2 density bias.
+ *
+ * @param stream CUDA stream for asynchronous execution.
+ * @param d_points Device buffer of XYZ points (modified in-place with equalized centroids).
+ * @param num_points Number of input obstacle points in d_points.
+ * @param max_points Capacity of d_points (in points).
+ * @param voxel_size Edge length of each 3D voxel [m]. Values <= 0.0f disable equalization.
+ * @param d_hash_keys Pre-allocated device buffer of hash_capacity keys.
+ * @param d_hash_sums Pre-allocated device buffer of hash_capacity * 3 coordinate sums.
+ * @param d_hash_counts Pre-allocated device buffer of hash_capacity point counts.
+ * @param hash_capacity Power-of-two capacity of the open-addressing hash table.
+ * @param d_out_count Device scalar int receiving compacted output point count.
+ * @param h_out_count Host scalar int receiving compacted output point count after sync.
+ */
+void launchVoxelCentroidEqualization(
+    cudaStream_t stream,
+    float* d_points,
+    int num_points,
+    int max_points,
+    float voxel_size,
+    unsigned long long* d_hash_keys,
+    float* d_hash_sums,
+    int* d_hash_counts,
+    int hash_capacity,
+    int* d_out_count,
+    int* h_out_count,
+    int* d_dropped_count = nullptr,
+    int* h_dropped_count = nullptr
+);

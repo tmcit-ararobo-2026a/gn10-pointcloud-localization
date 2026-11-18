@@ -4,7 +4,9 @@
 #include "gn10_pointcloud_localization/cuda/ground_filter.cuh"
 
 #include <cuda_runtime.h>
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 /**
  * @brief Standard Ground Filter CUDA kernel (without per-point deskew).
@@ -357,4 +359,177 @@ void launchGroundFilterWithDeskew(
     cudaMemcpyAsync(
         h_obstacle_count, d_obstacle_count, sizeof(int), cudaMemcpyDeviceToHost, stream
     );
+}
+
+namespace {
+
+constexpr unsigned long long kEmptyVoxelKey = 0xFFFFFFFFFFFFFFFFULL;
+constexpr int32_t kVoxelCoordBias           = 1 << 20;
+constexpr uint64_t kVoxelCoordMask          = 0x1FFFFFULL;  // 21 bits per axis (63 bits total)
+constexpr int kMaxVoxelHashProbes           = 1024;
+
+__device__ inline uint32_t hashVoxelKey(uint64_t key, uint32_t mask)
+{
+    key ^= key >> 33;
+    key *= 0xff51afd7ed558ccdULL;
+    key ^= key >> 33;
+    key *= 0xc4ceb9fe1a85ec53ULL;
+    key ^= key >> 33;
+    return static_cast<uint32_t>(key) & mask;
+}
+
+__global__ void accumulateVoxelCentroidsKernel(
+    const float* __restrict__ in_points,
+    int num_points,
+    float inv_voxel_size,
+    unsigned long long* __restrict__ hash_keys,
+    float* __restrict__ hash_sums,
+    int* __restrict__ hash_counts,
+    uint32_t hash_mask,
+    int* __restrict__ dropped_count
+)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_points) {
+        return;
+    }
+
+    const float x = in_points[idx * 3 + 0];
+    const float y = in_points[idx * 3 + 1];
+    const float z = in_points[idx * 3 + 2];
+    if (!isfinite(x) || !isfinite(y) || !isfinite(z)) {
+        return;
+    }
+
+    int32_t ix = static_cast<int32_t>(floorf(x * inv_voxel_size));
+    int32_t iy = static_cast<int32_t>(floorf(y * inv_voxel_size));
+    int32_t iz = static_cast<int32_t>(floorf(z * inv_voxel_size));
+
+    ix = max(-kVoxelCoordBias, min(kVoxelCoordBias - 1, ix));
+    iy = max(-kVoxelCoordBias, min(kVoxelCoordBias - 1, iy));
+    iz = max(-kVoxelCoordBias, min(kVoxelCoordBias - 1, iz));
+
+    const uint64_t key =
+        (static_cast<uint64_t>(ix + kVoxelCoordBias) & kVoxelCoordMask) |
+        ((static_cast<uint64_t>(iy + kVoxelCoordBias) & kVoxelCoordMask) << 21) |
+        ((static_cast<uint64_t>(iz + kVoxelCoordBias) & kVoxelCoordMask) << 42);
+
+    uint32_t slot = hashVoxelKey(key, hash_mask);
+    for (int probe = 0; probe < kMaxVoxelHashProbes; ++probe) {
+        const unsigned long long prev = atomicCAS(
+            &hash_keys[slot], kEmptyVoxelKey, static_cast<unsigned long long>(key)
+        );
+        if (prev == kEmptyVoxelKey || prev == static_cast<unsigned long long>(key)) {
+            atomicAdd(&hash_sums[slot * 3 + 0], x);
+            atomicAdd(&hash_sums[slot * 3 + 1], y);
+            atomicAdd(&hash_sums[slot * 3 + 2], z);
+            atomicAdd(&hash_counts[slot], 1);
+            return;
+        }
+        slot = (slot + 1U) & hash_mask;
+    }
+    if (dropped_count) {
+        atomicAdd(dropped_count, 1);
+    }
+}
+
+__global__ void compactVoxelCentroidsKernel(
+    const float* __restrict__ hash_sums,
+    const int* __restrict__ hash_counts,
+    int hash_capacity,
+    float* __restrict__ out_points,
+    int max_points,
+    int* __restrict__ out_count
+)
+{
+    const int slot = blockIdx.x * blockDim.x + threadIdx.x;
+    if (slot >= hash_capacity) {
+        return;
+    }
+
+    const int count = hash_counts[slot];
+    if (count > 0) {
+        const int out_idx = atomicAdd(out_count, 1);
+        if (out_idx < max_points) {
+            const float inv_count = 1.0f / static_cast<float>(count);
+            out_points[out_idx * 3 + 0] = hash_sums[slot * 3 + 0] * inv_count;
+            out_points[out_idx * 3 + 1] = hash_sums[slot * 3 + 1] * inv_count;
+            out_points[out_idx * 3 + 2] = hash_sums[slot * 3 + 2] * inv_count;
+        }
+    }
+}
+
+}  // namespace
+
+void launchVoxelCentroidEqualization(
+    cudaStream_t stream,
+    float* d_points,
+    int num_points,
+    int max_points,
+    float voxel_size,
+    unsigned long long* d_hash_keys,
+    float* d_hash_sums,
+    int* d_hash_counts,
+    int hash_capacity,
+    int* d_out_count,
+    int* h_out_count,
+    int* d_dropped_count,
+    int* h_dropped_count
+)
+{
+    if (num_points <= 0 || voxel_size <= 0.0f || hash_capacity <= 0 ||
+        (hash_capacity & (hash_capacity - 1)) != 0 ||
+        !d_points || !d_hash_keys || !d_hash_sums || !d_hash_counts ||
+        !d_out_count || !h_out_count) {
+        if (h_out_count) {
+            *h_out_count = num_points;
+        }
+        if (h_dropped_count) {
+            *h_dropped_count = 0;
+        }
+        return;
+    }
+
+    cudaMemsetAsync(
+        d_hash_keys, 0xFF, static_cast<size_t>(hash_capacity) * sizeof(unsigned long long), stream
+    );
+    cudaMemsetAsync(d_hash_sums, 0, static_cast<size_t>(hash_capacity) * 3 * sizeof(float), stream);
+    cudaMemsetAsync(d_hash_counts, 0, static_cast<size_t>(hash_capacity) * sizeof(int), stream);
+    cudaMemsetAsync(d_out_count, 0, sizeof(int), stream);
+    if (d_dropped_count) {
+        cudaMemsetAsync(d_dropped_count, 0, sizeof(int), stream);
+    }
+
+    const int threads_per_block = 256;
+    const int accum_blocks      = (num_points + threads_per_block - 1) / threads_per_block;
+    const uint32_t hash_mask    = static_cast<uint32_t>(hash_capacity - 1);
+    const float inv_voxel_size  = 1.0f / voxel_size;
+
+    accumulateVoxelCentroidsKernel<<<accum_blocks, threads_per_block, 0, stream>>>(
+        d_points,
+        num_points,
+        inv_voxel_size,
+        d_hash_keys,
+        d_hash_sums,
+        d_hash_counts,
+        hash_mask,
+        d_dropped_count
+    );
+
+    const int compact_blocks = (hash_capacity + threads_per_block - 1) / threads_per_block;
+    compactVoxelCentroidsKernel<<<compact_blocks, threads_per_block, 0, stream>>>(
+        d_hash_sums,
+        d_hash_counts,
+        hash_capacity,
+        d_points,
+        max_points,
+        d_out_count
+    );
+
+    cudaMemcpyAsync(h_out_count, d_out_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    if (d_dropped_count && h_dropped_count) {
+        cudaMemcpyAsync(h_dropped_count, d_dropped_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    } else if (h_dropped_count) {
+        *h_dropped_count = 0;
+    }
 }

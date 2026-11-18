@@ -210,6 +210,16 @@ if(BUILD_TESTING)
   target_compile_options(global_search_test PRIVATE -UNDEBUG)
   add_test(NAME global_search COMMAND global_search_test)
   set_tests_properties(global_search PROPERTIES SKIP_RETURN_CODE 77)
+
+  add_executable(voxel_and_robust_loss_test
+    tests/test_voxel_and_robust_loss.cpp
+    src/pose_solver.cpp
+  )
+  target_include_directories(voxel_and_robust_loss_test PRIVATE include)
+  target_link_libraries(voxel_and_robust_loss_test gn10_cuda_lib gn10_esdf_lib CUDA::cudart)
+  target_compile_options(voxel_and_robust_loss_test PRIVATE -UNDEBUG)
+  add_test(NAME voxel_and_robust_loss COMMAND voxel_and_robust_loss_test)
+  set_tests_properties(voxel_and_robust_loss PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # Export libraries for downstream packages
