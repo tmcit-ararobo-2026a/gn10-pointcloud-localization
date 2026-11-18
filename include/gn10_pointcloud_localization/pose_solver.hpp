@@ -270,6 +270,10 @@ public:
     {
         return last_weight_2d_;
     }
+    int lastVoxelDroppedCount() const
+    {
+        return last_voxel_dropped_count_;
+    }
     void setLastCosts(float cost_3d, float cost_2d)
     {
         last_cost_3d_ = cost_3d;
@@ -294,6 +298,7 @@ private:
     float* d_voxel_hash_sums_{nullptr};
     int* d_voxel_hash_counts_{nullptr};
     int* d_voxel_out_count_{nullptr};
+    int* d_voxel_dropped_count_{nullptr};
     int voxel_hash_capacity_{262144};
 
     // Host Pinned Memory
@@ -303,6 +308,7 @@ private:
     int obstacle_count_{0};
     int num_3d_obstacles_{0};
     int num_2d_obstacles_{0};
+    int last_voxel_dropped_count_{0};
     float last_cost_3d_{0.0f};
     float last_cost_2d_{0.0f};
     float last_weight_2d_{0.0f};

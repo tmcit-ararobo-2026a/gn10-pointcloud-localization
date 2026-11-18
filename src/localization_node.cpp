@@ -1493,6 +1493,19 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
         publishCloud(pub_dynamic_, out_header, dynamic_pts);
     }
 
+    const int voxel_dropped = solver_->lastVoxelDroppedCount();
+    if (voxel_dropped > 0) {
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            5000,
+            "[VoxelEqualization] Hash table probe limit exceeded; dropped %d points. "
+            "Consider increasing 'filter_params.voxel_size' (current: %.3f m).",
+            voxel_dropped,
+            active_filter_params.voxel_size
+        );
+    }
+
     if (telemetry_enable_ && pub_telemetry_) {
         gn10_pointcloud_localization::msg::LocalizationTelemetry telemetry;
         telemetry.header.stamp    = reference_stamp;

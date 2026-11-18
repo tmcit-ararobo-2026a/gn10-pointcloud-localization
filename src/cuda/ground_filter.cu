@@ -385,7 +385,8 @@ __global__ void accumulateVoxelCentroidsKernel(
     unsigned long long* __restrict__ hash_keys,
     float* __restrict__ hash_sums,
     int* __restrict__ hash_counts,
-    uint32_t hash_mask
+    uint32_t hash_mask,
+    int* __restrict__ dropped_count
 )
 {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -426,6 +427,9 @@ __global__ void accumulateVoxelCentroidsKernel(
             return;
         }
         slot = (slot + 1U) & hash_mask;
+    }
+    if (dropped_count) {
+        atomicAdd(dropped_count, 1);
     }
 }
 
@@ -468,7 +472,9 @@ void launchVoxelCentroidEqualization(
     int* d_hash_counts,
     int hash_capacity,
     int* d_out_count,
-    int* h_out_count
+    int* h_out_count,
+    int* d_dropped_count,
+    int* h_dropped_count
 )
 {
     if (num_points <= 0 || voxel_size <= 0.0f || hash_capacity <= 0 ||
@@ -477,6 +483,9 @@ void launchVoxelCentroidEqualization(
         !d_out_count || !h_out_count) {
         if (h_out_count) {
             *h_out_count = num_points;
+        }
+        if (h_dropped_count) {
+            *h_dropped_count = 0;
         }
         return;
     }
@@ -487,6 +496,9 @@ void launchVoxelCentroidEqualization(
     cudaMemsetAsync(d_hash_sums, 0, static_cast<size_t>(hash_capacity) * 3 * sizeof(float), stream);
     cudaMemsetAsync(d_hash_counts, 0, static_cast<size_t>(hash_capacity) * sizeof(int), stream);
     cudaMemsetAsync(d_out_count, 0, sizeof(int), stream);
+    if (d_dropped_count) {
+        cudaMemsetAsync(d_dropped_count, 0, sizeof(int), stream);
+    }
 
     const int threads_per_block = 256;
     const int accum_blocks      = (num_points + threads_per_block - 1) / threads_per_block;
@@ -500,7 +512,8 @@ void launchVoxelCentroidEqualization(
         d_hash_keys,
         d_hash_sums,
         d_hash_counts,
-        hash_mask
+        hash_mask,
+        d_dropped_count
     );
 
     const int compact_blocks = (hash_capacity + threads_per_block - 1) / threads_per_block;
@@ -514,4 +527,9 @@ void launchVoxelCentroidEqualization(
     );
 
     cudaMemcpyAsync(h_out_count, d_out_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    if (d_dropped_count && h_dropped_count) {
+        cudaMemcpyAsync(h_dropped_count, d_dropped_count, sizeof(int), cudaMemcpyDeviceToHost, stream);
+    } else if (h_dropped_count) {
+        *h_dropped_count = 0;
+    }
 }

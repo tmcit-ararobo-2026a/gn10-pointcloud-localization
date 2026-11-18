@@ -38,6 +38,7 @@ PoseSolver::PoseSolver(int max_points) : max_points_(max_points)
     cudaMalloc(&d_voxel_hash_sums_, static_cast<size_t>(voxel_hash_capacity_) * 3 * sizeof(float));
     cudaMalloc(&d_voxel_hash_counts_, static_cast<size_t>(voxel_hash_capacity_) * sizeof(int));
     cudaMalloc(&d_voxel_out_count_, sizeof(int));
+    cudaMalloc(&d_voxel_dropped_count_, sizeof(int));
 
     cudaMallocHost(&h_in_, max_points_ * 3 * sizeof(float));
     cudaMallocHost(&h_timed_in_, max_points_ * sizeof(TimedScanPoint));
@@ -62,6 +63,7 @@ PoseSolver::~PoseSolver()
     cudaFree(d_voxel_hash_sums_);
     cudaFree(d_voxel_hash_counts_);
     cudaFree(d_voxel_out_count_);
+    cudaFree(d_voxel_dropped_count_);
 
     cudaFreeHost(h_in_);
     cudaFreeHost(h_timed_in_);
@@ -565,6 +567,7 @@ int PoseSolver::prepareObstacleCloud(
     obstacle_count_   = 0;
     num_3d_obstacles_ = 0;
     num_2d_obstacles_ = 0;
+    last_voxel_dropped_count_ = 0;
     const bool has_extra = (extra_base_link_points != nullptr && !extra_base_link_points->empty());
     if (num_points > max_points_ || (num_points == 0 && !has_extra)) {
         return 0;
@@ -642,7 +645,9 @@ int PoseSolver::prepareObstacleCloud(
                 d_voxel_hash_counts_,
                 voxel_hash_capacity_,
                 d_voxel_out_count_,
-                &h_voxel_count
+                &h_voxel_count,
+                d_voxel_dropped_count_,
+                &last_voxel_dropped_count_
             );
             cudaStreamSynchronize(stream_);
             h_obstacle_count = std::min(h_voxel_count, max_points_);
@@ -690,6 +695,7 @@ int PoseSolver::prepareObstacleCloud(
     obstacle_count_   = 0;
     num_3d_obstacles_ = 0;
     num_2d_obstacles_ = 0;
+    last_voxel_dropped_count_ = 0;
     const bool has_extra = (extra_base_link_points != nullptr && !extra_base_link_points->empty());
     if (num_points > max_points_ || (num_points == 0 && !has_extra)) {
         return 0;
@@ -746,7 +752,9 @@ int PoseSolver::prepareObstacleCloud(
                 d_voxel_hash_counts_,
                 voxel_hash_capacity_,
                 d_voxel_out_count_,
-                &h_voxel_count
+                &h_voxel_count,
+                d_voxel_dropped_count_,
+                &last_voxel_dropped_count_
             );
             cudaStreamSynchronize(stream_);
             h_obstacle_count = std::min(h_voxel_count, max_points_);

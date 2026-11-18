@@ -114,5 +114,7 @@ void launchVoxelCentroidEqualization(
     int* d_hash_counts,
     int hash_capacity,
     int* d_out_count,
-    int* h_out_count
+    int* h_out_count,
+    int* d_dropped_count = nullptr,
+    int* h_dropped_count = nullptr
 );
