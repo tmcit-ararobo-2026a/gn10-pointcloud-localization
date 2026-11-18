@@ -19,8 +19,9 @@ from pathlib import Path
 import yaml
 import rosbag2_py
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
-from geometry_msgs.msg import PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from gn10_pointcloud_localization.msg import LocalizationTelemetry
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.serialization import deserialize_message
@@ -63,6 +64,8 @@ def load_reference_from_bag(bag_path: Path, ref_topic: str = "/platform_constrai
     reader = open_rosbag_reader(bag_path)
     metadata = reader.get_metadata()
     bag_duration_s = metadata.duration.nanoseconds * 1e-9
+    topic_types = {t.name: t.type for t in reader.get_all_topics_and_types()}
+    ref_type = topic_types.get(ref_topic, "geometry_msgs/msg/PoseWithCovarianceStamped")
 
     stamps = []
     poses = []
@@ -75,9 +78,17 @@ def load_reference_from_bag(bag_path: Path, ref_topic: str = "/platform_constrai
         if ts_first is None:
             ts_first = ts_ns
         if topic == ref_topic:
-            msg = deserialize_message(data, PoseWithCovarianceStamped)
-            p = msg.pose.pose.position
-            q = msg.pose.pose.orientation
+            if ref_type == "geometry_msgs/msg/PoseStamped":
+                msg = deserialize_message(data, PoseStamped)
+                pose_obj = msg.pose
+            elif ref_type == "nav_msgs/msg/Odometry":
+                msg = deserialize_message(data, Odometry)
+                pose_obj = msg.pose.pose
+            else:
+                msg = deserialize_message(data, PoseWithCovarianceStamped)
+                pose_obj = msg.pose.pose
+            p = pose_obj.position
+            q = pose_obj.orientation
             yaw = yaw_from_quat(q)
             header_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
             stamps.append(header_ns)
