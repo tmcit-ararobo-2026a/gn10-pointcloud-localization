@@ -118,3 +118,24 @@ python3 benchmarks/runners/run_ablation_suite.py \
   --suites hdl_501_pcd_esdf \
   --outdir benchmarks/results/hdl501
 ```
+
+## 7. External SOTA Baseline Comparisons (Step 4 & Step 5)
+
+To preserve strict `Apache-2.0` licensing inside `gn10-pointcloud-localization`, all external baseline repositories (`robotics-upo/dll` [BSD-3-Clause], `rsasaki0109/lidar_localization_ros2` + `ndt_omp_ros2` [BSD-2-Clause], `KOKIAOKI/3d_bbs` [MIT], and `octomap` [BSD]) are built outside this repository in `~/external_baselines_ws`. Generate `.pcd` / `.bt` maps and launch isolated localhost comparisons via `benchmarks/runners/run_baseline_compare.py` and `benchmarks/manifests/baselines.yaml`:
+
+```bash
+# Optional: sample CAD JSON geometry into PCD for external PCD/OctoMap baselines
+python3 benchmarks/tools/json_map_to_pcd.py \
+  map/nhk2026_map.json ~/external_datasets/nhk2026_cad_floor.pcd --include-floor
+
+# Trajectory tracking & CPU/RAM/power comparison (gn10, DLL, NDT_OMP, GICP_OMP, KISS-ICP)
+python3 benchmarks/runners/run_baseline_compare.py tracking \
+  --external-ws ~/external_baselines_ws \
+  --suites unity_physics_gt,hdl_501_eval \
+  --output-dir benchmarks/results/baseline_compare
+
+# Global localization & out-of-arena safety rejection (gn10 vs 3D-BBS GPU/CPU)
+python3 benchmarks/runners/run_baseline_compare.py global-compare \
+  --external-ws ~/external_baselines_ws \
+  --output-dir benchmarks/results/baseline_compare
+```
