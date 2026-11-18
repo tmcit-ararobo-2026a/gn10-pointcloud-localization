@@ -164,7 +164,9 @@ class SystemGPUMonitor:
         if m_cg:
             cpu_gpu_power_w = float(m_cg.group(1)) / 1000.0
 
-        m_temp = re.search(r'(?:GPU|tj)@([\d\.]+)C', line)
+        m_temp = re.search(r'gpu@([\d\.]+)C', line, re.IGNORECASE)
+        if not m_temp:
+            m_temp = re.search(r'tj@([\d\.]+)C', line, re.IGNORECASE)
         if m_temp:
             temp_c = float(m_temp.group(1))
 
