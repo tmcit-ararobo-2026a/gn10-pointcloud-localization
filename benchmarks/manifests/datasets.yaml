@@ -1,0 +1,32 @@
+# Copyright 2026 Gento Aiba and contributors
+# SPDX-License-Identifier: Apache-2.0
+# Dataset manifest describing ROS 2 bags and map configurations for benchmarking.
+
+datasets:
+  national_clean:
+    description: "Trimmed in-arena continuous run (0..287.5s) from national test run, zstd compressed"
+    default_bag_path: "~/rosbag_national_test_run_clean"
+    map_type: "json"
+    map_file: "map/nhk2026_map.json"
+    lidar_2d: true
+    ground_truth_kind: "pseudo_reference_platform_constraint"
+    has_out_of_arena: false
+
+  national_full:
+    description: "Full national test run including out-of-arena segments for Group C safety rejection tests"
+    default_bag_path: "~/rosbag_national_test_run"
+    map_type: "json"
+    map_file: "map/nhk2026_map.json"
+    lidar_2d: true
+    ground_truth_kind: "pseudo_reference_platform_constraint"
+    has_out_of_arena: true
+
+  jetson6_edited_clean:
+    description: "3-minute match with dynamic opponent robot tracking, zstd compressed"
+    default_bag_path: "~/rosbagjetson6_edited_clean"
+    map_type: "json"
+    map_file: "map/nhk2026_map.json"
+    lidar_2d: false
+    ground_truth_kind: "pseudo_reference_platform_constraint"
+    has_opponent_pose: true
+    has_out_of_arena: false

@@ -1,0 +1,31 @@
+# Copyright 2026 Gento Aiba and contributors
+# SPDX-License-Identifier: Apache-2.0
+# Declarative N=21 global search recovery and out-of-map safety rejection scenario manifest.
+
+scenarios:
+  # Group A: 3D-only cold start across varying time offsets and yaw perturbations
+  - {name: A1_3d_cold_t10_yaw0,   group: A_3D_Only,   offset: 10,  bag_duration: 5.0,  lidar_2d: false, initial_local_search: false, yaw_perturb: 0.0,   expected: recover}
+  - {name: A2_3d_cold_t20_yaw15,  group: A_3D_Only,   offset: 20,  bag_duration: 5.0,  lidar_2d: false, initial_local_search: false, yaw_perturb: 1.5,   expected: recover}
+  - {name: A3_3d_cold_t50_yaw31,  group: A_3D_Only,   offset: 50,  bag_duration: 5.0,  lidar_2d: false, initial_local_search: false, yaw_perturb: 3.1,   expected: recover}
+  - {name: A4_3d_cold_t80_yaw-12, group: A_3D_Only,   offset: 80,  bag_duration: 5.0,  lidar_2d: false, initial_local_search: false, yaw_perturb: -1.2,  expected: recover}
+  - {name: A5_3d_cold_t100_yaw05, group: A_3D_Only,   offset: 100, bag_duration: 5.0,  lidar_2d: false, initial_local_search: false, yaw_perturb: 0.5,   expected: recover}
+  - {name: A6_3d_cold_t150_yaw20, group: A_3D_Only,   offset: 150, bag_duration: 5.0,  lidar_2d: false, initial_local_search: false, yaw_perturb: 2.0,   expected: recover}
+  - {name: A7_3d_cold_t180_yaw03, group: A_3D_Only,   offset: 180, bag_duration: 5.0,  lidar_2d: false, initial_local_search: false, yaw_perturb: 0.3,   expected: recover}
+  - {name: A8_3d_cold_t220_yaw-25,group: A_3D_Only,   offset: 220, bag_duration: 5.0,  lidar_2d: false, initial_local_search: false, yaw_perturb: -2.5,  expected: recover}
+
+  # Group B: Hybrid 3D+2D cold start (B1-B4) and forced kidnap recovery (B5-B8)
+  - {name: B1_3d2d_cold_t26,      group: B_3D_2D,     offset: 26,  bag_duration: 5.0,  lidar_2d: true,  initial_local_search: false, yaw_perturb: 1.57,  expected: recover}
+  - {name: B2_3d2d_cold_t80,      group: B_3D_2D,     offset: 80,  bag_duration: 5.0,  lidar_2d: true,  initial_local_search: false, yaw_perturb: -1.57, expected: recover}
+  - {name: B3_3d2d_cold_t150,     group: B_3D_2D,     offset: 150, bag_duration: 5.0,  lidar_2d: true,  initial_local_search: false, yaw_perturb: 3.14,  expected: recover}
+  - {name: B4_3d2d_cold_t200,     group: B_3D_2D,     offset: 200, bag_duration: 5.0,  lidar_2d: true,  initial_local_search: false, yaw_perturb: 0.25,  expected: recover}
+  - {name: B5_3d2d_kidnap_t40,    group: B_3D_2D,     offset: 40,  bag_duration: 7.0,  lidar_2d: true,  initial_local_search: true,  init_x: 10.0, init_y: 10.0, yaw_perturb: 0.0,   expected: recover}
+  - {name: B6_3d2d_kidnap_t120,   group: B_3D_2D,     offset: 120, bag_duration: 7.0,  lidar_2d: true,  initial_local_search: true,  init_x: 10.0, init_y: 10.0, yaw_perturb: 0.1,   expected: recover}
+  - {name: B7_3d2d_kidnap_t180,   group: B_3D_2D,     offset: 180, bag_duration: 7.0,  lidar_2d: true,  initial_local_search: true,  init_x: 10.0, init_y: 10.0, yaw_perturb: -0.15, expected: recover}
+  - {name: B8_3d_kidnap_t240,     group: B_3D_2D,     offset: 240, bag_duration: 7.0,  lidar_2d: false, initial_local_search: true,  init_x: 10.0, init_y: 10.0, yaw_perturb: 0.05,  expected: recover}
+
+  # Group C: Out-of-arena & ambiguous false-recovery rejection + exit/re-entry (requires full bag >= 540s)
+  - {name: C1_out_arena_3d_t295,  group: C_Rejection, offset: 295, bag_duration: 8.0,  lidar_2d: false, initial_local_search: false, yaw_perturb: 0.0,   expected: reject, requires_out_of_arena: true}
+  - {name: C2_out_arena_2d_t295,  group: C_Rejection, offset: 295, bag_duration: 8.0,  lidar_2d: true,  initial_local_search: false, yaw_perturb: 0.0,   expected: reject, requires_out_of_arena: true}
+  - {name: C3_ambig_3d_t530,      group: C_Rejection, offset: 530, bag_duration: 10.0, lidar_2d: false, initial_local_search: false, yaw_perturb: 0.0,   expected: reject, requires_out_of_arena: true}
+  - {name: C4_ambig_2d_t530,      group: C_Rejection, offset: 530, bag_duration: 10.0, lidar_2d: true,  initial_local_search: false, yaw_perturb: 0.0,   expected: reject, requires_out_of_arena: true}
+  - {name: C5_track_out_in_t285,  group: C_TrackRec,  offset: 285, bag_duration: 22.0, lidar_2d: true,  initial_local_search: true,  yaw_perturb: 0.0,   expected: recover, requires_out_of_arena: true}

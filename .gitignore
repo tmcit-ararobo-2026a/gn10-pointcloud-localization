@@ -67,3 +67,14 @@ fp-info-cache
 # Python test artifacts
 __pycache__/
 .pytest_cache/
+
+# =============================================================================
+# Benchmark outputs & large rosbag datasets
+# =============================================================================
+benchmark_results/
+benchmarks/results/
+*.bag
+*.db3
+*.mcap
+*.esdf
+

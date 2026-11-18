@@ -14,6 +14,7 @@ endif()
 
 option(BUILD_RUNTIME_NODES "Build localization runtime nodes" ON)
 option(BUILD_GPU_NODES "Build CUDA matcher (CPU monitor can be built separately)" ${DEFAULT_BUILD_GPU_NODES})
+option(BUILD_BENCHMARKS "Build optional CUDA/CPU ESDF lookup microbenchmark binaries" OFF)
 
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 72 86 87 89)
@@ -224,6 +225,29 @@ endif()
 
 # Export libraries for downstream packages
 ament_export_libraries(gn10_cuda_lib gn10_esdf_lib)
+
+if(BUILD_BENCHMARKS)
+  add_executable(microbench_esdf_lookup
+    benchmarks/cpp/microbench_esdf_lookup.cu
+    src/map_loader.cpp
+  )
+  target_include_directories(microbench_esdf_lookup PRIVATE include)
+  ament_target_dependencies(microbench_esdf_lookup rclcpp)
+  target_link_libraries(microbench_esdf_lookup
+    gn10_esdf_lib
+    nlohmann_json::nlohmann_json
+    ${PCL_LIBRARIES}
+    OpenMP::OpenMP_CXX
+    CUDA::cudart
+  )
+  target_compile_options(microbench_esdf_lookup PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fopenmp,-Wno-pedantic>
+  )
+  install(TARGETS
+    microbench_esdf_lookup
+    RUNTIME DESTINATION lib/${PROJECT_NAME}
+  )
+endif()
 
 endif()
 endif()

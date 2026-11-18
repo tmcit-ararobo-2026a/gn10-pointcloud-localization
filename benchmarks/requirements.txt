@@ -1,0 +1,11 @@
+# Copyright 2026 Gento Aiba and contributors
+# SPDX-License-Identifier: Apache-2.0
+# Optional Python dependencies for benchmark execution and trajectory evaluation.
+# Note: All dependencies here are permissive (BSD/MIT/PSF) and kept outside runtime package.xml.
+
+numpy>=1.22
+pandas>=1.4
+matplotlib>=3.5
+scipy>=1.8
+pyyaml>=6.0
+psutil>=5.9

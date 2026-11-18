@@ -18,6 +18,7 @@ Outputs:
 import os
 import sys
 import time
+import json
 import subprocess
 import signal
 import threading
@@ -44,6 +45,7 @@ class SystemGPUMonitor:
         self.thread = None
         self.records = []
         self.target_pid = None
+        self._target_proc = None
 
         # Check GPU monitoring backend
         self.backend = "none"
@@ -57,6 +59,20 @@ class SystemGPUMonitor:
         if self.backend == "none" and (shutil.which("tegrastats") or os.path.exists("/usr/bin/tegrastats")):
             self.backend = "tegrastats"
             self.tegrastats_bin = shutil.which("tegrastats") or "/usr/bin/tegrastats"
+
+        self._tegra_lock = threading.Lock()
+        self._tegra_proc = None
+        self._tegra_thread = None
+        self._latest_tegra = {
+            'gpu_util_pct': np.nan,
+            'gpu_mem_used_mb': np.nan,
+            'gpu_mem_total_mb': np.nan,
+            'gpu_power_w': np.nan,
+            'gpu_temp_c': np.nan,
+            'cpu_gpu_power_w': np.nan,
+            'emc_util_pct': np.nan,
+        }
+        self._tegra_warned = False
 
     def find_target_pid(self):
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
@@ -115,81 +131,112 @@ class SystemGPUMonitor:
                 'gpu_temp_c': np.nan,
             }
 
-    def _query_tegrastats(self):
+    @staticmethod
+    def _parse_tegrastats_line(line):
+        gpu_util = np.nan
+        mem_used = np.nan
+        mem_total = np.nan
+        power_w = np.nan
+        cpu_gpu_power_w = np.nan
+        temp_c = np.nan
+        emc_util = np.nan
+
+        m_gpu = re.search(r'GR3D_FREQ\s+(\d+)%', line)
+        if m_gpu:
+            gpu_util = float(m_gpu.group(1))
+
+        m_emc = re.search(r'EMC_FREQ\s+(\d+)%', line)
+        if m_emc:
+            emc_util = float(m_emc.group(1))
+
+        m_ram = re.search(r'RAM\s+(\d+)/(\d+)MB', line)
+        if m_ram:
+            mem_used = float(m_ram.group(1))
+            mem_total = float(m_ram.group(2))
+
+        # Parse total board power (VDD_IN / POM_5V_IN) in mW
+        m_pow = re.search(r'(?:VDD_IN|POM_5V_IN)\s+(\d+)mW', line)
+        if m_pow:
+            power_w = float(m_pow.group(1)) / 1000.0
+
+        # Parse Orin compute rail (VDD_CPU_GPU_CV) in mW when reported
+        m_cg = re.search(r'VDD_CPU_GPU_CV\s+(\d+)mW', line)
+        if m_cg:
+            cpu_gpu_power_w = float(m_cg.group(1)) / 1000.0
+
+        m_temp = re.search(r'(?:GPU|tj)@([\d\.]+)C', line)
+        if m_temp:
+            temp_c = float(m_temp.group(1))
+
+        return {
+            'gpu_util_pct': gpu_util,
+            'gpu_mem_used_mb': mem_used,
+            'gpu_mem_total_mb': mem_total,
+            'gpu_power_w': power_w,
+            'gpu_temp_c': temp_c,
+            'cpu_gpu_power_w': cpu_gpu_power_w,
+            'emc_util_pct': emc_util,
+        }
+
+    def _tegra_reader_loop(self):
         try:
-            # Query one line of tegrastats
-            cmd = [self.tegrastats_bin, "--interval", "100"]
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-            out, _ = proc.communicate(timeout=0.4)
-            line = out.strip().splitlines()[0] if out else ""
+            self._tegra_proc = subprocess.Popen(
+                [self.tegrastats_bin, "--interval", "100"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+            )
+            while self.running and self._tegra_proc.stdout:
+                line = self._tegra_proc.stdout.readline()
+                if not line:
+                    if self._tegra_proc.poll() is not None:
+                        break
+                    continue
+                parsed = self._parse_tegrastats_line(line)
+                with self._tegra_lock:
+                    self._latest_tegra = parsed
+        except Exception as exc:
+            if not self._tegra_warned:
+                print(f"[!] Warning: tegrastats reader failed ({exc}); GPU metrics may be NaN.", file=sys.stderr)
+                self._tegra_warned = True
 
-            gpu_util = np.nan
-            mem_used = np.nan
-            mem_total = np.nan
-            power_w = np.nan
-            temp_c = np.nan
-
-            # Parse GR3D_FREQ (GPU compute util %)
-            m_gpu = re.search(r'GR3D_FREQ\s+(\d+)%', line)
-            if m_gpu:
-                gpu_util = float(m_gpu.group(1))
-
-            # Parse RAM (unified memory on Jetson)
-            m_ram = re.search(r'RAM\s+(\d+)/(\d+)MB', line)
-            if m_ram:
-                mem_used = float(m_ram.group(1))
-                mem_total = float(m_ram.group(2))
-
-            # Parse power (VDD_IN or POM_5V_IN in mW)
-            m_pow = re.search(r'(?:VDD_IN|POM_5V_IN)\s+(\d+)mW', line)
-            if m_pow:
-                power_w = float(m_pow.group(1)) / 1000.0
-
-            # Parse GPU temperature (GPU@XXC)
-            m_temp = re.search(r'GPU@([\d\.]+)C', line)
-            if m_temp:
-                temp_c = float(m_temp.group(1))
-
-            return {
-                'gpu_util_pct': gpu_util,
-                'gpu_mem_used_mb': mem_used,
-                'gpu_mem_total_mb': mem_total,
-                'gpu_power_w': power_w,
-                'gpu_temp_c': temp_c,
-            }
-        except Exception:
-            return {
-                'gpu_util_pct': np.nan,
-                'gpu_mem_used_mb': np.nan,
-                'gpu_mem_total_mb': np.nan,
-                'gpu_power_w': np.nan,
-                'gpu_temp_c': np.nan,
-            }
+    def _query_tegrastats(self):
+        with self._tegra_lock:
+            return dict(self._latest_tegra)
 
     def _monitor_loop(self):
         start_time = time.time()
         while self.running:
             now = time.time() - start_time
 
-            # Locate target process PID
+            # Locate target process PID and reuse Process instance so cpu_percent(interval=None) accumulates delta
             if self.target_pid is None or not psutil.pid_exists(self.target_pid):
                 self.target_pid = self.find_target_pid()
+                self._target_proc = None
+                if self.target_pid:
+                    try:
+                        self._target_proc = psutil.Process(self.target_pid)
+                        self._target_proc.cpu_percent(interval=None)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        self.target_pid = None
+                        self._target_proc = None
 
             proc_cpu = np.nan
             proc_rss_mb = np.nan
             proc_vms_mb = np.nan
             proc_threads = np.nan
 
-            if self.target_pid and psutil.pid_exists(self.target_pid):
+            if self._target_proc is not None:
                 try:
-                    p = psutil.Process(self.target_pid)
-                    proc_cpu = p.cpu_percent(interval=None)
-                    mem_info = p.memory_info()
+                    proc_cpu = self._target_proc.cpu_percent(interval=None)
+                    mem_info = self._target_proc.memory_info()
                     proc_rss_mb = mem_info.rss / (1024.0 * 1024.0)
                     proc_vms_mb = mem_info.vms / (1024.0 * 1024.0)
-                    proc_threads = p.num_threads()
+                    proc_threads = self._target_proc.num_threads()
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     self.target_pid = None
+                    self._target_proc = None
 
             sys_cpu_pct = psutil.cpu_percent(interval=None)
             sys_mem = psutil.virtual_memory()
@@ -213,11 +260,26 @@ class SystemGPUMonitor:
     def start(self):
         self.running = True
         self.records.clear()
+        if self.backend == "tegrastats":
+            self._tegra_thread = threading.Thread(target=self._tegra_reader_loop, daemon=True)
+            self._tegra_thread.start()
         self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self.thread.start()
 
     def stop(self):
         self.running = False
+        if self._tegra_proc is not None:
+            try:
+                self._tegra_proc.terminate()
+                self._tegra_proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    self._tegra_proc.kill()
+                except Exception:
+                    pass
+            self._tegra_proc = None
+        if self._tegra_thread and self._tegra_thread.is_alive():
+            self._tegra_thread.join(timeout=1.5)
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=2.0)
 
@@ -225,14 +287,28 @@ class SystemGPUMonitor:
         return pd.DataFrame(self.records)
 
 
-def run_benchmark_trial(bag_path, trial_duration_s=25.0, output_dir=Path("./benchmark_results"), trial_label="trial"):
+def run_benchmark_trial(
+    bag_path,
+    trial_duration_s=25.0,
+    output_dir=Path("./benchmark_results"),
+    trial_label="trial",
+    domain_id="77",
+    localhost_only=True,
+    lidar_2d=None,
+    extra_launch_args=None,
+):
+    bag_p = Path(bag_path).expanduser()
+    if not bag_p.exists():
+        raise FileNotFoundError(f"ROS 2 bag path does not exist: {bag_p}")
+
     output_dir.mkdir(parents=True, exist_ok=True)
     pipeline_csv = output_dir / f"{trial_label}_pipeline_metrics.csv"
     resource_csv = output_dir / f"{trial_label}_resource_metrics.csv"
+    validation_json = output_dir / f"{trial_label}_validation_report.json"
 
     print(f"\n========================================================")
     print(f"[*] Starting Benchmark Trial: {trial_label}")
-    print(f"[*] Bag: {bag_path}")
+    print(f"[*] Bag: {bag_p}")
     print(f"[*] Pipeline CSV: {pipeline_csv}")
     print(f"[*] Resource CSV: {resource_csv}")
     print(f"========================================================")
@@ -245,36 +321,70 @@ def run_benchmark_trial(bag_path, trial_duration_s=25.0, output_dir=Path("./benc
     monitor = SystemGPUMonitor(sample_interval_s=0.05)
     monitor.start()
 
-    # 3. Launch localization node with benchmark profiling enabled
+    # 3. Launch localization node with isolated local DDS and benchmark profiling enabled
     launch_cmd = [
         "ros2", "launch", "gn10_pointcloud_localization", "localization.launch.py",
         "use_sim_time:=true",
         "benchmark:=true",
         f"benchmark_csv:={pipeline_csv.resolve()}"
     ]
+    if lidar_2d is not None:
+        launch_cmd.append(f"lidar_2d:={'true' if lidar_2d else 'false'}")
+    if extra_launch_args:
+        launch_cmd.extend(extra_launch_args)
+
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    env["ROS_DOMAIN_ID"] = str(domain_id)
+    if localhost_only:
+        env["ROS_LOCALHOST_ONLY"] = "1"
 
-    launch_proc = subprocess.Popen(launch_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(3.0)  # Wait for ESDF map initialization
+    launch_proc = subprocess.Popen(
+        launch_cmd,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    time.sleep(3.5)  # Wait for ESDF map initialization
 
-    # 4. Play rosbag
+    # 4. Play rosbag locally inside own process group with SIGKILL fallback so shutdown never hangs
     bag_cmd = [
-        "timeout", str(int(trial_duration_s)),
-        "ros2", "bag", "play", str(bag_path), "--clock", "--disable-keyboard-controls"
+        "ros2", "bag", "play", str(bag_p), "--clock", "--disable-keyboard-controls"
     ]
-    print(f"[*] Playing rosbag for {trial_duration_s}s...")
-    bag_proc = subprocess.run(bag_cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"[*] Playing rosbag for {trial_duration_s}s (ROS_LOCALHOST_ONLY={env.get('ROS_LOCALHOST_ONLY', '0')}, DOMAIN={domain_id})...")
+    bag_proc = subprocess.Popen(
+        bag_cmd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        bag_proc.wait(timeout=float(trial_duration_s))
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(bag_proc.pid), signal.SIGINT)
+            bag_proc.wait(timeout=2.0)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(bag_proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
 
-    # 5. Stop monitoring and terminate node processes
+    # 5. Stop monitoring and terminate node processes cleanly
     print("[*] Benchmark run completed. Shutting down nodes...")
     monitor.stop()
 
-    launch_proc.send_signal(signal.SIGINT)
     try:
+        os.killpg(os.getpgid(launch_proc.pid), signal.SIGINT)
         launch_proc.wait(timeout=3.0)
-    except subprocess.TimeoutExpired:
-        launch_proc.kill()
+    except Exception:
+        try:
+            os.killpg(os.getpgid(launch_proc.pid), signal.SIGKILL)
+        except Exception:
+            pass
     subprocess.run(["pkill", "-9", "-f", "gn10_pointcloud_localization_node"], stderr=subprocess.DEVNULL)
 
     # 6. Save resource metrics CSV
@@ -282,13 +392,32 @@ def run_benchmark_trial(bag_path, trial_duration_s=25.0, output_dir=Path("./benc
     df_res.to_csv(resource_csv, index=False)
     print(f"[+] Saved system & GPU resource metrics: {len(df_res)} samples -> {resource_csv}")
 
-    # 7. Verify pipeline profiling CSV
+    # 7. Verify pipeline profiling CSV & write validation report
     if pipeline_csv.exists() and pipeline_csv.stat().st_size > 0:
         df_pipe = pd.read_csv(pipeline_csv)
         print(f"[+] Recorded pipeline profiling frames: {len(df_pipe)} frames -> {pipeline_csv}")
     else:
-        print(f"[!] Warning: Pipeline CSV was empty or not generated.")
+        print(f"[!] Error: Pipeline CSV was empty or not generated.", file=sys.stderr)
         df_pipe = pd.DataFrame()
+
+    valid_gpu = int(df_res['gpu_util_pct'].notna().sum()) if not df_res.empty and 'gpu_util_pct' in df_res else 0
+    lost_frames = int((df_pipe['is_lost'] != 0).sum()) if not df_pipe.empty and 'is_lost' in df_pipe else 0
+    validation = {
+        "trial_label": trial_label,
+        "bag_path": str(bag_p.resolve()),
+        "duration_s": float(trial_duration_s),
+        "gpu_monitor_backend": monitor.backend,
+        "pipeline_frames": int(len(df_pipe)),
+        "lost_frames": lost_frames,
+        "resource_samples": int(len(df_res)),
+        "valid_gpu_samples": valid_gpu,
+        "passed": bool(len(df_pipe) > 0),
+    }
+    if valid_gpu == 0 and len(df_res) > 0:
+        print(f"[!] Warning: 0 valid GPU telemetry samples collected (backend={monitor.backend}).", file=sys.stderr)
+    with open(validation_json, "w") as vf:
+        json.dump(validation, vf, indent=2)
+    print(f"[+] Saved validation report -> {validation_json}")
 
     return df_pipe, df_res
 
@@ -793,10 +922,13 @@ def main():
 
     # --- run: single trial ---
     run_parser = subparsers.add_parser("run", help="Run a single benchmark trial")
-    run_parser.add_argument("--bag", type=str, default="/home/gn10/rosbag2_2026_10_02-01_16_20", help="Path to ROS 2 bag")
+    run_parser.add_argument("--bag", type=str, required=True, help="Path to ROS 2 bag directory")
     run_parser.add_argument("--duration", type=float, default=25.0, help="Trial duration in seconds")
     run_parser.add_argument("--outdir", type=str, default="./benchmark_results", help="Output directory")
     run_parser.add_argument("--label", type=str, default="baseline", help="Trial label")
+    run_parser.add_argument("--domain-id", type=str, default="77", help="Isolated ROS_DOMAIN_ID")
+    run_parser.add_argument("--no-localhost-only", action="store_true", help="Disable ROS_LOCALHOST_ONLY=1")
+    run_parser.add_argument("--lidar-2d", type=str, choices=["true", "false"], default=None, help="Override lidar_2d.enable")
 
     # --- compare: two trial results ---
     cmp_parser = subparsers.add_parser("compare", help="Compare two trial results")
@@ -810,23 +942,31 @@ def main():
 
     # Backward compat: if no subcommand, act as 'run' with legacy flags
     if args.command is None:
-        # Re-parse with legacy arguments
         parser2 = argparse.ArgumentParser()
-        parser2.add_argument("--bag", type=str, default="/home/gn10/rosbag2_2026_10_02-01_16_20")
+        parser2.add_argument("--bag", type=str, required=True)
         parser2.add_argument("--duration", type=float, default=25.0)
         parser2.add_argument("--outdir", type=str, default="./benchmark_results")
         parser2.add_argument("--label", type=str, default="baseline")
+        parser2.add_argument("--domain-id", type=str, default="77")
+        parser2.add_argument("--no-localhost-only", action="store_true")
+        parser2.add_argument("--lidar-2d", type=str, choices=["true", "false"], default=None)
         args = parser2.parse_args()
         args.command = "run"
 
     if args.command == "run":
         out_dir = Path(args.outdir)
+        lidar_2d_val = None if args.lidar_2d is None else (args.lidar_2d == "true")
         df_pipe, df_res = run_benchmark_trial(
             bag_path=args.bag,
             trial_duration_s=args.duration,
             output_dir=out_dir,
-            trial_label=args.label
+            trial_label=args.label,
+            domain_id=args.domain_id,
+            localhost_only=not args.no_localhost_only,
+            lidar_2d=lidar_2d_val,
         )
+        if df_pipe.empty:
+            sys.exit(2)
         generate_publication_visualizations(df_pipe, df_res, output_dir=out_dir, prefix=args.label)
         df_summary = generate_markdown_and_latex_reports(df_pipe, df_res, output_dir=out_dir, prefix=args.label)
         print("\n[+] Benchmark Trial Completed Successfully!")
