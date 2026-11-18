@@ -111,10 +111,14 @@ private:
     float global_range_min_y_{-5.70f};
     float global_range_max_y_{5.70f};
     float global_range_yaw_diff_{0.785f};
+    float global_recovery_yaw_diff_{0.40f};
     float global_step_xy_{0.30f};
     float global_step_yaw_{0.2618f};
     int global_downsample_stride_{2};
     int global_top_k_candidates_{4};
+    float global_uniqueness_ratio_{0.95f};
+    int global_verify_frames_{2};
+    float global_cost_threshold_3d_{0.202f};
     int lost_threshold_count_{5};
     double global_search_interval_sec_{0.5};
     rclcpp::Time last_global_search_stamp_;
@@ -132,6 +136,12 @@ private:
     rclcpp::Time last_imu_stamp_;
     std::atomic<bool> imu_initialized_{false};
     std::atomic<bool> is_lost_{true};
+    bool has_heading_prior_{false};
+    int64_t last_yaw_integrated_ns_{0};
+    bool has_recovery_trial_{false};
+    PoseCandidate recovery_trial_pose_{};
+    rclcpp::Time recovery_trial_stamp_;
+    int recovery_trial_count_{0};
     int lost_frame_count_{0};
     std::atomic<float> latest_omega_z_{0.0f};
     Eigen::Matrix3d R_base_imu_{Eigen::Matrix3d::Identity()};

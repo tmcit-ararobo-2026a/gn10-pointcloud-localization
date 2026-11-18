@@ -8,8 +8,8 @@
         "c": false
     },
     "plantuml.exportFormat": "png",
-    "plantuml.exportOutDir": "docs/uml/",
-    "plantuml.diagramsRoot": "docs/uml/",
+    "plantuml.exportOutDir": "docs/",
+    "plantuml.diagramsRoot": "docs/",
     "plantuml.exportSubFolder": false,
     "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
     "C_Cpp.default.cppStandard": "c++17",
