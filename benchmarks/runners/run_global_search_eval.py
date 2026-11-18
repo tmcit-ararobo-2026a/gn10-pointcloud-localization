@@ -64,7 +64,9 @@ def run_scenario(sc, bag_path: Path, listener: EvalListener, ref_stamps, ref_pos
         "-p", f"initial_pose.yaw:={init_yaw:.4f}",
     ]
     if args.map_file:
-        launch_cmd.extend(["-p", f"map_file_path:={args.map_file}"])
+        launch_cmd.extend(["-p", f"map_file_path:={Path(args.map_file).expanduser().resolve()}"])
+    if args.map_type:
+        launch_cmd.extend(["-p", f"map_source_type:={args.map_type}"])
 
     log_f = tempfile.NamedTemporaryFile(mode="w+", suffix=".log", delete=False)
     node_proc = subprocess.Popen(
@@ -205,6 +207,8 @@ def main():
     parser.add_argument("--no-localhost-only", action="store_true", help="Disable ROS_LOCALHOST_ONLY=1")
     parser.add_argument("--params-file", default="", help="Optional parameter YAML override")
     parser.add_argument("--map-file", default="", help="Optional map path override")
+    parser.add_argument("--map-type", default="", help="Optional map source type (json/pcd/esdf)")
+    parser.add_argument("--ref-topic", default="/platform_constraint", help="Reference pose topic in bag")
     args = parser.parse_args()
 
     bag_path = Path(args.bag).expanduser().resolve()
@@ -223,7 +227,7 @@ def main():
     if not args.no_localhost_only:
         os.environ["ROS_LOCALHOST_ONLY"] = "1"
 
-    bag_data = load_reference_from_bag(bag_path)
+    bag_data = load_reference_from_bag(bag_path, ref_topic=args.ref_topic)
     bag_duration_s = bag_data["bag_duration_s"]
     ref_stamps = bag_data["stamps"]
     ref_poses = bag_data["poses"]

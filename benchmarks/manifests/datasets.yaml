@@ -30,3 +30,37 @@ datasets:
     ground_truth_kind: "pseudo_reference_platform_constraint"
     has_opponent_pose: true
     has_out_of_arena: false
+
+  unity_nhk_dynamic_clean:
+    description: "Unity 6 GPU-raycasted NHK2026 arena (motion-distorted Mid-360, 200Hz IMU, Lakibeam1, dynamic opponent) with exact physics GT"
+    default_bag_path: "~/rosbag_unity_nhk_dynamic_clean"
+    ref_topic: "/robot/ground_truth/pose"
+    map_type: "json"
+    map_file: "map/nhk2026_map.json"
+    lidar_2d: true
+    ground_truth_kind: "unity_physics_exact_gt"
+    has_opponent_pose: true
+    has_out_of_arena: false
+
+  hdl_501_eval:
+    description: "Public Toyohashi Bldg 501 indoor Velodyne sequence leveled to floor plane (no IMU, .pcd -> .esdf, KISS-ICP pseudo-GT)"
+    default_bag_path: "~/external_datasets/hdl_501_eval_ros2"
+    ref_topic: "/reference/pose"
+    play_topics: ["/filtered_points"]
+    remaps:
+      "/livox/lidar": "/filtered_points"
+    map_type: "esdf"
+    map_file: "~/external_datasets/hdl_501_map.esdf"
+    lidar_2d: false
+    ground_truth_kind: "pseudo_gt_kiss_icp"
+    params:
+      scan_accumulation.window_s: 0.0
+      filter_params.max_range: 18.0
+      filter_params.robot_radius: 0.40
+      filter_params.ground_z_thresh: 0.15
+      matching_params.cost_threshold_3d: 0.30
+      matching_params.max_inlier_accept_cost: 0.30
+      global_search.range_min_x: -18.0
+      global_search.range_max_x: 18.0
+      global_search.range_min_y: -18.0
+      global_search.range_max_y: 18.0

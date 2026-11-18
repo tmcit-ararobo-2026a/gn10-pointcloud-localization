@@ -1,0 +1,59 @@
+# Copyright 2026 Gento Aiba and contributors
+# SPDX-License-Identifier: Apache-2.0
+# Declarative external ground-truth & .pcd -> .esdf benchmark suites (Step 3).
+
+suites:
+  unity_physics_gt:
+    dataset: "unity_nhk_dynamic_clean"
+    offset_s: 0.0
+    duration_s: 36.5
+    rate: 1.0
+    initial_local_search: true
+    runs:
+      - label: "json_3d2d_deskew_on"
+        map_file: "map/nhk2026_map.json"
+        map_type: "json"
+        params:
+          lidar_2d.enable: true
+          lidar_2d.deskew: true
+      - label: "json_3d2d_deskew_off"
+        map_file: "map/nhk2026_map.json"
+        map_type: "json"
+        params:
+          lidar_2d.enable: true
+          lidar_2d.deskew: false
+      - label: "json_3d_only"
+        map_file: "map/nhk2026_map.json"
+        map_type: "json"
+        params:
+          lidar_2d.enable: false
+      - label: "pcd_to_esdf_3d2d"
+        map_file: "~/external_datasets/unity_nhk_scanned_map.esdf"
+        map_type: "esdf"
+        params:
+          lidar_2d.enable: true
+          lidar_2d.deskew: true
+      - label: "pcd_to_esdf_3d_only"
+        map_file: "~/external_datasets/unity_nhk_scanned_map.esdf"
+        map_type: "esdf"
+        params:
+          lidar_2d.enable: false
+
+  hdl_501_pcd_esdf:
+    dataset: "hdl_501_eval"
+    offset_s: 0.0
+    duration_s: 45.0
+    rate: 1.0
+    initial_local_search: true
+    runs:
+      - label: "hdl501_voxel_008_welsch"
+        params:
+          lidar_2d.enable: false
+          filter_params.voxel_size: 0.08
+          matching_params.robust_loss_type: 1
+          matching_params.robust_loss_sigma: 0.08
+      - label: "hdl501_no_voxel_l1"
+        params:
+          lidar_2d.enable: false
+          filter_params.voxel_size: 0.0
+          matching_params.robust_loss_type: 0

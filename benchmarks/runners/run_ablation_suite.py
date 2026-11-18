@@ -70,6 +70,7 @@ def run_single_ablation(
     suite_name: str,
     suite_cfg: dict,
     run_cfg: dict,
+    dataset_cfg: dict,
     bag_path: Path,
     bag_data: dict,
     listener: EvalListener,
@@ -109,6 +110,19 @@ def run_single_ablation(
         "-p", f"initial_pose.y:={y0:.4f}",
         "-p", f"initial_pose.yaw:={yaw0:.4f}",
     ]
+    map_file = run_cfg.get("map_file") or suite_cfg.get("map_file") or dataset_cfg.get("map_file")
+    map_type = run_cfg.get("map_type") or suite_cfg.get("map_type") or dataset_cfg.get("map_type")
+    if map_file:
+        mpath = Path(str(map_file)).expanduser()
+        if not mpath.is_absolute() and (REPO_ROOT / mpath).exists():
+            mpath = (REPO_ROOT / mpath).resolve()
+        launch_cmd.extend(["-p", f"map_file_path:={mpath}"])
+    if map_type:
+        launch_cmd.extend(["-p", f"map_source_type:={map_type}"])
+    for src_topic, dst_topic in (dataset_cfg.get("remaps") or {}).items():
+        launch_cmd.extend(["-r", f"{src_topic}:={dst_topic}"])
+    for k, v in (dataset_cfg.get("params") or {}).items():
+        launch_cmd.extend(["-p", f"{k}:={ros_param_str(v)}"])
     for k, v in (run_cfg.get("params") or {}).items():
         launch_cmd.extend(["-p", f"{k}:={ros_param_str(v)}"])
 
@@ -157,13 +171,14 @@ def run_single_ablation(
         listener.publish_static_tf()
         time.sleep(0.15)
 
+        play_topics = dataset_cfg.get("play_topics") or ["/livox/lidar", "/livox/imu", "/lakibeam/scan"]
         bag_cmd = [
             "ros2", "bag", "play", str(bag_path),
             "--clock",
             "-d", "0.5",
             "--rate", str(rate),
             "--start-offset", str(offset_s),
-            "--topics", "/livox/lidar", "/livox/imu", "/lakibeam/scan",
+            "--topics", *play_topics,
         ]
         bag_proc = subprocess.Popen(
             bag_cmd,
@@ -343,14 +358,17 @@ def main():
     bag_cache = {}
     for sname, scfg in suites.items():
         dkey = scfg["dataset"]
-        bpath_str = args.bag_override or datasets[dkey]["default_bag_path"]
+        dcfg = datasets[dkey]
+        bpath_str = args.bag_override or dcfg["default_bag_path"]
+        ref_topic = dcfg.get("ref_topic", "/platform_constraint")
         bpath = Path(bpath_str).expanduser().resolve()
         if not bpath.exists():
             print(f"Error: bag not found for suite '{sname}': {bpath}", file=sys.stderr)
             sys.exit(1)
-        if str(bpath) not in bag_cache:
-            print(f"[*] Indexing reference trajectory from {bpath} ...", flush=True)
-            bag_cache[str(bpath)] = (bpath, load_reference_from_bag(bpath))
+        cache_key = (str(bpath), ref_topic)
+        if cache_key not in bag_cache:
+            print(f"[*] Indexing reference trajectory ({ref_topic}) from {bpath} ...", flush=True)
+            bag_cache[cache_key] = (bpath, load_reference_from_bag(bpath, ref_topic=ref_topic))
 
     # Merge any static TF transforms from loaded bags
     all_static = []
@@ -371,11 +389,14 @@ def main():
     results = []
     try:
         for sname, scfg in suites.items():
-            bpath_str = args.bag_override or datasets[scfg["dataset"]]["default_bag_path"]
-            bpath, bdata = bag_cache[str(Path(bpath_str).expanduser().resolve())]
+            dcfg = datasets[scfg["dataset"]]
+            bpath_str = args.bag_override or dcfg["default_bag_path"]
+            ref_topic = dcfg.get("ref_topic", "/platform_constraint")
+            cache_key = (str(Path(bpath_str).expanduser().resolve()), ref_topic)
+            bpath, bdata = bag_cache[cache_key]
             for rcfg in scfg["runs"]:
                 print(f"[*] Running {sname} :: {rcfg['label']} ...", flush=True)
-                res = run_single_ablation(sname, scfg, rcfg, bpath, bdata, listener, out_dir, args)
+                res = run_single_ablation(sname, scfg, rcfg, dcfg, bpath, bdata, listener, out_dir, args)
                 print(f"    -> passed={res.get('passed')}, frames={res.get('frames_profiled')}, "
                       f"mean_ms={res.get('latency_total_mean_ms')}, xy_mean={res.get('xy_mean_m')}", flush=True)
                 results.append(res)

@@ -90,3 +90,31 @@ python3 benchmarks/runners/run_ablation_suite.py \
 ```
 
 Also record a pass under default DVFS (`jetson_clocks` OFF) to measure real-world `VDD_IN` board power (`[W]`) and energy per frame (`[mJ/frame]`) via `tegrastats`.
+
+## 6. External Ground-Truth & `.pcd -> .esdf` Benchmarks (Step 3)
+
+Run exact physics ground-truth suites (e.g. `robot-sim-unity` publishing `/robot/ground_truth/pose` as `geometry_msgs/msg/PoseStamped`) and `.pcd -> .esdf` converted indoor datasets (`external_gt_matrix.yaml`):
+
+```bash
+# Unity physics GT (JSON vs PCD->ESDF)
+python3 benchmarks/runners/run_ablation_suite.py \
+  --matrix benchmarks/manifests/external_gt_matrix.yaml \
+  --suites unity_physics_gt \
+  --outdir benchmarks/results/unity_gt
+
+# Unity cold-start & kidnap global search against exact physics GT
+python3 benchmarks/runners/run_global_search_eval.py \
+  --bag ~/rosbag_unity_nhk_dynamic_clean \
+  --ref-topic /robot/ground_truth/pose \
+  --manifest benchmarks/manifests/unity_gt_scenarios.yaml \
+  --map-file ~/external_datasets/unity_nhk_scanned_map.esdf \
+  --map-type esdf \
+  --rate 1.0 \
+  --out-json benchmarks/results/unity_gt/global_search_unity_esdf.json
+
+# External indoor Velodyne .pcd -> .esdf dataset (HDL-501 leveled floor sequence)
+python3 benchmarks/runners/run_ablation_suite.py \
+  --matrix benchmarks/manifests/external_gt_matrix.yaml \
+  --suites hdl_501_pcd_esdf \
+  --outdir benchmarks/results/hdl501
+```
