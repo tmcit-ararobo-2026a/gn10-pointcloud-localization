@@ -142,6 +142,37 @@ def run_scenario(sc, bag_path: Path, listener: EvalListener, ref_stamps, ref_pos
     trial_verified = len(re.findall(r"Trial verified", log_text))
     trial_rejected = len(re.findall(r"Trial rejected", log_text))
 
+    gs_total_ms = [
+        float(m.group(1))
+        for m in re.finditer(
+            r"\[GlobalSearch\].*?total:\s*([0-9]+(?:\.[0-9]+)?)\s*ms",
+            log_text,
+        )
+    ]
+    gs_coarse_ms = [
+        float(m.group(1))
+        for m in re.finditer(
+            r"\[GlobalSearch\].*?coarse:\s*([0-9]+(?:\.[0-9]+)?)\s*ms",
+            log_text,
+        )
+    ]
+    gs_refine_ms = [
+        float(m.group(1))
+        for m in re.finditer(
+            r"\[GlobalSearch\].*?refine:\s*([0-9]+(?:\.[0-9]+)?)\s*ms",
+            log_text,
+        )
+    ]
+    m_rec_search = re.search(
+        r"\[GlobalSearch\] Candidate entered trial verification.*?search:\s*([0-9]+(?:\.[0-9]+)?)\s*ms",
+        log_text,
+    )
+    if not m_rec_search:
+        m_rec_search = re.search(
+            r"\[GlobalSearch\] Successfully recovered from lost state\..*?search:\s*([0-9]+(?:\.[0-9]+)?)\s*ms",
+            log_text,
+        )
+
     pose_errors = []
     for stamp_ns, x, y, yaw in poses:
         (rx, ry, ryaw, _), dt = lookup_ref_by_stamp(ref_stamps, ref_poses, stamp_ns)
@@ -188,6 +219,12 @@ def run_scenario(sc, bag_path: Path, listener: EvalListener, ref_stamps, ref_pos
         "min_err_xy": round(min_err_xy, 4) if min_err_xy is not None else None,
         "false_jump_poses": false_jumps,
         "tracked_frames": len(tracked_frames),
+        "gs_search_samples": len(gs_total_ms),
+        "gs_search_mean_ms": round(sum(gs_total_ms) / len(gs_total_ms), 3) if gs_total_ms else None,
+        "gs_search_max_ms": round(max(gs_total_ms), 3) if gs_total_ms else None,
+        "gs_coarse_mean_ms": round(sum(gs_coarse_ms) / len(gs_coarse_ms), 3) if gs_coarse_ms else None,
+        "gs_refine_mean_ms": round(sum(gs_refine_ms) / len(gs_refine_ms), 3) if gs_refine_ms else None,
+        "gs_accepted_search_ms": round(float(m_rec_search.group(1)), 3) if m_rec_search else None,
     }
 
 

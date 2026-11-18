@@ -127,7 +127,6 @@ def run_single_ablation(
         launch_cmd.extend(["-p", f"{k}:={ros_param_str(v)}"])
 
     monitor = SystemGPUMonitor(sample_interval_s=0.10)
-    monitor.start()
 
     tf_procs = []
     listener.set_static_tf(bag_data["tf_static_msgs"])
@@ -147,6 +146,8 @@ def run_single_ablation(
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
+    monitor.set_target_pid(node_proc.pid)
+    monitor.start()
 
     bag_proc = None
     poses_3d = []
@@ -250,6 +251,13 @@ def run_single_ablation(
 
     passed = (len(df_pipe) > 0) and (traj_metrics["matched_frames"] > 0)
 
+    cum_cpu_pct = monitor.get_cumulative_cpu_pct()
+    mean_cpu_pct = (
+        float(cum_cpu_pct)
+        if np.isfinite(cum_cpu_pct)
+        else (float(np.mean(cpu_proc)) if len(cpu_proc) > 0 else None)
+    )
+
     return {
         "suite": suite_name,
         "label": run_cfg["label"],
@@ -270,7 +278,7 @@ def run_single_ablation(
         "cost_3d_mean_m": _mean(c3d_vals),
         "cost_2d_mean_m": _mean(c2d_vals),
         "inlier_cost_mean_m": _mean(inlier_vals),
-        "cpu_node_mean_pct": float(np.mean(cpu_proc)) if len(cpu_proc) > 0 else None,
+        "cpu_node_mean_pct": mean_cpu_pct,
         "ram_rss_max_mb": float(np.max(rss_mb)) if len(rss_mb) > 0 else None,
         "gpu_util_mean_pct": _mean(gpu_util) if len(gpu_util) > 0 else None,
         "board_power_mean_w": mean_power_w,

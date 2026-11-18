@@ -15,6 +15,17 @@ suites:
           lidar_2d.enable: false
           filter_params.voxel_size: 0.0
           matching_params.robust_loss_type: 0
+      - label: "no_voxel_welsch_006"
+        params:
+          lidar_2d.enable: false
+          filter_params.voxel_size: 0.0
+          matching_params.robust_loss_type: 1
+          matching_params.robust_loss_sigma: 0.06
+      - label: "voxel_008_clipped_l1"
+        params:
+          lidar_2d.enable: false
+          filter_params.voxel_size: 0.08
+          matching_params.robust_loss_type: 0
       - label: "voxel_008_welsch_006"
         params:
           lidar_2d.enable: false

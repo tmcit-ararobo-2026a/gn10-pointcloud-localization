@@ -49,6 +49,7 @@ PoseCandidate GlobalSearcher::search(
     const std::vector<float>* extra_base_link_points
 )
 {
+    const auto search_start_tp = std::chrono::steady_clock::now();
     RCLCPP_INFO(logger_, "[GlobalSearch] Starting GPU-Batched Yaw-Constrained Search...");
 
     GlobalSearchConfig config = getConfig();
@@ -59,6 +60,9 @@ PoseCandidate GlobalSearcher::search(
     int obstacle_count = solver.prepareObstacleCloud(
         h_raw_cloud, h_transform, filter_params, extra_base_link_points
     );
+    const double prep_time_ms = std::chrono::duration<double, std::milli>(
+                                    std::chrono::steady_clock::now() - search_start_tp
+                                ).count();
 
     RCLCPP_INFO(
         logger_,
@@ -70,14 +74,22 @@ PoseCandidate GlobalSearcher::search(
     );
 
     if (!hasSufficientGlobalSearchPoints(solver, match_params)) {
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - search_start_tp
+                                  ).count();
+        {
+            std::lock_guard<std::mutex> lock(config_mutex_);
+            last_search_time_ms_ = elapsed_ms;
+        }
         RCLCPP_WARN(
             logger_,
-            "[GlobalSearch] Too few obstacle points (3D: %d < %d, 2D: %d < %d). Search aborted. "
+            "[GlobalSearch] Too few obstacle points (3D: %d < %d, 2D: %d < %d, elapsed: %.2f ms). Search aborted. "
             "Consider reducing 'filter_params.robot_radius' or check 'ground_z_thresh' / TF alignment.",
             solver.obstacleCount3D(),
             match_params.min_3d_points,
             solver.obstacleCount2D(),
-            match_params.min_2d_points
+            match_params.min_2d_points,
+            elapsed_ms
         );
         setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
         return PoseCandidate{0.0f, 0.0f, 0.0f};
@@ -92,7 +104,9 @@ PoseCandidate GlobalSearcher::search(
         max_yaw_diff,
         out_best_cost,
         out_inlier_count,
-        out_inlier_cost
+        out_inlier_cost,
+        search_start_tp,
+        prep_time_ms
     );
 }
 
@@ -113,6 +127,7 @@ PoseCandidate GlobalSearcher::search(
     const std::vector<float>* extra_base_link_points
 )
 {
+    const auto search_start_tp = std::chrono::steady_clock::now();
     RCLCPP_INFO(logger_, "[GlobalSearch] Starting GPU-Batched Yaw-Constrained Search (with GPU Deskew)...");
 
     GlobalSearchConfig config = getConfig();
@@ -130,6 +145,9 @@ PoseCandidate GlobalSearcher::search(
         filter_params,
         extra_base_link_points
     );
+    const double prep_time_ms = std::chrono::duration<double, std::milli>(
+                                    std::chrono::steady_clock::now() - search_start_tp
+                                ).count();
 
     RCLCPP_INFO(
         logger_,
@@ -141,14 +159,22 @@ PoseCandidate GlobalSearcher::search(
     );
 
     if (!hasSufficientGlobalSearchPoints(solver, match_params)) {
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - search_start_tp
+                                  ).count();
+        {
+            std::lock_guard<std::mutex> lock(config_mutex_);
+            last_search_time_ms_ = elapsed_ms;
+        }
         RCLCPP_WARN(
             logger_,
-            "[GlobalSearch] Too few obstacle points (3D: %d < %d, 2D: %d < %d). Search aborted. "
+            "[GlobalSearch] Too few obstacle points (3D: %d < %d, 2D: %d < %d, elapsed: %.2f ms). Search aborted. "
             "Consider reducing 'filter_params.robot_radius' or check 'ground_z_thresh' / TF alignment.",
             solver.obstacleCount3D(),
             match_params.min_3d_points,
             solver.obstacleCount2D(),
-            match_params.min_2d_points
+            match_params.min_2d_points,
+            elapsed_ms
         );
         setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
         return PoseCandidate{0.0f, 0.0f, 0.0f};
@@ -163,7 +189,9 @@ PoseCandidate GlobalSearcher::search(
         max_yaw_diff,
         out_best_cost,
         out_inlier_count,
-        out_inlier_cost
+        out_inlier_cost,
+        search_start_tp,
+        prep_time_ms
     );
 }
 
@@ -176,9 +204,12 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
     float max_yaw_diff,
     float& out_best_cost,
     int* out_inlier_count,
-    float* out_inlier_cost
+    float* out_inlier_cost,
+    std::chrono::steady_clock::time_point search_start_tp,
+    double prep_time_ms
 )
 {
+    const auto coarse_start_tp = std::chrono::steady_clock::now();
     // Center global search window around field midpoint and IMU prior yaw
     PoseCandidate center_pose;
     center_pose.x   = (config.range_min_x + config.range_max_x) * 0.5f;
@@ -205,9 +236,21 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
         top_coarse_poses,
         top_k
     );
+    const auto refine_start_tp = std::chrono::steady_clock::now();
+    const double coarse_time_ms =
+        std::chrono::duration<double, std::milli>(refine_start_tp - coarse_start_tp).count();
 
     if (!ok || top_coarse_poses.empty()) {
-        RCLCPP_ERROR(logger_, "[GlobalSearch] GPU Global Search Failed.");
+        const double total_time_ms = std::chrono::duration<double, std::milli>(
+                                         std::chrono::steady_clock::now() - search_start_tp
+                                     ).count();
+        {
+            std::lock_guard<std::mutex> lock(config_mutex_);
+            last_search_time_ms_ = total_time_ms;
+        }
+        RCLCPP_ERROR(
+            logger_, "[GlobalSearch] GPU Global Search Failed. (elapsed: %.2f ms)", total_time_ms
+        );
         setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
         return PoseCandidate{0.0f, 0.0f, 0.0f};
     }
@@ -317,10 +360,24 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
     }
 
     if (best_idx < 0) {
+        const auto search_end_tp = std::chrono::steady_clock::now();
+        const double refine_time_ms =
+            std::chrono::duration<double, std::milli>(search_end_tp - refine_start_tp).count();
+        const double total_time_ms =
+            std::chrono::duration<double, std::milli>(search_end_tp - search_start_tp).count();
+        {
+            std::lock_guard<std::mutex> lock(config_mutex_);
+            last_search_time_ms_ = total_time_ms;
+        }
         RCLCPP_WARN(
             logger_,
-            "[GlobalSearch] None of the Top-%zu candidates satisfied strict acceptance criteria.",
-            top_coarse_poses.size()
+            "[GlobalSearch] None of the Top-%zu candidates satisfied strict acceptance criteria. "
+            "(total: %.2f ms, prep: %.2f ms, coarse: %.2f ms, refine: %.2f ms)",
+            top_coarse_poses.size(),
+            total_time_ms,
+            prep_time_ms,
+            coarse_time_ms,
+            refine_time_ms
         );
         solver.setLastCosts(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
         setSearchFailureOutputs(out_best_cost, out_inlier_count, out_inlier_cost);
@@ -352,15 +409,29 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
         (config.uniqueness_ratio < 1.0f) && std::isfinite(second_best_cost) &&
         (best.cost > config.uniqueness_ratio * second_best_cost);
 
+    const auto search_end_tp = std::chrono::steady_clock::now();
+    const double refine_time_ms =
+        std::chrono::duration<double, std::milli>(search_end_tp - refine_start_tp).count();
+    const double total_time_ms =
+        std::chrono::duration<double, std::milli>(search_end_tp - search_start_tp).count();
+    {
+        std::lock_guard<std::mutex> lock(config_mutex_);
+        last_search_time_ms_ = total_time_ms;
+    }
+
     if (fails_uniqueness) {
         RCLCPP_WARN(
             logger_,
             "[GlobalSearch] Top-1 candidate rejected by uniqueness check "
-            "(best: %.4f, second: %.4f, ratio: %.3f/%.3f).",
+            "(best: %.4f, second: %.4f, ratio: %.3f/%.3f, total: %.2f ms, prep: %.2f ms, coarse: %.2f ms, refine: %.2f ms).",
             best.cost,
             second_best_cost,
             best.cost / std::max(1e-6f, second_best_cost),
-            config.uniqueness_ratio
+            config.uniqueness_ratio,
+            total_time_ms,
+            prep_time_ms,
+            coarse_time_ms,
+            refine_time_ms
         );
         solver.setLastCosts(
             std::numeric_limits<float>::max(), std::numeric_limits<float>::max()
@@ -381,8 +452,13 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
 
     RCLCPP_INFO(
         logger_,
-        "[GlobalSearch] Complete (refined %zu candidates). Best Pose: (%.2f, %.2f, %.2f rad), Cost: %.4f, Inliers: %d",
+        "[GlobalSearch] Complete (refined %zu candidates, total: %.2f ms, prep: %.2f ms, coarse: %.2f ms, refine: %.2f ms). "
+        "Best Pose: (%.2f, %.2f, %.2f rad), Cost: %.4f, Inliers: %d",
         top_coarse_poses.size(),
+        total_time_ms,
+        prep_time_ms,
+        coarse_time_ms,
+        refine_time_ms,
         best.pose.x,
         best.pose.y,
         best.pose.yaw,
