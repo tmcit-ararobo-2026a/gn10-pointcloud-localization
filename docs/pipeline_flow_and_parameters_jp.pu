@@ -81,10 +81,10 @@ partition "2. 運動予測と時空間アライメント (`cloudCallback`)" #FFF
     note right
         **速度推定・動的探索幅拡大パラメータ**
         * `velocity_estimation.enable`: **true** (`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0 m/s`, EMA `alpha = 0.6`)
-        * `matching_params.dynamic_yaw_expansion`: **true**
+        * `matching_params.dynamic_yaw_expansion`: **false**
         * `matching_params.dynamic_yaw_omega_thresh`: **0.5 rad/s**
-        * `matching_params.dynamic_yaw_factor`: **0.15 s**
-        * `matching_params.dynamic_yaw_max_range`: **0.40 rad**
+        * `matching_params.dynamic_yaw_factor`: **0.5 s**
+        * `matching_params.dynamic_yaw_max_range`: **0.60 rad**
     end note
 }
 
@@ -106,20 +106,20 @@ partition "3. GPU Deskew・床面除去・2D点群統合 (`prepareObstacleCloud`
 
 if (ロスト状態か？ (`is_lost_ == true` かつ外部 Prior なし)) then (YES: グローバル探索復帰)
     partition "4A. グローバル探索による自己位置復帰 (`GlobalSearcher::search`)" #FFEBEE {
-        :IMU 方位事前情報の有効性に応じた Yaw 探索半幅を選択: 有効時 (`< 10.0 s`) は `recovery_yaw_diff` (`0.40 rad`),\n無効時・初回失敗時は `range_yaw_diff` (`3.1415 rad`) へフォールバック;
+        :IMU 方位事前情報の有効性に応じた Yaw 探索半幅を選択: 有効時 (`< 10.0 s` または初期事前値) は `recovery_yaw_diff` (`0.40 rad`),\n事前情報失効後の次回以降探索で `range_yaw_diff` (`3.1415 rad`) へ拡大;
         :Stage 1: Voxel 均等化済み 3D 障害物点群でフィールド全域を粗探索 (`step_xy`, `step_yaw`, `Clipped L1`) し\n**3D NMS** で上位 **Top-K (`top_k_candidates`)** 候補を抽出;
         :Stage 2: 各 Top-K 候補の周囲で `matchObstacleCloud` (`Clipped L1`) を実行\n(**3D LiDAR 優先**: `N_3d >= min_3d_points` のとき 2D 不合格・2D単独フォールバックのコストを `cost_3d` 尺度へ正規化);
         :Stage 3: **Top-1/Top-2 Uniqueness 判定**: `best.cost > uniqueness_ratio * second_best_cost` なら曖昧候補として棄却\n(180° 点対称ツインを除外して比較);
-        :Stage 4: **複数フレーム Trial 検証**: 局所探索窓 `1.5` 倍で連続 `verify_frames` (`3`) フレーム\n`is_global_recovery_accepted` を満たした後に `is_lost_` を解除;
+        :Stage 4: **複数フレーム Trial 検証**: 初回大域一致 (1フレーム目) + 続く2フレームの局所試行 (`1.5` 倍 XY 窓) の計 `verify_frames` (`3`) 連続フレーム\n`is_global_recovery_accepted` を満たした後に `is_lost_` を解除;
         note right
             **グローバル探索パラメータ (`global_search.*`)**
             * `range_min/max_x`, `range_min/max_y`: 環境依存の探索範囲
-            * `range_yaw_diff`: **3.1415 rad** (事前方位なし/フォールバック時)
+            * `range_yaw_diff`: **3.1415 rad** (事前方位なし/失効後)
             * `recovery_yaw_diff`: **0.40 rad** (IMU 方位事前情報有効時)
             * `step_xy` / `step_yaw`: **0.30 m** / **0.3 rad**
             * `top_k_candidates`: **4**
             * `uniqueness_ratio`: **0.960** (1.0 で無効化)
-            * `verify_frames`: **3** (Trial 連続検証フレーム数)
+            * `verify_frames`: **3** (初回大域一致 1 + Trial 2)
             * `cost_threshold_3d`: **0.202 m** (グローバル復帰・検証用 3D しきい値)
             * `lost_count_thresh`: **25** (interval: 0.5 s)
         end note
@@ -127,12 +127,12 @@ if (ロスト状態か？ (`is_lost_ == true` かつ外部 Prior なし)) then (
 else (NO: ローカル追跡)
     partition "4B. 多段階 ESDF マッチングと振動防止フォールバック (`matchObstacleCloud`)" #E8EAF6 {
         :2D LiDAR の動的結合重みを計算: `w_2d = weight_2d_lidar * min(1.0, N_2d / target_2d_points)`;
-        :3段階 Coarse-to-Fine GPU ESDF マッチング (`evaluateESDFKernel` + `cub::DeviceReduce::ArgMin`):\n* **Coarse**: `range_xy`, `range_yaw` (`step_xy`, `step_yaw`)\n* **Fine Level 1 (1/5倍)**\n* **Fine Level 2 (1/25倍)**;
+        :3段階 Coarse-to-Fine GPU ESDF マッチング (`evaluateESDFKernel` + `cub::DeviceReduce::ArgMin`):\n* **Coarse**: `range_xy`, `range_yaw` (`step_xy`, `step_yaw`; 3D 点は約 1,000 点へ間引き)\n* **Fine Level 1 (1/5倍, 全点)**\n* **Fine Level 2 (1/25倍, 全点)**;
         :`computeBestPoseMetricsESDFKernel` で最良姿勢の指標を算出\n(`cost_3d`, `cost_2d`, 3D `inliers`, `inlier_cost`);
         if (統合マッチが 3D 不合格 (`!pass_3d`) または 2D が異常スパイク (`cost_2d >= 2 * cost_threshold_2d`)?) then (YES: ガード1 [デッドバンド])
             :**3D 単独 (`w_2d = 0.0`)** で再マッチングし、2D の異常値による引きずりを遮断;
-            if (3D 単独でも不合格 (`!pass_3d`) かつ 2D 点群が有効?) then (YES: ガード2 [ジャンプ防止窓])
-                :`search_base_pose` 近傍の **狭小連続窓 (`range_xy <= 2 * step_xy`, `range_yaw <= 2 * step_yaw`)** で\n**2D 単独 (`w_2d = 1.0`)** マッチングを実行し、3D <-> 2D 間の位置ジャンプ・振動を防止;
+            if (3D 単独でも不合格 (`!pass_3d`) かつ 2D 点群が有効?) then (YES: ガード2 [2D 救済])
+                :通常探索窓 (`range_xy`, `range_yaw`) 全体で **2D 単独 (`w_2d = 1.0`)** 救済を実行;\n`cost_2d < cost_threshold_2d (0.04 m)` を満たす場合のみ採用（不合格時は 3D 単独状態へ復元）;
             endif
         endif
         :3D 障害物点群から動的障害物 (`d >= dynamic_dist_thresh`) を\n`filterDynamicPointsESDFKernel` + `cub::DeviceSelect::Flagged` で高速抽出;

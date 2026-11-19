@@ -101,7 +101,7 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 | `map_file_path` | `""` | Map file name or path (relative paths search within `map/`). |
 | `esdf.resolution` | `0.05` | 3D ESDF voxel grid cell resolution [m]. |
 | `esdf.max_dist` | `0.50` | Maximum Euclidean distance truncation limit in ESDF voxels [m]. |
-| `esdf.crop_enabled` | `true` | Restrict ESDF grid generation to the specified 3D bounding box when loading PCD maps. |
+| `esdf.crop_enabled` | `true` | Restrict ESDF grid generation to the specified 3D bounding box (CAD maps add $\pm\texttt{esdf.max\_dist}$ padding $\to 240\times260\times104$; cropped PCD maps omit padding $\to 220\times240\times84$). |
 | `esdf.crop_min_x` / `crop_max_x` | `-5.5` / `5.5` | ESDF crop minimum/maximum X coordinate [m]. |
 | `esdf.crop_min_y` / `crop_max_y` | `-6.0` / `6.0` | ESDF crop minimum/maximum Y coordinate [m]. |
 | `esdf.min_z` / `max_z` | `-0.20` / `4.00` | ESDF crop minimum/maximum Z coordinate [m]. |
@@ -116,7 +116,7 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 | `matching_params.search_range_yaw` | `0.15` | Local coarse search yaw half-window [rad]. |
 | `matching_params.search_step_yaw` | `0.03` | Local coarse search yaw grid step [rad] (~$1.7^\circ$). |
 | `matching_params.fine_refine` / `levels` | `true` / `2` | 2-stage $5 \times 5 \times 5$ sub-voxel refinement (`0.05 m` $\to$ `0.002 m`). |
-| `matching_params.max_dist_thresh` | `0.25` | Per-point Huber/L1 residual distance clipping ceiling [m]. |
+| `matching_params.max_dist_thresh` | `0.25` | Per-point residual distance clipping ceiling [m] (Clipped L1 / Welsch / Cauchy). |
 | `matching_params.dynamic_dist_thresh` | `0.15` | Distance threshold [m] above which points are extracted as `/dynamic_cloud`. |
 | `matching_params.cost_threshold_3d` | `0.23` | Independent 3D LiDAR mean residual acceptance threshold [m] for local tracking ($C_{\text{3D}} < 0.23\text{ m}$). |
 | `matching_params.cost_threshold_2d` | `0.04` | Independent 2D LiDAR mean residual acceptance threshold [m] ($C_{\text{2D}} < 0.04\text{ m}$, hysteresis detachment at $2\times = 0.08\text{ m}$). |
@@ -138,7 +138,7 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 | `global_search.recovery_yaw_diff` | `0.40` | Restricted yaw search half-range [rad] when IMU heading prior is valid (`< 10.0 s` since last match or initial heading prior; automatically falls back to `range_yaw_diff` on initial failure). |
 | `global_search.top_k_candidates` | `4` | Number of Top-K spatially distinct local minima refined via NMS during global recovery. |
 | `global_search.uniqueness_ratio` | `0.960` | Top-1/Top-2 cost margin threshold (`best_cost <= uniqueness_ratio * second_best_cost`, excluding $180^\circ$ antipodal symmetry twin) to reject ambiguous global matches (`1.0` disables). |
-| `global_search.verify_frames` | `3` | Consecutive local verification frames required in trial state before committing global recovery and resuming TF/pose output. |
+| `global_search.verify_frames` | `3` | Total consecutive accepted frames (initial global match + 2 subsequent local trial frames at $1.5\times$ XY window) required before committing global recovery and resuming TF/pose output. |
 | `global_search.cost_threshold_3d` | `0.202` | Independent 3D LiDAR mean residual threshold [m] enforced during Global Search recovery and trial verification ($C_{\text{3D}} < 0.202\text{ m}$). |
 | `global_search.lost_count_thresh` | `25` | Consecutive failed frame threshold before triggering full-field global search. |
 
@@ -155,8 +155,8 @@ Verified Desktop (Ryzen 7 5700X + NVIDIA RTX 4060) and Embedded (NVIDIA Jetson O
 | Evaluation | Desktop (RTX 4060) | Jetson Orin Nano (25 W) |
 | :--- | :--- | :--- |
 | **CUDA `tex3D` Micro-Benchmark** (`240x260x104`) | `1.75x-3.03x` vs. Glob8 (`50.6x-90.9x` vs. CPU 16T) | `1.71x-2.23x` vs. Glob8 (`9.69x-31.3x` vs. CPU 6T) |
-| **Full Arena Tracking (`280 s`, 3D+2D)** | `0.594 ms` mean (`7.2%` CPU) | `5.854 ms` mean (`5.19 W`, `30.39 mJ/frame`) |
-| **Close-Human `2x2` Ablation (`0-65 s`)** | `-95.1%` frames `>0.10 m` (`1,026 -> 50`, RMSE `0.046 m`) | `-95.1%` frames `>0.10 m` (`1,014 -> 50`, `5.14 W`) |
+| **Full Arena Tracking (`20-280 s`, 3D+2D)** | `0.622 ms` mean (`7.7%` CPU) | `5.874 ms` mean (`5.24 W`, `30.77 mJ/frame`) |
+| **Close-Human `2x2` Ablation (`22-65 s`)** | `-95.0%` frames `>0.10 m` (`1,005 -> 50`, RMSE `0.055 m`) | `-94.8%` frames `>0.10 m` (`962 -> 50`, `5.19 W`) |
 | **Unity 6 Physics GT (CAD / Scanned `.pcd`)** | `19.0 mm` / `11.9 mm` mean (`0` frames `>0.10 m`) | `19.0 mm` / `11.9 mm` mean (`5.80 ms`, `5.18 W`) |
 | **Global Relocalization (`N=8` Unity / `N=21` Real)** | `8/8` (`5.30 ms`); `15/16` (`1x`) / `16/16` (`4x`), `0` FJ (`75/75` reject) | `8/8` (`38.75 ms`); `15/16` (`1x`), `0` FJ (`74/74` reject) |
 | **Public `hdl_501` (Handheld 6-DoF, No IMU)** | `0.80 ms` (`0.352 m` 3-DoF RMSE vs. `0.046 m` 6-DoF NDT-OMP) | `6.46 ms` (`4.90 W`, `3.8x` faster than NDT-OMP, `7.6x` vs. DLL) |

@@ -78,7 +78,7 @@
       search_step_yaw: 0.03             # Coarse yaw grid step [rad] (refined by 1/5 per fine_refine_levels)
       fine_refine: true                 # Enable multi-resolution coarse-to-fine grid refinement
       fine_refine_levels: 2             # Number of 5x refinement levels (2 levels -> 2 mm XY, 0.0012 rad yaw)
-      max_dist_thresh: 0.25             # Per-point Huber/L1 residual clipping ceiling [m] (suppresses outliers)
+      max_dist_thresh: 0.25             # Per-point residual clipping ceiling [m] for Clipped L1 / Welsch / Cauchy (suppresses outliers)
       cost_threshold_3d: 0.23           # Independent 3D LiDAR mean residual acceptance threshold [m]
       cost_threshold_2d: 0.04           # Independent 2D LiDAR mean residual acceptance threshold [m]
       dynamic_dist_thresh: 0.15         # Distance threshold [m] above which 3D points are extracted as dynamic_cloud
@@ -133,7 +133,7 @@
       range_min_y: -5.70                # Global search minimum Y coordinate [m]
       range_max_y: 5.70                 # Global search maximum Y coordinate [m]
       range_yaw_diff: 3.1415            # Global yaw search half-range [rad] around prior heading (overridden per team)
-      recovery_yaw_diff: 0.40           # Restricted yaw half-range [rad] when IMU heading prior is valid (< 2.0 s)
+      recovery_yaw_diff: 0.40           # Restricted yaw half-range [rad] when IMU heading prior is valid (< 10.0 s since last match or initial prior)
       step_xy: 0.30                     # Global coarse XY grid step [m]
       step_yaw: 0.3                     # Global coarse yaw grid step [rad]
       top_k_candidates: 4               # Number of spatially separated Top-K coarse peaks to fine-refine

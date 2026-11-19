@@ -81,10 +81,10 @@ partition "2. Motion Prediction & Spatiotemporal Alignment (`cloudCallback`)" #F
     note right
         **Prediction & Adaptive Window Parameters**
         * `velocity_estimation.enable`: **true** (`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0 m/s`, EMA `alpha = 0.6`)
-        * `matching_params.dynamic_yaw_expansion`: **true**
+        * `matching_params.dynamic_yaw_expansion`: **false**
         * `matching_params.dynamic_yaw_omega_thresh`: **0.5 rad/s**
-        * `matching_params.dynamic_yaw_factor`: **0.15 s**
-        * `matching_params.dynamic_yaw_max_range`: **0.40 rad**
+        * `matching_params.dynamic_yaw_factor`: **0.5 s**
+        * `matching_params.dynamic_yaw_max_range`: **0.60 rad**
     end note
 }
 
@@ -106,11 +106,11 @@ partition "3. GPU Deskew, Ground Filter & 2D Fusion (`prepareObstacleCloud`)" #E
 
 if (Is Robot Lost? (`is_lost_ == true` and no fresh prior)) then (YES: Global Recovery)
     partition "4A. Global Search Recovery (`GlobalSearcher::search`)" #FFEBEE {
-        :Select yaw search half-range: `recovery_yaw_diff` (`0.40 rad`) if IMU heading prior\nis valid (`< 10.0 s` since last match or initial prior); fall back to `range_yaw_diff` (`3.1415 rad`) on failure;
+        :Select yaw search half-range: `recovery_yaw_diff` (`0.40 rad`) while IMU heading prior\nis valid (`< 10.0 s` since last match or initial prior); widen to `range_yaw_diff` (`3.1415 rad`) once no valid prior remains;
         :Stage 1: Evaluate coarse 3D grid across field bounds (`step_xy`, `step_yaw`)\non voxel-equalized 3D obstacles (`Clipped L1`) & select **Top-K (`top_k_candidates`)** via **3D NMS**;
         :Stage 2: Run `matchObstacleCloud` (`Clipped L1`) around each Top-K peak\n(**3D LiDAR primacy**: normalize failed-2D / 2D-only fallback costs back to `cost_3d` scale when `N_3d >= min_3d_points`);
         :Stage 3: **Top-1/Top-2 Uniqueness Check**: reject if `best.cost > uniqueness_ratio * second_best_cost`\n(excluding 180 deg antipodal symmetry twin);
-        :Stage 4: **Multi-Frame Trial Verification**: require `verify_frames` (`3`) consecutive frames\npassing `is_global_recovery_accepted` (`1.5x` local window) before clearing `is_lost_`;
+        :Stage 4: **Multi-Frame Trial Verification**: require `verify_frames` (`3`) consecutive accepted frames\n(initial global match + 2 local trial frames at `1.5x` XY window) passing `is_global_recovery_accepted` before clearing `is_lost_`;
         note right
             **Global Search Parameters (`global_search.*`)**
             * `range_min/max_x`, `range_min/max_y`: field-dependent boundary
@@ -119,7 +119,7 @@ if (Is Robot Lost? (`is_lost_ == true` and no fresh prior)) then (YES: Global Re
             * `step_xy` / `step_yaw`: **0.30 m** / **0.3 rad**
             * `top_k_candidates`: **4**
             * `uniqueness_ratio`: **0.960** (1.0 disables)
-            * `verify_frames`: **3** (consecutive trial confirmation frames)
+            * `verify_frames`: **3** (1 global match + 2 trial frames)
             * `cost_threshold_3d`: **0.202 m** (strict 3D recovery threshold)
             * `lost_count_thresh`: **25** (interval: 0.5 s)
         end note
@@ -127,12 +127,12 @@ if (Is Robot Lost? (`is_lost_ == true` and no fresh prior)) then (YES: Global Re
 else (NO: Local Tracking)
     partition "4B. Local Multi-Resolution ESDF Matching & Anti-Oscillation Fallback (`matchObstacleCloud`)" #E8EAF6 {
         :Compute dynamic 2D weight `w_2d = weight_2d_lidar * min(1.0, N_2d / target_2d_points)`;
-        :Run 3-Stage Coarse-to-Fine GPU ESDF Matching (`evaluateESDFKernel` + `cub::DeviceReduce::ArgMin`):\n* **Coarse**: `range_xy`, `range_yaw` (`step_xy`, `step_yaw`)\n* **Fine Level 1 (1/5x)**\n* **Fine Level 2 (1/25x)**;
+        :Run 3-Stage Coarse-to-Fine GPU ESDF Matching (`evaluateESDFKernel` + `cub::DeviceReduce::ArgMin`):\n* **Coarse**: `range_xy`, `range_yaw` (`step_xy`, `step_yaw`; 3D stride to ~1,000 pts)\n* **Fine Level 1 (1/5x, all pts)**\n* **Fine Level 2 (1/25x, all pts)**;
         :Evaluate best pose metrics via `computeBestPoseMetricsESDFKernel`\n(`cost_3d`, `cost_2d`, 3D `inliers`, `inlier_cost`);
         if (Combined match failed 3D (`!pass_3d`) OR Severe 2D spike (`cost_2d >= 2 * cost_threshold_2d`)?) then (YES: Guard 1)
             :Re-run **3D-only (`w_2d = 0.0`)** to isolate 3D pose from corrupted/spiked 2D scan;
             if (3D-only still fails (`!pass_3d`) AND 2D is available?) then (YES: Guard 2)
-                :Re-run **2D-only (`w_2d = 1.0`)** within **tight continuity window**\n(`range_xy <= 2 * step_xy`, `range_yaw <= 2 * step_yaw`)\nto maintain tracking without 3D <-> 2D jumping;
+                :Re-run **2D-only (`w_2d = 1.0`)** over full local search window (`range_xy`, `range_yaw`);\naccept only if `cost_2d < cost_threshold_2d (0.04 m)`, otherwise restore 3D-only state;
             endif
         endif
         :Extract dynamic obstacles (`d >= dynamic_dist_thresh`) from 3D cloud\nvia `filterDynamicPointsESDFKernel` + `cub::DeviceSelect::Flagged`;

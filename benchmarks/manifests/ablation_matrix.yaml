@@ -5,8 +5,8 @@
 suites:
   human_approach_3d:
     dataset: "national_clean"
-    offset_s: 0.0
-    duration_s: 65.0
+    offset_s: 22.0
+    duration_s: 43.0
     rate: 1.0
     initial_local_search: true
     runs:
@@ -54,8 +54,8 @@ suites:
 
   full_national_tracking:
     dataset: "national_clean"
-    offset_s: 0.0
-    duration_s: 280.0
+    offset_s: 20.0
+    duration_s: 260.0
     rate: 1.0
     initial_local_search: false
     runs:
