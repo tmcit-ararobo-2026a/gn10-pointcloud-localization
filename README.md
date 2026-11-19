@@ -155,8 +155,8 @@ Verified Desktop (Ryzen 7 5700X + NVIDIA RTX 4060) and Embedded (NVIDIA Jetson O
 | Evaluation | Desktop (RTX 4060) | Jetson Orin Nano (25 W) |
 | :--- | :--- | :--- |
 | **CUDA `tex3D` Micro-Benchmark** (`240x260x104`) | `1.75x-3.03x` vs. Glob8 (`50.6x-90.9x` vs. CPU 16T) | `1.71x-2.23x` vs. Glob8 (`9.69x-31.3x` vs. CPU 6T) |
-| **Full Arena Tracking (`20-280 s`, 3D+2D)** | `0.622 ms` mean (`7.7%` CPU) | `5.874 ms` mean (`5.24 W`, `30.77 mJ/frame`) |
-| **Close-Human `2x2` Ablation (`22-65 s`)** | `-95.0%` frames `>0.10 m` (`1,005 -> 50`, RMSE `0.055 m`) | `-94.8%` frames `>0.10 m` (`962 -> 50`, `5.19 W`) |
+| **Full Arena Tracking (`20-280 s`, 3D+2D)** | `0.622 ms` mean (`7.7%` CPU, `0 lost`, `6.1 mm` jitter) | `5.874 ms` mean (`5.24 W`, `30.77 mJ/frame`, `0 lost`) |
+| **Close-Human Stationary (`40-65 s`, Ref-Free)** | `-97.8%` std (`239.0 -> 5.3 mm`), `-98.3%` max (`885.5 -> 15.4 mm`) | `-97.8%` std (`241.6 -> 5.3 mm`), `-98.0%` max (`770.2 -> 15.5 mm`, `5.19 W`) |
 | **Unity 6 Physics GT (CAD / Scanned `.pcd`)** | `19.0 mm` / `11.9 mm` mean (`0` frames `>0.10 m`) | `19.0 mm` / `11.9 mm` mean (`5.80 ms`, `5.18 W`) |
 | **Global Relocalization (`N=8` Unity / `N=21` Real)** | `8/8` (`5.30 ms`); `15/16` (`1x`) / `16/16` (`4x`), `0` FJ (`75/75` reject) | `8/8` (`38.75 ms`); `15/16` (`1x`), `0` FJ (`74/74` reject) |
 | **Public `hdl_501` (Handheld 6-DoF, No IMU)** | `0.80 ms` (`0.352 m` 3-DoF RMSE vs. `0.046 m` 6-DoF NDT-OMP) | `6.46 ms` (`4.90 W`, `3.8x` faster than NDT-OMP, `7.6x` vs. DLL) |
