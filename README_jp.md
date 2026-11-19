@@ -150,7 +150,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 
 ## 7. クロスプラットフォーム・ベンチマーク要約 (`v1.2.3`/`v1.2.4`)
 
-Desktop（Ryzen 7 5700X + NVIDIA RTX 4060）および組込み環境（NVIDIA Jetson Orin Nano, `25 W MAXN_SUPER`, `19 V / 2.37 A`, `tegrastats` 電力計測）での実測結果要約です（再現手順は [`benchmarks/README.md`](./benchmarks/README.md) を参照してください）。
+Desktop（Ryzen 7 5700X + NVIDIA RTX 4060）および組込み環境（NVIDIA Jetson Orin Nano, `25 W MAXN_SUPER`, `19 V / 2.37 A`, `tegrastats` 電力計測）での実測結果要約です（公開データセット S1・R1: https://doi.org/10.5281/zenodo.24369541、再現手順は [`benchmarks/README.md`](./benchmarks/README.md) を参照してください）。
 
 | 評価項目 | Desktop (RTX 4060) | Jetson Orin Nano (25 W) |
 | :--- | :--- | :--- |
