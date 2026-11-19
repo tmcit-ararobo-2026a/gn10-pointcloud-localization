@@ -101,7 +101,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `map_file_path` | `""` | マップファイル名またはパス（相対パスは `map/` 内を探索）。 |
 | `esdf.resolution` | `0.05` | 3D ESDF グリッドのセル解像度 [m]。 |
 | `esdf.max_dist` | `0.50` | ESDF 距離場の最大打ち切り距離 [m]。 |
-| `esdf.crop_enabled` | `true` | PCD マップから ESDF を生成する際に指定境界ボックスでクロップ。 |
+| `esdf.crop_enabled` | `true` | ESDF 生成時に指定境界ボックスでクロップ（CAD マップは外側へ $\pm\texttt{esdf.max\_dist}$ パディングを自動付与し `240×260×104`、クロップ済 PCD はパディングなしで `220×240×84`）。 |
 | `esdf.crop_min_x` / `crop_max_x` | `-5.5` / `5.5` | ESDF クロップ範囲の X 下限/上限 [m]。 |
 | `esdf.crop_min_y` / `crop_max_y` | `-6.0` / `6.0` | ESDF クロップ範囲の Y 下限/上限 [m]。 |
 | `esdf.min_z` / `max_z` | `-0.20` / `4.00` | ESDF クロップ範囲の Z 下限/上限 [m]。 |
@@ -138,7 +138,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `global_search.recovery_yaw_diff` | `0.40` | IMU 方位事前情報（最終マッチ後 `10.0 s` 以内または初期姿勢事前値）が有効な間の絞り込み Yaw 探索半幅 [rad]（初回失敗時は `range_yaw_diff` へ自動フォールバック）。 |
 | `global_search.top_k_candidates` | `4` | グローバル復帰探索時にNMSで抽出して精密化する上位候補数。 |
 | `global_search.uniqueness_ratio` | `0.960` | 曖昧なグローバル一致を棄却する Top-1/Top-2 コスト比上限 (`best_cost <= uniqueness_ratio * second_best_cost`、$180^\circ$ 点対称ツインを除外、`1.0` で無効化)。 |
-| `global_search.verify_frames` | `3` | グローバル復帰を確定して TF/推定姿勢の出力を再開する前に、トライアル状態で要求する連続ローカル検証フレーム数。 |
+| `global_search.verify_frames` | `3` | グローバル復帰を確定して TF/推定姿勢の出力を再開するまでに要求する連続合格フレーム数（初回グローバル一致 1 フレーム＋続く 2 フレームの `1.5×` XY 窓ローカル試行）。 |
 | `global_search.cost_threshold_3d` | `0.202` | グローバル探索復帰および Trial 検証時に適用する厳格な 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.202\text{ m}$)。 |
 | `global_search.lost_count_thresh` | `25` | グローバル全域探索へ移行する連続失敗フレーム数。 |
 
@@ -155,8 +155,8 @@ Desktop（Ryzen 7 5700X + NVIDIA RTX 4060）および組込み環境（NVIDIA Je
 | 評価項目 | Desktop (RTX 4060) | Jetson Orin Nano (25 W) |
 | :--- | :--- | :--- |
 | **CUDA `tex3D` マイクロベンチ** (`240x260x104`) | Glob8比 `1.75x-3.03x`（CPU 16T比 `50.6x-90.9x`） | Glob8比 `1.71x-2.23x`（CPU 6T比 `9.69x-31.3x`） |
-| **実機フル走行追従 (`280 s`, 3D+2D)** | 平均 `0.594 ms`（CPU `7.2%`） | 平均 `5.854 ms`（`5.19 W`, `30.39 mJ/frame`） |
-| **近接人物 `2x2` アブレーション (`0-65 s`)** | `>0.10 m` フレーム `95.1%` 削減（`1,026 -> 50`, RMSE `0.046 m`） | `>0.10 m` フレーム `95.1%` 削減（`1,014 -> 50`, `5.14 W`） |
+| **実機フル走行追従 (`20-280 s`, 3D+2D)** | 平均 `0.622 ms`（CPU `7.7%`） | 平均 `5.874 ms`（`5.24 W`, `30.77 mJ/frame`） |
+| **近接人物 `2x2` アブレーション (`22-65 s`)** | `>0.10 m` フレーム `95.0%` 削減（`1,005 -> 50`, RMSE `0.055 m`） | `>0.10 m` フレーム `94.8%` 削減（`962 -> 50`, `5.19 W`） |
 | **Unity 6 物理真値（CAD / スキャン `.pcd`）** | 平均 `19.0 mm` / `11.9 mm`（`>0.10 m` 0件） | 平均 `19.0 mm` / `11.9 mm`（`5.80 ms`, `5.18 W`） |
 | **大域復帰（Unity `N=8` / 実機 `N=21`）** | `8/8` (`5.30 ms`) / `15/16` (`1x`), `16/16` (`4x`), 誤ジャンプ `0`（棄却 `75/75`） | `8/8` (`38.75 ms`) / `15/16` (`1x`), 誤ジャンプ `0`（棄却 `74/74`） |
 | **公開 `hdl_501`（手持ち上下動・IMUなし）** | `0.80 ms`（3-DoF RMSE `0.352 m`, 6-DoF NDT-OMPは `0.046 m`） | `6.46 ms`（`4.90 W`, NDT-OMPの `3.8x`, DLLの `7.6x` 高速） |
