@@ -148,6 +148,21 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 
 ![Matching Cost Evaluation and Weighting](docs/matching_cost_and_weighting.png)
 
-## 7. License
+## 7. Cross-Platform Benchmark Summary (`v1.2.3`/`v1.2.4`)
+
+Verified Desktop (Ryzen 7 5700X + NVIDIA RTX 4060) and Embedded (NVIDIA Jetson Orin Nano, `25 W MAXN_SUPER`, `19 V / 2.37 A`, `tegrastats` power logging) benchmark results (see [`benchmarks/README.md`](./benchmarks/README.md) for reproduction commands):
+
+| Evaluation | Desktop (RTX 4060) | Jetson Orin Nano (25 W) |
+| :--- | :--- | :--- |
+| **CUDA `tex3D` Micro-Benchmark** (`240x260x104`) | `1.75x-3.03x` vs. Glob8 (`50.6x-90.9x` vs. CPU 16T) | `1.71x-2.23x` vs. Glob8 (`9.69x-31.3x` vs. CPU 6T) |
+| **Full Arena Tracking (`280 s`, 3D+2D)** | `0.594 ms` mean (`7.2%` CPU) | `5.854 ms` mean (`5.19 W`, `30.39 mJ/frame`) |
+| **Close-Human `2x2` Ablation (`0-65 s`)** | `-95.1%` frames `>0.10 m` (`1,026 -> 50`, RMSE `0.046 m`) | `-95.1%` frames `>0.10 m` (`1,014 -> 50`, `5.14 W`) |
+| **Unity 6 Physics GT (CAD / Scanned `.pcd`)** | `19.0 mm` / `11.9 mm` mean (`0` frames `>0.10 m`) | `19.0 mm` / `11.9 mm` mean (`5.80 ms`, `5.18 W`) |
+| **Global Relocalization (`N=8` Unity / `N=21` Real)** | `8/8` (`5.30 ms`); `15/16` (`1x`) / `16/16` (`4x`), `0` FJ (`75/75` reject) | `8/8` (`38.75 ms`); `15/16` (`1x`), `0` FJ (`74/74` reject) |
+| **Public `hdl_501` (Handheld 6-DoF, No IMU)** | `0.80 ms` (`0.352 m` 3-DoF RMSE vs. `0.046 m` 6-DoF NDT-OMP) | `6.46 ms` (`4.90 W`, `3.8x` faster than NDT-OMP, `7.6x` vs. DLL) |
+
+**Known Scope & Limitations**: The planar 3-DoF $(x, y, \psi)$ formulation assumes near-level motion and incurs horizontal drift under unconstrained vertical walking oscillation without IMU (`hdl_501`); 2D fusion can exhibit transient spikes when dynamic obstacles cross the 2D scan plane (3D-only eliminates them); and resident CUDA buffers consume `168-221 MiB` host RSS while requiring an NVIDIA CUDA GPU.
+
+## 8. License
 
 This repository is released under the [Apache 2.0 LICENSE](./LICENSE).

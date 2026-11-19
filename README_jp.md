@@ -148,6 +148,21 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 
 ![マッチング時のコスト評価](docs/matching_cost_and_weighting_jp.png)
 
-## 7. ライセンス
+## 7. クロスプラットフォーム・ベンチマーク要約 (`v1.2.3`/`v1.2.4`)
+
+Desktop（Ryzen 7 5700X + NVIDIA RTX 4060）および組込み環境（NVIDIA Jetson Orin Nano, `25 W MAXN_SUPER`, `19 V / 2.37 A`, `tegrastats` 電力計測）での実測結果要約です（再現手順は [`benchmarks/README.md`](./benchmarks/README.md) を参照してください）。
+
+| 評価項目 | Desktop (RTX 4060) | Jetson Orin Nano (25 W) |
+| :--- | :--- | :--- |
+| **CUDA `tex3D` マイクロベンチ** (`240x260x104`) | Glob8比 `1.75x-3.03x`（CPU 16T比 `50.6x-90.9x`） | Glob8比 `1.71x-2.23x`（CPU 6T比 `9.69x-31.3x`） |
+| **実機フル走行追従 (`280 s`, 3D+2D)** | 平均 `0.594 ms`（CPU `7.2%`） | 平均 `5.854 ms`（`5.19 W`, `30.39 mJ/frame`） |
+| **近接人物 `2x2` アブレーション (`0-65 s`)** | `>0.10 m` フレーム `95.1%` 削減（`1,026 -> 50`, RMSE `0.046 m`） | `>0.10 m` フレーム `95.1%` 削減（`1,014 -> 50`, `5.14 W`） |
+| **Unity 6 物理真値（CAD / スキャン `.pcd`）** | 平均 `19.0 mm` / `11.9 mm`（`>0.10 m` 0件） | 平均 `19.0 mm` / `11.9 mm`（`5.80 ms`, `5.18 W`） |
+| **大域復帰（Unity `N=8` / 実機 `N=21`）** | `8/8` (`5.30 ms`) / `15/16` (`1x`), `16/16` (`4x`), 誤ジャンプ `0`（棄却 `75/75`） | `8/8` (`38.75 ms`) / `15/16` (`1x`), 誤ジャンプ `0`（棄却 `74/74`） |
+| **公開 `hdl_501`（手持ち上下動・IMUなし）** | `0.80 ms`（3-DoF RMSE `0.352 m`, 6-DoF NDT-OMPは `0.046 m`） | `6.46 ms`（`4.90 W`, NDT-OMPの `3.8x`, DLLの `7.6x` 高速） |
+
+**適用限界・トレードオフ**: 平面3-DoF $(x, y, \psi)$ 仮定のため、IMUなしの手持ち上下動データ（`hdl_501`）では6-DoF手法に精度で劣ります。また、2D LiDARスキャン面を動的障害物が横切る際に一時スパイクが生じ得る点（3D単独で回避可能）、およびCPU手法より大きいホストメモリ消費（`168-221 MiB`）とNVIDIA CUDA GPU必須が制約となります。
+
+## 8. ライセンス
 
 本リポジトリは [Apache 2.0 LICENSE](./LICENSE) のもとで公開されています。
