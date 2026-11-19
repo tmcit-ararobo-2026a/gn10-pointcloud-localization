@@ -2,6 +2,8 @@
 
 All scripts and tools in this directory are licensed under **Apache-2.0** to keep the repository clean and permissive-license compliant.
 
+Public benchmark datasets **Dataset S1** (`rosbag_unity_nhk_dynamic_clean` + `unity_nhk_scanned_map.pcd`) and **Dataset R1** (`rosbag_national_test_run_clean`, `0–287.5 s`) are archived on Zenodo (CC BY 4.0): https://doi.org/10.5281/zenodo.24369541.
+
 ## 1. Building Optional Microbenchmarks
 
 By default, `colcon build` does **not** build benchmark binaries (`BUILD_BENCHMARKS=OFF`), keeping robot/Jetson runtime builds unchanged.

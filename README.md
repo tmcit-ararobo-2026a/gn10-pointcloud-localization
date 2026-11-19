@@ -150,7 +150,7 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 
 ## 7. Cross-Platform Benchmark Summary (`v1.2.3`/`v1.2.4`)
 
-Verified Desktop (Ryzen 7 5700X + NVIDIA RTX 4060) and Embedded (NVIDIA Jetson Orin Nano, `25 W MAXN_SUPER`, `19 V / 2.37 A`, `tegrastats` power logging) benchmark results (see [`benchmarks/README.md`](./benchmarks/README.md) for reproduction commands):
+Verified Desktop (Ryzen 7 5700X + NVIDIA RTX 4060) and Embedded (NVIDIA Jetson Orin Nano, `25 W MAXN_SUPER`, `19 V / 2.37 A`, `tegrastats` power logging) benchmark results (public S1 & R1 datasets: https://doi.org/10.5281/zenodo.24369541; see [`benchmarks/README.md`](./benchmarks/README.md) for reproduction commands):
 
 | Evaluation | Desktop (RTX 4060) | Jetson Orin Nano (25 W) |
 | :--- | :--- | :--- |
