@@ -27,7 +27,7 @@
       base_frame: "base_link"           # Robot body frame ID
 
     topics:
-      input_cloud: "/livox/lidar"       # 3D LiDAR (Livox Mid-360) PointCloud2 input topic
+      input_cloud: "/livox/lidar"       # 3D LiDAR (Livox Mid-360S) PointCloud2 input topic
       input_imu: "/livox/imu"           # IMU input topic for rotational deskew and yaw prediction
       output_dynamic: "/dynamic_cloud"  # Extracted dynamic obstacle PointCloud2 output topic
       output_ground: "/ground_cloud"    # Filtered ground PointCloud2 output topic

@@ -2,7 +2,7 @@
 
 [English](./README.md)
 
-ESDF + 3D Texture Memory + Jetson Orin Nano + MID360 を用いた自己位置推定。
+ESDF + 3D Texture Memory + Jetson Orin Nano + Livox Mid-360S を用いた自己位置推定。
 高速で軽量な静的マップマッチング技術によって、初期位置やオドメトリ無しでLiDAR点群から自己位置を推定します。
 NHK高専ロボコン2026においてフィールド上でロボットの位置を推定し自動運転・位置合わせとして使用しました。
 
@@ -23,7 +23,7 @@ https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
 ## 2. システム構成と自己位置推定アルゴリズム
 
 ```
-[3D LiDAR (Livox MID360)] ──> [ScanAccumulator (0.10s Deskew)] ──> [GroundFilter + Voxel均等化 (CUDA)] ──> [3D 障害物点群]
+[3D LiDAR (Livox Mid-360S)] ──> [ScanAccumulator (0.10s Deskew)] ──> [GroundFilter + Voxel均等化 (CUDA)] ──> [3D 障害物点群]
                                                                                                                │
 [2D LiDAR (Lakibeam 1)]   ──> [LaserScanDeskew (回転+並進+時刻同期)] ───────────────────────────────────> [2D 障害物点群]
                                                                                                                │

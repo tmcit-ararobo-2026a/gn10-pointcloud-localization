@@ -2,7 +2,7 @@
 
 [Japanese](./README_jp.md)
 
-Real-time LiDAR self-localization using ESDF, GPU 3D Texture Memory, Jetson Orin Nano, and Livox MID360.
+Real-time LiDAR self-localization using ESDF, GPU 3D Texture Memory, Jetson Orin Nano, and Livox Mid-360S.
 Estimates the robot's pose from LiDAR point clouds without requiring wheel odometry or prior initial pose inputs via fast and lightweight static map matching.
 Successfully deployed for autonomous navigation and positioning in NHK Robocon 2026.
 
@@ -23,7 +23,7 @@ https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
 ## 2. System Architecture & Localization Algorithm
 
 ```
-[3D LiDAR (Livox MID360)] ──> [ScanAccumulator (0.10s Deskew)] ──> [GroundFilter + VoxelEqualization (CUDA)] ──> [3D Obstacle Cloud]
+[3D LiDAR (Livox Mid-360S)] ──> [ScanAccumulator (0.10s Deskew)] ──> [GroundFilter + VoxelEqualization (CUDA)] ──> [3D Obstacle Cloud]
                                                                                                                   │
 [2D LiDAR (Lakibeam 1)]   ──> [LaserScanDeskew (Rot + Trans + Time Sync)] ──────────────────────────────> [2D Obstacle Cloud]
                                                                                                                   │

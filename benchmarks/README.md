@@ -125,7 +125,7 @@ python3 benchmarks/runners/run_ablation_suite.py \
 
 To preserve strict `Apache-2.0` licensing inside `gn10-pointcloud-localization`, all external baseline repositories (`robotics-upo/dll` [BSD-3-Clause], `rsasaki0109/lidar_localization_ros2` + `ndt_omp_ros2` [BSD-2-Clause], `KOKIAOKI/3d_bbs` [MIT], and `octomap` [BSD]) are built outside this repository in `~/external_baselines_ws`.
 
-Notice that Livox Mid-360 bags record 50 Hz packets (20 ms, ~4k pts/packet) whereas `gn10` internally accumulates a `0.10 s` window (~20k pts). To evaluate both raw packet input and genuinely fair `0.10 s` (`10 Hz`) scan input (with IMU preintegration + continuous-time deskewing enabled on `lidar_localization_ros2` and both IMU/constant-velocity deskewing tested on `DLL` / `KISS-ICP` / `3D-BBS`), generate the 10 Hz bags once with `benchmarks/tools/accumulate_livox_bag.py`:
+Notice that Livox Mid-360S bags record 50 Hz packets (20 ms, ~4k pts/packet) whereas `gn10` internally accumulates a `0.10 s` window (~20k pts). To evaluate both raw packet input and genuinely fair `0.10 s` (`10 Hz`) scan input (with IMU preintegration + continuous-time deskewing enabled on `lidar_localization_ros2` and both IMU/constant-velocity deskewing tested on `DLL` / `KISS-ICP` / `3D-BBS`), generate the 10 Hz bags once with `benchmarks/tools/accumulate_livox_bag.py`:
 
 ```bash
 # Always run unit tests with ROS 2 + workspace setup sourced so CUDA/test shared libs resolve cleanly
