@@ -35,7 +35,7 @@ datasets:
     has_out_of_arena: false
 
   unity_nhk_dynamic_clean:
-    description: "Unity 6 GPU-raycasted NHK2026 arena (motion-distorted Mid-360, 200Hz IMU, Lakibeam1, dynamic opponent) with exact physics GT"
+    description: "Unity 6 GPU-raycasted NHK2026 arena (motion-distorted Mid-360S, 200Hz IMU, Lakibeam1, dynamic opponent) with exact physics GT"
     default_bag_path: "~/rosbag_unity_nhk_dynamic_clean"
     play_topics: ["/livox/lidar", "/livox/imu", "/lakibeam/scan"]
     ref_topic: "/robot/ground_truth/pose"
