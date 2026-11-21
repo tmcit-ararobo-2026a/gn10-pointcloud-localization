@@ -101,7 +101,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `map_file_path` | `""` | マップファイル名またはパス（相対パスは `map/` 内を探索）。 |
 | `esdf.resolution` | `0.05` | 3D ESDF グリッドのセル解像度 [m]。 |
 | `esdf.max_dist` | `0.50` | ESDF 距離場の最大打ち切り距離 [m]。 |
-| `esdf.crop_enabled` | `true` | ESDF 生成時に指定境界ボックスでクロップ（CAD マップは外側へ $\pm\texttt{esdf.max\_dist}$ パディングを自動付与し `240×260×104`、クロップ済 PCD はパディングなしで `220×240×84`）。 |
+| `esdf.crop_enabled` | `true` | ESDF 生成時に指定境界ボックスでクロップ（CAD マップは外側へ ± `esdf.max_dist` パディングを自動付与し `240×260×104`、クロップ済 PCD はパディングなしで `220×240×84`）。 |
 | `esdf.crop_min_x` / `crop_max_x` | `-5.5` / `5.5` | ESDF クロップ範囲の X 下限/上限 [m]。 |
 | `esdf.crop_min_y` / `crop_max_y` | `-6.0` / `6.0` | ESDF クロップ範囲の Y 下限/上限 [m]。 |
 | `esdf.min_z` / `max_z` | `-0.20` / `4.00` | ESDF クロップ範囲の Z 下限/上限 [m]。 |
@@ -150,7 +150,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 
 ## 7. クロスプラットフォーム・ベンチマーク要約 (`v1.2.3`/`v1.2.4`)
 
-Desktop（Ryzen 7 5700X + NVIDIA RTX 4060）および組込み環境（NVIDIA Jetson Orin Nano, `25 W MAXN_SUPER`, `19 V / 2.37 A`, `tegrastats` 電力計測）での実測結果要約です（公開データセット S1・R1: https://doi.org/10.5281/zenodo.24369541、再現手順は [`benchmarks/README.md`](./benchmarks/README.md) を参照してください）。
+Desktop（Ryzen 7 5700X + NVIDIA RTX 4060）および組込み環境（NVIDIA Jetson Orin Nano, `25 W MAXN_SUPER`, `19 V / 2.37 A`, `tegrastats` 電力計測）での実測結果要約です（公開データセット S1・R1: https://doi.org/10.5281/zenodo.24369541 、再現手順は [`benchmarks/README.md`](./benchmarks/README.md) を参照してください）。
 
 | 評価項目 | Desktop (RTX 4060) | Jetson Orin Nano (25 W) |
 | :--- | :--- | :--- |

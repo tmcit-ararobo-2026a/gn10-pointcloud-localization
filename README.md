@@ -101,7 +101,7 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 | `map_file_path` | `""` | Map file name or path (relative paths search within `map/`). |
 | `esdf.resolution` | `0.05` | 3D ESDF voxel grid cell resolution [m]. |
 | `esdf.max_dist` | `0.50` | Maximum Euclidean distance truncation limit in ESDF voxels [m]. |
-| `esdf.crop_enabled` | `true` | Restrict ESDF grid generation to the specified 3D bounding box (CAD maps add $\pm\texttt{esdf.max\_dist}$ padding $\to 240\times260\times104$; cropped PCD maps omit padding $\to 220\times240\times84$). |
+| `esdf.crop_enabled` | `true` | Restrict ESDF grid generation to the specified 3D bounding box (CAD maps add ± `esdf.max_dist` padding $\to$ 240×260×104; cropped PCD maps omit padding $\to$ 220×240×84). |
 | `esdf.crop_min_x` / `crop_max_x` | `-5.5` / `5.5` | ESDF crop minimum/maximum X coordinate [m]. |
 | `esdf.crop_min_y` / `crop_max_y` | `-6.0` / `6.0` | ESDF crop minimum/maximum Y coordinate [m]. |
 | `esdf.min_z` / `max_z` | `-0.20` / `4.00` | ESDF crop minimum/maximum Z coordinate [m]. |
