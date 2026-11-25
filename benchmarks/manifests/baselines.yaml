@@ -106,7 +106,7 @@ tracking_suites:
         type: "kiss_icp"
         min_range: 0.45
         max_range: 20.0
-        voxel_size: 0.25
+        voxel_size: 0.15
 
   hdl_501_eval:
     dataset: "hdl_501_eval"
@@ -251,7 +251,7 @@ tracking_suites:
         type: "kiss_icp"
         min_range: 0.45
         max_range: 20.0
-        voxel_size: 0.25
+        voxel_size: 0.15
 
   unity_physics_gt_fair:
     dataset: "unity_nhk_dynamic_clean"
@@ -294,7 +294,7 @@ tracking_suites:
           ndt_num_threads: 4
           ndt_max_iterations: 30
           score_threshold: 25.0
-          voxel_leaf_size: 0.25
+          voxel_leaf_size: 0.15
           scan_min_range: 0.45
           scan_max_range: 20.0
           scan_period: 0.1
@@ -320,7 +320,7 @@ tracking_suites:
           gicp_corr_randomness: 20
           gicp_max_correspondence_distance: 2.0
           score_threshold: 25.0
-          voxel_leaf_size: 0.25
+          voxel_leaf_size: 0.15
           scan_min_range: 0.45
           scan_max_range: 20.0
           scan_period: 0.1
@@ -385,14 +385,14 @@ tracking_suites:
         deskew: true
         min_range: 0.45
         max_range: 20.0
-        voxel_size: 0.25
+        voxel_size: 0.15
       - label: "kiss_icp_accum_imu"
         type: "kiss_icp"
         cloud_topic: "/livox/lidar_deskewed"
         deskew: false
         min_range: 0.45
         max_range: 20.0
-        voxel_size: 0.25
+        voxel_size: 0.15
 
   national_human_3d_fair:
     dataset: "national_clean"
@@ -428,7 +428,7 @@ tracking_suites:
           ndt_num_threads: 4
           ndt_max_iterations: 30
           score_threshold: 25.0
-          voxel_leaf_size: 0.25
+          voxel_leaf_size: 0.15
           scan_min_range: 0.45
           scan_max_range: 20.0
           scan_period: 0.1
@@ -454,7 +454,7 @@ tracking_suites:
           gicp_corr_randomness: 20
           gicp_max_correspondence_distance: 2.0
           score_threshold: 25.0
-          voxel_leaf_size: 0.25
+          voxel_leaf_size: 0.15
           scan_min_range: 0.45
           scan_max_range: 20.0
           scan_period: 0.1
@@ -519,14 +519,14 @@ tracking_suites:
         deskew: true
         min_range: 0.45
         max_range: 20.0
-        voxel_size: 0.25
+        voxel_size: 0.15
       - label: "kiss_icp_accum_imu"
         type: "kiss_icp"
         cloud_topic: "/livox/lidar_deskewed"
         deskew: false
         min_range: 0.45
         max_range: 20.0
-        voxel_size: 0.25
+        voxel_size: 0.15
 
 global_search_suites:
   unity_nhk_gs:

@@ -230,6 +230,14 @@ class ExternalPoseListener(Node):
     def _publish_static_tf(self) -> None:
         if self._merged_static.transforms:
             self._pub_tf_static.publish(self._merged_static)
+        if self._use_imu_cv_odom and self._prev_imu_ns is None:
+            tf_msg = TFMessage()
+            tr = TransformStamped()
+            tr.header.frame_id = "odom"
+            tr.child_frame_id = "base_link"
+            tr.transform.rotation.w = 1.0
+            tf_msg.transforms.append(tr)
+            self._pub_odom_tf.publish(tf_msg)
 
     def _lookup_odom_at(self, t_ns: int) -> tuple[float, float, float]:
         if not self._odom_hist_ns:
@@ -1024,8 +1032,18 @@ def _run_kiss_icp_method(
                 pts_base = (T_bl[:3, :3] @ xyz.astype(np.float64).T).T + T_bl[:3, 3]
             else:
                 pts_base = xyz.astype(np.float64)
+            cyl_r = float(method.get("robot_radius", 0.80 if cfg.data.min_range >= 0.45 else 0.40))
+            in_chassis = (
+                (np.hypot(pts_base[:, 0], pts_base[:, 1]) <= cyl_r)
+                & (pts_base[:, 2] >= 0.0)
+                & (pts_base[:, 2] <= 1.2)
+            )
+            keep_base = ~in_chassis
+            pts_base = pts_base[keep_base]
+            if len(pts_base) == 0:
+                continue
             if use_deskew:
-                pts_ns = _extract_point_timestamps_ns(msg, valid, stamp_ns)
+                pts_ns = _extract_point_timestamps_ns(msg, valid, stamp_ns)[keep_base]
                 t0_ns = int(pts_ns.min())
                 t1_ns = int(pts_ns.max())
                 span_ns = max(t1_ns - t0_ns, 1)
