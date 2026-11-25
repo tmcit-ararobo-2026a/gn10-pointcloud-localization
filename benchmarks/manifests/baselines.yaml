@@ -257,7 +257,7 @@ tracking_suites:
     dataset: "unity_nhk_dynamic_clean"
     bag_file: "~/external_datasets/rosbag_unity_nhk_dynamic_accum10hz"
     offset_s: 0.0
-    duration_s: 36.5
+    duration_s: 30.0
     rate: 1.0
     cloud_topic: "/livox/lidar"
     imu_topic: "/livox/imu"
