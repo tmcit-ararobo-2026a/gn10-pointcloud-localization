@@ -34,10 +34,11 @@ import numpy as np
 import pandas as pd
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray
-from geometry_msgs.msg import PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import Imu
 from tf2_msgs.msg import TFMessage
 import yaml
 
@@ -133,6 +134,8 @@ class ExternalPoseListener(Node):
         shift_xyz: tuple[float, float, float] = (0.0, 0.0, 0.0),
         listen_pcl_pose: bool = False,
         listen_diag_status: bool = False,
+        stamp_offset_ns: int = 0,
+        imu_cv_odom_topic: str | None = None,
     ) -> None:
         super().__init__("baseline_compare_listener")
         self._lock = threading.Lock()
@@ -143,6 +146,29 @@ class ExternalPoseListener(Node):
         self._tf_parent = listen_tf_parent
         self._tf_child = listen_tf_child
         self._shift = shift_xyz
+        self._stamp_offset_ns = int(stamp_offset_ns)
+
+        # Lightweight symmetric IMU-yaw + EMA-CV odom->base_link bridge for DLL
+        self._use_imu_cv_odom = bool(imu_cv_odom_topic)
+        self._static_rot_map: dict[str, np.ndarray] = {}
+        for msg in tf_static_msgs:
+            for tf in msg.transforms:
+                child = tf.child_frame_id.lstrip("/")
+                r = tf.transform.rotation
+                self._static_rot_map[child] = _quat_to_rot_matrix(r.x, r.y, r.z, r.w)
+        self._odom_x = 0.0
+        self._odom_y = 0.0
+        self._odom_yaw = 0.0
+        self._prev_imu_ns: int | None = None
+        self._prev_wz = 0.0
+        self._odom_hist_ns: list[int] = []
+        self._odom_hist_xyy: list[tuple[float, float, float]] = []
+        self._last_R_map_odom = np.eye(3, dtype=np.float64)
+        self._map_base_hist: list[tuple[int, float, float]] = []
+        self._vx_world = 0.0
+        self._vy_world = 0.0
+        self._has_vel = False
+        self._last_tf_pose_key: tuple[float, float, float] | None = None
 
         qos_static = QoSProfile(
             depth=10,
@@ -155,6 +181,17 @@ class ExternalPoseListener(Node):
             merged.transforms.extend(msg.transforms)
         self._merged_static = merged
         self.create_timer(0.05, self._publish_static_tf)
+
+        if self._use_imu_cv_odom:
+            self._pub_odom_tf = self.create_publisher(
+                TFMessage, "/tf", QoSProfile(depth=200, reliability=ReliabilityPolicy.RELIABLE)
+            )
+            self._imu_sub = self.create_subscription(
+                Imu,
+                imu_cv_odom_topic,
+                self._on_imu_for_odom,
+                QoSProfile(depth=400, reliability=ReliabilityPolicy.BEST_EFFORT),
+            )
 
         if listen_tf_parent and listen_tf_child:
             self._tf_sub = self.create_subscription(
@@ -194,6 +231,78 @@ class ExternalPoseListener(Node):
         if self._merged_static.transforms:
             self._pub_tf_static.publish(self._merged_static)
 
+    def _lookup_odom_at(self, t_ns: int) -> tuple[float, float, float]:
+        if not self._odom_hist_ns:
+            return (0.0, 0.0, 0.0)
+        idx = bisect.bisect_left(self._odom_hist_ns, t_ns)
+        if idx == 0:
+            return self._odom_hist_xyy[0]
+        if idx >= len(self._odom_hist_ns):
+            return self._odom_hist_xyy[-1]
+        t0, t1 = self._odom_hist_ns[idx - 1], self._odom_hist_ns[idx]
+        p0, p1 = self._odom_hist_xyy[idx - 1], self._odom_hist_xyy[idx]
+        if t1 <= t0:
+            return p1
+        a = float(t_ns - t0) / float(t1 - t0)
+        ox = p0[0] + a * (p1[0] - p0[0])
+        oy = p0[1] + a * (p1[1] - p0[1])
+        oyaw = wrap_angle(p0[2] + a * wrap_angle(p1[2] - p0[2]))
+        return (ox, oy, oyaw)
+
+    def _on_imu_for_odom(self, msg: Imu) -> None:
+        t_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
+        if t_ns <= 0:
+            return
+        frame = msg.header.frame_id.lstrip("/")
+        w = np.array([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z], dtype=np.float64)
+        if frame != "base_link" and frame in self._static_rot_map:
+            w = self._static_rot_map[frame] @ w
+        wz = float(w[2])
+
+        with self._lock:
+            if self._prev_imu_ns is not None:
+                dt = (t_ns - self._prev_imu_ns) * 1e-9
+                if 0.0 < dt < 0.5:
+                    self._odom_yaw = wrap_angle(self._odom_yaw + 0.5 * (self._prev_wz + wz) * dt)
+                    if self._has_vel:
+                        v_odom = self._last_R_map_odom.T @ np.array([self._vx_world, self._vy_world, 0.0])
+                        self._odom_x += float(v_odom[0]) * dt
+                        self._odom_y += float(v_odom[1]) * dt
+            self._prev_imu_ns = t_ns
+            self._prev_wz = wz
+            # Predict 50 ms ahead so TF stamped at (t_ns + 0.05 s) + 0.10 s always brackets
+            # DLL's lookup at cloud_stamp + 0.10 s with zero time lag and zero extrapolation error.
+            lead_s = 0.05
+            ox_lead = self._odom_x
+            oy_lead = self._odom_y
+            if self._has_vel:
+                v_odom = self._last_R_map_odom.T @ np.array([self._vx_world, self._vy_world, 0.0])
+                ox_lead += float(v_odom[0]) * lead_s
+                oy_lead += float(v_odom[1]) * lead_s
+            oyaw_lead = wrap_angle(self._odom_yaw + wz * lead_s)
+            t_lead_ns = t_ns + int(lead_s * 1e9)
+            self._odom_hist_ns.append(t_lead_ns)
+            self._odom_hist_xyy.append((ox_lead, oy_lead, oyaw_lead))
+            ox, oy, oyaw = ox_lead, oy_lead, oyaw_lead
+
+        pub_ns = t_lead_ns - self._stamp_offset_ns
+        tf_msg = TFMessage()
+        tr = TransformStamped()
+        tr.header.stamp.sec = int(pub_ns // 10**9)
+        tr.header.stamp.nanosec = int(pub_ns % 10**9)
+        tr.header.frame_id = "odom"
+        tr.child_frame_id = "base_link"
+        tr.transform.translation.x = ox
+        tr.transform.translation.y = oy
+        tr.transform.translation.z = 0.0
+        qx, qy, qz, qw = _yaw_to_quat(oyaw)
+        tr.transform.rotation.x = qx
+        tr.transform.rotation.y = qy
+        tr.transform.rotation.z = qz
+        tr.transform.rotation.w = qw
+        tf_msg.transforms.append(tr)
+        self._pub_odom_tf.publish(tf_msg)
+
     def _on_tf(self, msg: TFMessage) -> None:
         sx, sy, sz = self._shift
         with self._lock:
@@ -202,12 +311,53 @@ class ExternalPoseListener(Node):
                     tr.header.frame_id.lstrip("/") == self._tf_parent
                     and tr.child_frame_id.lstrip("/") == self._tf_child
                 ):
-                    stamp_ns = int(tr.header.stamp.sec) * 10**9 + int(tr.header.stamp.nanosec)
+                    stamp_ns = int(tr.header.stamp.sec) * 10**9 + int(tr.header.stamp.nanosec) + self._stamp_offset_ns
                     if stamp_ns <= 0:
                         continue
                     t = tr.transform.translation
                     q = tr.transform.rotation
-                    self.poses.append((stamp_ns, t.x + sx, t.y + sy, t.z + sz, q.x, q.y, q.z, q.w))
+                    if self._use_imu_cv_odom:
+                        R_mo = _quat_to_rot_matrix(q.x, q.y, q.z, q.w)
+                        t_mo = np.array([t.x + sx, t.y + sy, t.z + sz], dtype=np.float64)
+                        self._last_R_map_odom = R_mo
+                        ox, oy, oyaw = self._lookup_odom_at(stamp_ns)
+                        c_o, s_o = math.cos(oyaw), math.sin(oyaw)
+                        R_ob = np.array([[c_o, -s_o, 0.0], [s_o, c_o, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+                        t_mb = t_mo + R_mo @ np.array([ox, oy, 0.0], dtype=np.float64)
+                        R_mb = R_mo @ R_ob
+                        qx, qy, qz, qw = _rot_matrix_to_quat(R_mb)
+                        mx, my, mz = float(t_mb[0]), float(t_mb[1]), float(t_mb[2])
+                        self.poses.append((stamp_ns, mx, my, mz, qx, qy, qz, qw))
+
+                        # Update EMA planar velocity (same 0.20 s window, alpha=0.6, max 4.0 m/s as gn10)
+                        pose_key = (round(t.x, 5), round(t.y, 5), round(q.z, 5))
+                        if pose_key != self._last_tf_pose_key:
+                            self._last_tf_pose_key = pose_key
+                            if self._map_base_hist:
+                                prev_t, prev_x, prev_y = self._map_base_hist[-1]
+                                sdt = (stamp_ns - prev_t) * 1e-9
+                                if sdt <= 1e-3 or math.hypot(mx - prev_x, my - prev_y) / sdt > 4.0:
+                                    self._map_base_hist.clear()
+                                    self._has_vel = False
+                            self._map_base_hist.append((stamp_ns, mx, my))
+                            while len(self._map_base_hist) > 2 and (stamp_ns - self._map_base_hist[1][0]) * 1e-9 > 0.20:
+                                self._map_base_hist.pop(0)
+                            old_t, old_x, old_y = self._map_base_hist[0]
+                            dt = (stamp_ns - old_t) * 1e-9
+                            if 0.15 <= dt < 0.50:
+                                vx = (mx - old_x) / dt
+                                vy = (my - old_y) / dt
+                                if math.hypot(vx, vy) < 4.0:
+                                    if self._has_vel:
+                                        self._vx_world = 0.6 * vx + 0.4 * self._vx_world
+                                        self._vy_world = 0.6 * vy + 0.4 * self._vy_world
+                                    else:
+                                        self._vx_world, self._vy_world = vx, vy
+                                        self._has_vel = True
+                                else:
+                                    self._has_vel = False
+                    else:
+                        self.poses.append((stamp_ns, t.x + sx, t.y + sy, t.z + sz, q.x, q.y, q.z, q.w))
 
     def _on_pcl_pose(self, msg: PoseWithCovarianceStamped) -> None:
         stamp_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
@@ -486,19 +636,30 @@ def _run_gn10_method(
     save_tum_file(est_poses, est_tum)
     ate = compute_ate_rpe_metrics(est_poses, ref_data["poses_3d"])
     lat_vals: list[float] = []
+    match_lat_vals: list[float] = []
+    filter_lat_vals: list[float] = []
     if pipeline_csv.exists() and pipeline_csv.stat().st_size > 0:
         df_pipe = pd.read_csv(pipeline_csv)
         if "time_total_ms" in df_pipe.columns:
             lat_vals = [float(x) for x in df_pipe["time_total_ms"].dropna().tolist() if x > 0.0]
+        if "time_matching_ms" in df_pipe.columns:
+            match_lat_vals = [float(x) for x in df_pipe["time_matching_ms"].dropna().tolist() if x > 0.0]
+        if "time_ground_filter_ms" in df_pipe.columns:
+            filter_lat_vals = [float(x) for x in df_pipe["time_ground_filter_ms"].dropna().tolist() if x > 0.0]
     res_df = monitor.to_dataframe()
     res_df.to_csv(out_dir / f"{suite_name}__{method['label']}_resources.csv", index=False)
 
+    match_summary = _summarize_latencies(match_lat_vals)
+    filter_summary = _summarize_latencies(filter_lat_vals)
     return {
         "method": method["label"],
         "type": "gn10",
         "est_poses_count": len(est_poses),
         **ate,
         **_summarize_latencies(lat_vals),
+        "match_latency_mean_ms": match_summary["latency_mean_ms"],
+        "match_latency_p95_ms": match_summary["latency_p95_ms"],
+        "filter_latency_mean_ms": filter_summary["latency_mean_ms"],
         **_summarize_resources(res_df, monitor.get_cumulative_cpu_pct()),
     }
 
@@ -566,14 +727,21 @@ def _run_dll_method(
     cmd = [dll_bin, "--ros-args", *_ros_param_cli_args(params)]
     log_path = out_dir / f"{suite_name}__{method['label']}.log"
 
+    use_imu_cv_odom = bool(method.get("use_imu_cv_odom", False))
+    imu_topic = method.get("imu_topic", suite_cfg.get("imu_topic", "/livox/imu"))
+
+    # Upstream dllnode.hpp (L309-310) adds +100,000 us (+0.10 s) to cloud->header.stamp
+    # when publishing map->odom TF; subtract 0.10 s here without modifying upstream binaries.
     listener = ExternalPoseListener(
         ref_data["tf_static_msgs"],
         listen_tf_parent="map",
         listen_tf_child="odom",
         shift_xyz=(min_x, min_y, min_z),
+        stamp_offset_ns=-100_000_000,
+        imu_cv_odom_topic=imu_topic if use_imu_cv_odom else None,
     )
     executor, stop_evt, th = _spin_executor_thread(listener)
-    odom_tf_proc = _start_odom_identity_tf(env)
+    odom_tf_proc = None if use_imu_cv_odom else _start_odom_identity_tf(env)
     node_proc = subprocess.Popen(
         cmd,
         env=env,
@@ -588,7 +756,8 @@ def _run_dll_method(
     bag_proc = None
     try:
         time.sleep(2.5)
-        topics = list(method.get("play_topics") or suite_cfg.get("play_topics") or [cloud_topic])
+        default_topics = [cloud_topic, imu_topic] if use_imu_cv_odom else [cloud_topic]
+        topics = list(method.get("play_topics") or suite_cfg.get("play_topics") or default_topics)
         bag_proc = _play_bag(bag_path, offset_s, rate, env, topics)
         _wait_bag_or_duration(bag_proc, duration_s / max(rate, 0.1) + 4.0)
         time.sleep(0.5)
@@ -845,7 +1014,7 @@ def _run_kiss_icp_method(
             stamp_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
             arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(-1, msg.point_step)
             xyz = np.frombuffer(arr[:, :12].tobytes(), dtype=np.float32).reshape(-1, 3)
-            valid = np.isfinite(xyz).all(axis=1)
+            valid = np.isfinite(xyz).all(axis=1) & (np.linalg.norm(xyz, axis=1) >= 0.15)
             xyz = xyz[valid]
             if len(xyz) == 0:
                 continue
@@ -1138,7 +1307,7 @@ def _extract_single_scan_pcd(
                 msg = r.deserialize(raw, c.msgtype)
                 arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(-1, msg.point_step)
                 xyz = np.frombuffer(arr[:, :12].tobytes(), dtype=np.float32).reshape(-1, 3)
-                xyz = xyz[np.isfinite(xyz).all(axis=1)]
+                xyz = xyz[np.isfinite(xyz).all(axis=1) & (np.linalg.norm(xyz, axis=1) >= 0.15)]
                 frame = msg.header.frame_id.lstrip("/")
                 if frame != "base_link" and frame in tfs:
                     T_bl = tfs[frame]
@@ -1146,7 +1315,8 @@ def _extract_single_scan_pcd(
                 else:
                     pts = xyz.astype(np.float64)
                 r_xy = np.linalg.norm(pts[:, :2], axis=1)
-                pts = pts[(r_xy > robot_radius) & (pts[:, 2] >= min_z_filter) & (pts[:, 2] <= 2.9)]
+                in_chassis = (r_xy <= robot_radius) & (pts[:, 2] >= 0.0) & (pts[:, 2] <= 1.2)
+                pts = pts[(~in_chassis) & (pts[:, 2] >= min_z_filter) & (pts[:, 2] <= 2.9)]
                 _write_pcd_xyz(out_pcd, pts)
                 return len(pts) > 0
             return False
@@ -1160,7 +1330,7 @@ def _extract_single_scan_pcd(
             hdr_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
             arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(-1, msg.point_step)
             xyz = np.frombuffer(arr[:, :12].tobytes(), dtype=np.float32).reshape(-1, 3)
-            valid = np.isfinite(xyz).all(axis=1)
+            valid = np.isfinite(xyz).all(axis=1) & (np.linalg.norm(xyz, axis=1) >= 0.15)
             xyz = xyz[valid]
             if len(xyz) == 0:
                 if t >= t_target and packets:
@@ -1202,7 +1372,8 @@ def _extract_single_scan_pcd(
             all_pts[:, 1] = y_new
 
         r_xy = np.linalg.norm(all_pts[:, :2], axis=1)
-        all_pts = all_pts[(r_xy > robot_radius) & (all_pts[:, 2] >= min_z_filter) & (all_pts[:, 2] <= 2.9)]
+        in_chassis = (r_xy <= robot_radius) & (all_pts[:, 2] >= 0.0) & (all_pts[:, 2] <= 1.2)
+        all_pts = all_pts[(~in_chassis) & (all_pts[:, 2] >= min_z_filter) & (all_pts[:, 2] <= 2.9)]
         _write_pcd_xyz(out_pcd, all_pts)
         return len(all_pts) > 0
     return False

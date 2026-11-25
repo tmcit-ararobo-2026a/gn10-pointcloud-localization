@@ -112,23 +112,39 @@ def compute_ate_rpe_metrics(est_poses_3d, ref_poses_3d, max_dt_s: float = 0.05, 
     for est in est_poses_3d:
         t_ns = est[0]
         idx = bisect.bisect_left(ref_stamps, t_ns)
-        cand = None
-        if idx == 0:
-            cand = 0
-        elif idx >= len(ref_stamps):
-            cand = len(ref_stamps) - 1
+        ref_x = ref_y = ref_yaw = None
+        if 0 < idx < len(ref_stamps):
+            r0 = ref_poses_3d[idx - 1]
+            r1 = ref_poses_3d[idx]
+            dt0 = abs(t_ns - r0[0]) * 1e-9
+            dt1 = abs(r1[0] - t_ns) * 1e-9
+            if min(dt0, dt1) <= max_dt_s:
+                span_ns = r1[0] - r0[0]
+                if span_ns > 0 and max(dt0, dt1) <= max(2.0 * max_dt_s, 0.15):
+                    alpha = float(t_ns - r0[0]) / float(span_ns)
+                    ref_x = r0[1] + alpha * (r1[1] - r0[1])
+                    ref_y = r0[2] + alpha * (r1[2] - r0[2])
+                    y0 = _yaw_of(r0)
+                    y1 = _yaw_of(r1)
+                    ref_yaw = wrap_angle(y0 + alpha * wrap_angle(y1 - y0))
+                else:
+                    r_near = r1 if dt1 < dt0 else r0
+                    ref_x, ref_y, ref_yaw = r_near[1], r_near[2], _yaw_of(r_near)
         else:
-            cand = idx if abs(ref_stamps[idx] - t_ns) < abs(ref_stamps[idx - 1] - t_ns) else idx - 1
-        dt_s = abs(ref_stamps[cand] - t_ns) * 1e-9
-        if dt_s <= max_dt_s:
-            ref = ref_poses_3d[cand]
-            ex = est[1] - ref[1]
-            ey = est[2] - ref[2]
+            cand = 0 if idx == 0 else len(ref_stamps) - 1
+            if abs(ref_stamps[cand] - t_ns) * 1e-9 <= max_dt_s:
+                r_near = ref_poses_3d[cand]
+                ref_x, ref_y, ref_yaw = r_near[1], r_near[2], _yaw_of(r_near)
+
+        if ref_x is not None:
+            ex = est[1] - ref_x
+            ey = est[2] - ref_y
             xy_err = math.hypot(ex, ey)
-            eyaw = abs(wrap_angle(_yaw_of(est) - _yaw_of(ref)))
+            est_yaw = _yaw_of(est)
+            eyaw = abs(wrap_angle(est_yaw - ref_yaw))
             xy_errs.append(xy_err)
             yaw_errs.append(eyaw)
-            matched_pairs.append((t_ns, est[1], est[2], _yaw_of(est), ref[1], ref[2], _yaw_of(ref)))
+            matched_pairs.append((t_ns, est[1], est[2], est_yaw, ref_x, ref_y, ref_yaw))
 
     if not xy_errs:
         return {

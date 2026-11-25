@@ -277,6 +277,13 @@ tracking_suites:
         map_file: "map/nhk2026_map.json"
         params:
           lidar_2d.enable: false
+      - label: "gn10_pcd_esdf_3d"
+        type: "gn10"
+        bag_file: "~/rosbag_unity_nhk_dynamic_clean"
+        map_type: "esdf"
+        map_file: "~/external_datasets/unity_nhk_scanned_map.esdf"
+        params:
+          lidar_2d.enable: false
       - label: "lidar_loc_ndt_mid360_fair"
         type: "lidar_loc"
         map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
@@ -347,6 +354,21 @@ tracking_suites:
       - label: "dll_accum_deskew"
         type: "dll"
         cloud_topic: "/livox/lidar_deskewed"
+        map_file: "~/external_datasets/nhk2026_cad_floor_zpad.bt"
+        shift_xyz: [-5.45, -5.85, -1.0]
+        params:
+          use_imu: false
+          align_method: 1
+          update_rate: 20.0
+          update_min_time: 0.04
+          update_min_d: 0.01
+          update_min_a: 0.01
+          solver_max_iter: 75
+          solver_max_threads: 4
+      - label: "dll_imu_cv"
+        type: "dll"
+        cloud_topic: "/livox/lidar_deskewed"
+        use_imu_cv_odom: true
         map_file: "~/external_datasets/nhk2026_cad_floor_zpad.bt"
         shift_xyz: [-5.45, -5.85, -1.0]
         params:
@@ -477,6 +499,21 @@ tracking_suites:
           update_min_a: 0.01
           solver_max_iter: 75
           solver_max_threads: 4
+      - label: "dll_imu_cv"
+        type: "dll"
+        cloud_topic: "/livox/lidar_deskewed"
+        use_imu_cv_odom: true
+        map_file: "~/external_datasets/nhk2026_cad_floor_zpad.bt"
+        shift_xyz: [-5.45, -5.85, -1.0]
+        params:
+          use_imu: false
+          align_method: 1
+          update_rate: 20.0
+          update_min_time: 0.04
+          update_min_d: 0.01
+          update_min_a: 0.01
+          solver_max_iter: 75
+          solver_max_threads: 4
       - label: "kiss_icp_accum_cv"
         type: "kiss_icp"
         deskew: true
@@ -503,7 +540,7 @@ global_search_suites:
     rp_deg: 0.0
     src_voxel: 0.05
     min_z_filter: 0.05
-    robot_radius: 0.45
+    robot_radius: 0.80
     accum_window_s: 0.0
   unity_nhk_gs_accum:
     dataset: "unity_nhk_dynamic_clean"
@@ -516,7 +553,7 @@ global_search_suites:
     rp_deg: 0.0
     src_voxel: 0.05
     min_z_filter: 0.05
-    robot_radius: 0.45
+    robot_radius: 0.80
     accum_window_s: 0.10
     imu_topic: "/livox/imu"
   national_n21_gs:
@@ -531,7 +568,7 @@ global_search_suites:
     rp_deg: 0.0
     src_voxel: 0.05
     min_z_filter: 0.05
-    robot_radius: 0.45
+    robot_radius: 0.80
     accum_window_s: 0.0
   national_n21_gs_accum:
     dataset_in: "national_clean"
@@ -545,6 +582,6 @@ global_search_suites:
     rp_deg: 0.0
     src_voxel: 0.05
     min_z_filter: 0.05
-    robot_radius: 0.45
+    robot_radius: 0.80
     accum_window_s: 0.10
     imu_topic: "/livox/imu"
