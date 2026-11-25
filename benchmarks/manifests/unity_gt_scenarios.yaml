@@ -10,4 +10,4 @@ scenarios:
   - {name: U_B1_3d_cold_t3,          group: U_3D_Only, offset: 3,  bag_duration: 5.0, lidar_2d: false, initial_local_search: false, yaw_perturb: 1.57,  expected: recover}
   - {name: U_B2_3d_cold_t14,         group: U_3D_Only, offset: 14, bag_duration: 5.0, lidar_2d: false, initial_local_search: false, yaw_perturb: -1.57, expected: recover}
   - {name: U_B3_3d_kidnap_t10,       group: U_3D_Only, offset: 10, bag_duration: 7.0, lidar_2d: false, initial_local_search: true,  init_x: 10.0, init_y: 10.0, yaw_perturb: 0.1, expected: recover}
-  - {name: U_B4_3d_kidnap_t22,       group: U_3D_Only, offset: 22, bag_duration: 7.0, lidar_2d: false, initial_local_search: true,  init_x: 10.0, init_y: 10.0, yaw_perturb: -0.2, expected: recover}
+  - {name: U_B4_3d_kidnap_t19,       group: U_3D_Only, offset: 19, bag_duration: 7.0, lidar_2d: false, initial_local_search: true,  init_x: 10.0, init_y: 10.0, yaw_perturb: -0.2, expected: recover}
