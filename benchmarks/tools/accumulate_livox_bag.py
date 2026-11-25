@@ -317,6 +317,7 @@ def accumulate_bag(
     robot_radius: float = 0.80,
     robot_z_min: float = 0.0,
     robot_z_max: float = 1.2,
+    sliding: bool = False,
 ) -> dict[str, int]:
     if dst_bag.exists():
         if not overwrite:
@@ -398,7 +399,10 @@ def accumulate_bag(
                         ts.serialize_cdr(deskew_cloud, "sensor_msgs/msg/PointCloud2"),
                     )
                     counts["scans_emitted"] += 1
-                    packet_buf.clear()
+                    if sliding:
+                        packet_buf.pop(0)
+                    else:
+                        packet_buf.clear()
 
     return counts
 
@@ -414,6 +418,7 @@ def main() -> int:
     parser.add_argument("--robot-radius", type=float, default=0.80, help="base_link self-filter cylinder radius [m] (<=0 disables)")
     parser.add_argument("--robot-z-min", type=float, default=0.0, help="base_link self-filter cylinder min Z [m]")
     parser.add_argument("--robot-z-max", type=float, default=1.2, help="base_link self-filter cylinder max Z [m]")
+    parser.add_argument("--sliding", action="store_true", help="Emit sliding-window clouds at native packet rate (50 Hz)")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -428,6 +433,7 @@ def main() -> int:
         robot_radius=args.robot_radius,
         robot_z_min=args.robot_z_min,
         robot_z_max=args.robot_z_max,
+        sliding=args.sliding,
     )
     print(f"[accumulate] done: {stats}", flush=True)
     return 0

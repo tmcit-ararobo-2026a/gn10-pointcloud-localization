@@ -284,6 +284,13 @@ tracking_suites:
         map_file: "~/external_datasets/unity_nhk_scanned_map.esdf"
         params:
           lidar_2d.enable: false
+      - label: "gn10_pcd_esdf_3d_10hz"
+        type: "gn10"
+        map_type: "esdf"
+        map_file: "~/external_datasets/unity_nhk_scanned_map.esdf"
+        params:
+          lidar_2d.enable: false
+          scan_accumulation.window_s: 0.0
       - label: "lidar_loc_ndt_mid360_fair"
         type: "lidar_loc"
         map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
