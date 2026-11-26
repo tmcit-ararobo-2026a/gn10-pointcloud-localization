@@ -72,13 +72,35 @@ tracking_suites:
           imu_preintegration_use_base_frame_transform: true
           use_continuous_time_deskew: false
           enable_map_odom_tf: true
-      - label: "lidar_loc_gicp_omp"
+      - label: "lidar_loc_small_gicp"
         type: "lidar_loc"
         map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
         params:
-          registration_method: "GICP_OMP"
+          registration_method: "SMALL_GICP"
+          ndt_num_threads: 4
+          ndt_max_iterations: 30
           gicp_corr_randomness: 20
-          gicp_max_correspondence_distance: 2.0
+          gicp_max_correspondence_distance: 1.0
+          score_threshold: 25.0
+          voxel_leaf_size: 0.15
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          use_odom: false
+          use_imu_preintegration: true
+          imu_accel_scale: 9.81
+          imu_preintegration_use_base_frame_transform: true
+          use_continuous_time_deskew: false
+          enable_map_odom_tf: true
+      - label: "lidar_loc_small_vgicp"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "SMALL_VGICP"
+          ndt_num_threads: 4
+          ndt_max_iterations: 30
+          gicp_corr_randomness: 20
+          gicp_max_correspondence_distance: 1.0
+          vgicp_voxel_resolution: 0.5
           score_threshold: 25.0
           voxel_leaf_size: 0.15
           scan_min_range: 0.45
@@ -140,13 +162,33 @@ tracking_suites:
           use_imu_preintegration: false
           use_continuous_time_deskew: false
           enable_map_odom_tf: true
-      - label: "lidar_loc_gicp_omp"
+      - label: "lidar_loc_small_gicp"
         type: "lidar_loc"
         map_file: "~/external_datasets/hdl_501_map.pcd"
         params:
-          registration_method: "GICP_OMP"
+          registration_method: "SMALL_GICP"
+          ndt_num_threads: 4
+          ndt_max_iterations: 30
           gicp_corr_randomness: 20
-          gicp_max_correspondence_distance: 2.0
+          gicp_max_correspondence_distance: 1.0
+          score_threshold: 25.0
+          voxel_leaf_size: 0.15
+          scan_min_range: 0.40
+          scan_max_range: 18.0
+          use_odom: false
+          use_imu_preintegration: false
+          use_continuous_time_deskew: false
+          enable_map_odom_tf: true
+      - label: "lidar_loc_small_vgicp"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/hdl_501_map.pcd"
+        params:
+          registration_method: "SMALL_VGICP"
+          ndt_num_threads: 4
+          ndt_max_iterations: 30
+          gicp_corr_randomness: 20
+          gicp_max_correspondence_distance: 1.0
+          vgicp_voxel_resolution: 0.5
           score_threshold: 25.0
           voxel_leaf_size: 0.15
           scan_min_range: 0.40
@@ -317,13 +359,45 @@ tracking_suites:
           use_continuous_time_deskew: true
           point_timestamp_unit: "auto"
           enable_map_odom_tf: true
-      - label: "lidar_loc_gicp_mid360_fair"
+      - label: "lidar_loc_small_gicp_fair"
         type: "lidar_loc"
         map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
         params:
-          registration_method: "GICP_OMP"
+          registration_method: "SMALL_GICP"
+          ndt_num_threads: 4
+          ndt_max_iterations: 50
+          transform_epsilon: 0.02
           gicp_corr_randomness: 20
-          gicp_max_correspondence_distance: 2.0
+          gicp_max_correspondence_distance: 0.5
+          score_threshold: 25.0
+          voxel_leaf_size: 0.15
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          scan_period: 0.1
+          cloud_queue_depth: 1
+          min_scan_interval_sec: 0.0
+          use_odom: false
+          use_twist_prediction: true
+          twist_prediction_use_angular_velocity: false
+          max_twist_prediction_dt: 0.25
+          predict_pose_from_previous_delta: true
+          use_imu_preintegration: true
+          imu_accel_scale: 9.80665
+          imu_preintegration_use_base_frame_transform: true
+          imu_dual_queue_enabled: true
+          use_continuous_time_deskew: true
+          point_timestamp_unit: "auto"
+          enable_map_odom_tf: true
+      - label: "lidar_loc_small_vgicp_fair"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "SMALL_VGICP"
+          ndt_num_threads: 4
+          ndt_max_iterations: 30
+          gicp_corr_randomness: 20
+          gicp_max_correspondence_distance: 1.0
+          vgicp_voxel_resolution: 0.5
           score_threshold: 25.0
           voxel_leaf_size: 0.15
           scan_min_range: 0.45
@@ -451,13 +525,45 @@ tracking_suites:
           use_continuous_time_deskew: true
           point_timestamp_unit: "auto"
           enable_map_odom_tf: true
-      - label: "lidar_loc_gicp_mid360_fair"
+      - label: "lidar_loc_small_gicp_fair"
         type: "lidar_loc"
         map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
         params:
-          registration_method: "GICP_OMP"
+          registration_method: "SMALL_GICP"
+          ndt_num_threads: 4
+          ndt_max_iterations: 50
+          transform_epsilon: 0.02
           gicp_corr_randomness: 20
-          gicp_max_correspondence_distance: 2.0
+          gicp_max_correspondence_distance: 0.5
+          score_threshold: 25.0
+          voxel_leaf_size: 0.15
+          scan_min_range: 0.45
+          scan_max_range: 20.0
+          scan_period: 0.1
+          cloud_queue_depth: 1
+          min_scan_interval_sec: 0.0
+          use_odom: false
+          use_twist_prediction: true
+          twist_prediction_use_angular_velocity: false
+          max_twist_prediction_dt: 0.25
+          predict_pose_from_previous_delta: true
+          use_imu_preintegration: true
+          imu_accel_scale: 9.80665
+          imu_preintegration_use_base_frame_transform: true
+          imu_dual_queue_enabled: true
+          use_continuous_time_deskew: true
+          point_timestamp_unit: "auto"
+          enable_map_odom_tf: true
+      - label: "lidar_loc_small_vgicp_fair"
+        type: "lidar_loc"
+        map_file: "~/external_datasets/nhk2026_cad_floor.pcd"
+        params:
+          registration_method: "SMALL_VGICP"
+          ndt_num_threads: 4
+          ndt_max_iterations: 30
+          gicp_corr_randomness: 20
+          gicp_max_correspondence_distance: 1.0
+          vgicp_voxel_resolution: 0.5
           score_threshold: 25.0
           voxel_leaf_size: 0.15
           scan_min_range: 0.45

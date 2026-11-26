@@ -888,6 +888,7 @@ def _run_lidar_loc_method(
                 stderr=subprocess.DEVNULL,
                 timeout=15,
             )
+        time.sleep(1.5)  # Allow DDS endpoint discovery before bag playback begins
         topics = [cloud_topic]
         if params.get("use_imu_preintegration", False) or params.get(
             "use_continuous_time_deskew", False
