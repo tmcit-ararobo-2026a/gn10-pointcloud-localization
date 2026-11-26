@@ -2,161 +2,117 @@
 
 [English](./README.md)
 
-ESDF + 3D Texture Memory + Jetson Orin Nano + Livox Mid-360S を用いた自己位置推定。
-高速で軽量な静的マップマッチング技術によって、初期位置やオドメトリ無しでLiDAR点群から自己位置を推定します。
-NHK高専ロボコン2026においてフィールド上でロボットの位置を推定し自動運転・位置合わせとして使用しました。
+CUDA 3D Texture Memory（`tex3D`）を用いた、ROS 2 Humble 向けの静的事前マップ平面 3-DoF $(x, y, \psi)$ LiDAR--IMU 自己位置推定パッケージです。
+車輪オドメトリや初期位置入力なしに、事前生成した 3D 距離場へ点群を直接照合して自己位置を推定します。
+NHK 高専ロボコン 2026 の自律移動・位置合わせに使用しました。
 
-<img width="814" height="562" alt="image" src="https://github.com/user-attachments/assets/4254e8ba-a133-42b7-86b6-07034116f0f9" />
+<img width="814" height="562" alt="RViz2 EDF 可視化" src="https://github.com/user-attachments/assets/4254e8ba-a133-42b7-86b6-07034116f0f9" />
 
-## 1. 概要と特徴
+## 1. 主な特徴
 
-- GPUを用いた自己位置推定（Jetson Orin Nano向けに最適化）。
-- 点群と点群を直接照合せず、連続的な 3D 打ち切り非負表面ユークリッド距離場（Unsigned Surface EDF、設定キー・ファイル名では `ESDF` と呼称）を用いることで高い拡張性と軽量性を両立。
-- 距離場を GPU の 3D Texture Memory に展開することで、点あたり $\mathcal{O}(1)$ のハードウェア三線形補間計算量でマッチング。
-- `.pcd` 点群データや `.json` CAD データから距離場マップを自動生成し、専用 `.esdf` バイナリ形式で保存可能（`.esdf` 記録形式自体は符号付き `float32` 生配列を保持可能だが、マップ生成とマッチング評価は非負表面距離 $d \in [0, d_{\max}]$ を使用し、障害物内部への負コスト引き込みや解像度未満の薄壁・`.pcd` での符号破綻を防止）。
-- ROS2 Humble対応で様々なプロジェクトに応用可能。
-- マップ以外の障害物のフィルタ機能を備えロボット周囲の動的障害物をリアルタイムに分離し、`/dynamic_cloud` として配信。
-- オドメトリを使用する代わりに静的マップとのマッチングを高速で行うため、誤差の偏りが生じにくく静的マップ上の位置をリアルタイムで推定可能。
+- **ハードウェア補間 3D EDF（`tex3D`）**：`.json` CAD 定義または `.pcd` 点群をオフラインで打ち切り非負表面ユークリッド距離場（$d \in [0, d_{\max}]$、`.esdf` float32 バイナリ保存）へ変換し、読み取り専用 CUDA 3D Texture Memory 上で $O(1)$ のハードウェア三線形補間を実行します。
+- **GPU 前処理・ハッシュボクセル均一化**：`0.10 s` 蓄積した 3D LiDAR 点群を IMU ヨー角＋EMA 並進速度で歪み補正し、床面・自機を除去した上で、固定メモリ GPU 空間ハッシュ表（`262,144` スロット、`6.00 MiB` VRAM、`0.08 m` ボクセル）により近距離の $1/r^2$ 点密度偏りを抑えます。
+- **Clipped $L_1$ 直接照合**：純粋な Clipped $L_1$ 残差（上限 `0.25 m`）を用いた粗密グリッド探索（最終 `2 mm` / `0.0012 rad`）と独立コスト閾値判定（`cost_3d < 0.23 m`）で姿勢を推定します。補助 2D LiDAR 融合・フォールバックにも対応します。
+- **GPU グローバル再位置推定**：起動時や連続 `25` フレーム棄却時に同一の `tex3D` EDF を再利用して全域探索します（Top-4 3D NMS・$180^\circ$ 点対称双子除外付き比率ゲート `0.960`・`cost_3d < 0.202 m` による 3 フレーム連続検証）。
+- **動的障害物分離**：事前マップに存在しない点群（$d \ge 0.15\,\text{m}$）を `/dynamic_cloud` として配信します。
 
 https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
 
-## 2. システム構成と自己位置推定アルゴリズム
+## 2. 処理パイプライン概要
 
-```
-[3D LiDAR (Livox Mid-360S)] ──> [ScanAccumulator (0.10s Deskew)] ──> [GroundFilter + Voxel均等化 (CUDA)] ──> [3D 障害物点群]
-                                                                                                               │
-[2D LiDAR (Lakibeam 1)]   ──> [LaserScanDeskew (回転+並進+時刻同期)] ───────────────────────────────────> [2D 障害物点群]
-                                                                                                               │
-[IMU + EMA 並進速度外挿]  ──────────────────────────────────────────────────────────────────────────────>      ▼
-                                                                                    [EDF Matcher (CUDA 3D Texture + Clipped L1)]
-[3D 距離場 Map (GPU Texture)] ──────────────────────────────────────────────────────────────────────────>      │
-      │                                                                                            ▼
-      ▼ (Transient Local)                                                   [3D/2D 振動防止フォールバック & 合格判定]
-[ESDF点群 (/esdf_map)]                                                                             │
-                                                                          ┌────────────────────────┴────────────────────────┐
-                                                                          ▼ (合格: Accepted)                                ▼ (不合格: Rejected)
-                                                         [TF 配信 (map -> base_link)]                      [TF・推定姿勢の配信を即時停止]
-                                                         [/platform_constraint & /dynamic_cloud]           [localization_success = false]
-                                                         [localization_success = true]                     [25フレーム連続失敗でGlobalSearch発動]
-                                                                                                           [(IMU Yaw絞り込み + Uniqueness + Trial検証)]
+```text
+[3D LiDAR (50 Hz)] ──> [0.10 s IMU歪み補正・フィルタ] ──> [GPUハッシュボクセル均一化 (0.08 m)] ──┐
+[2D LiDAR (任意)  ] ──> [ビーム単位歪み補正・時刻同期] ───────────────────────────────────────────┤
+[IMU + EMA 速度  ] ──> [姿勢予測] ───────────────────────────────────────────────────────────────▼
+[静的 3D EDF     ] ──> [CUDA 3D Texture (tex3D)] ──> [粗密 Clipped L1 マッチャー (2 mm)]
+                                                                   │
+                                        ┌──────────────────────────┴──────────────────────────┐
+                                        ▼ (cost_3d < 0.23 m)                                  ▼ (棄却)
+                       [TF配信 (map -> base_link)]                           [TF・推定姿勢の配信停止]
+                       [/platform_constraint & /dynamic_cloud]               [25フレーム連続失敗 -> GPU大域探索]
+                                                                             [(Top-4 NMS + 比率ゲート + 3フレーム検証)]
 ```
 
-## 3. ビルド環境・依存関係
+## 3. 動作環境・ビルド
 
-- **OS**: Ubuntu 22.04 LTS
-- **ROS**: ROS 2 Humble
-- **GPU**: NVIDIA GPU (Compute Capability 8.7 / 8.9: Jetson Orin Nano / AGX Orin / RTX 40 シリーズ等)
-- **CUDA Toolkit**: 12.0 以上
-
-### 依存パッケージのインストールとビルド
+- **OS / ROS**：Ubuntu 22.04 LTS、ROS 2 Humble
+- **GPU / CUDA**：NVIDIA GPU（Compute Capability 8.7 / 8.9：Jetson Orin Nano, RTX 4060 等）、CUDA Toolkit 12.0 以上
 
 ```bash
-sudo apt update
-sudo apt install -y \
-  libeigen3-dev \
-  nlohmann-json3-dev \
-  libpcl-dev \
-  libopenmpi-dev \
-  ros-humble-pcl-conversions
+sudo apt update && sudo apt install -y \
+  libeigen3-dev nlohmann-json3-dev libpcl-dev libopenmpi-dev ros-humble-pcl-conversions
 
 cd ~/ros2_ws
 colcon build --symlink-install --packages-select gn10_pointcloud_localization
 source install/setup.bash
 
-# 単体テスト（事前に ROS 2 とワークスペースの setup.bash を source すること）
+# 単体テスト
 ctest --test-dir build/gn10_pointcloud_localization --output-on-failure -V
 ```
 
 ## 4. 使い方
 
-### マップファイルの配置
-マップファイル（`.pcd`, `.esdf`, `.json`）はパッケージ内の `map/` フォルダに配置すると、YAML 設定からファイル名のみで自動参照。
+`.json` / `.pcd` / `.esdf` マップを `map/` ディレクトリに配置します。`map_source_type: "pcd"` 指定時は初回起動時に `map/cache/<ファイル名>.esdf` へ自動キャッシュされます。
 
-### PCDからESDFへの事前変換
 ```bash
-# 使用法: pcd_to_esdf_converter <input.pcd> <output.esdf> <resolution_m> [max_dist_m] [min_x max_x min_y max_y min_z max_z]
+# 任意: .pcd から .esdf への事前変換
 ros2 run gn10_pointcloud_localization pcd_to_esdf_converter \
-  ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.pcd \
-  ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.esdf \
-  0.05 0.50 -5.5 5.5 -6.0 6.0 -0.2 4.0
-```
-`map_source_type: "pcd"` を指定して起動した場合も、初回起動時に `map/cache/<ファイル名>.esdf` キャッシュが自動生成され、2 回目以降は高速に読み込み。
+  map/my_field.pcd map/my_field.esdf 0.05 0.50 -5.5 5.5 -6.0 6.0 -0.2 4.0
 
-### 起動
-```bash
-# 通常起動 (common_params.yaml + localization_params.yaml)
+# 起動（実機 / rosbag再生）
 ros2 launch gn10_pointcloud_localization localization.launch.py
-
-# Rosbag 再生などのシミュレーション時刻を使用する場合
 ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=true
 ```
 
-## 5. パラメータ解説
+## 5. 主要パラメータ（`config/common_params.yaml`）
 
-共通設定は [`config/common_params.yaml`](./config/common_params.yaml) に定義。
-
-| パラメータ名 | 既定値 (`common_params.yaml`) | 役割・メカニズム |
+| パラメータ | 既定値 | 説明 |
 | :--- | :---: | :--- |
-| `map_source_type` | `"json"` | マップ種別 (`json`, `pcd`, `esdf`, `ros2_param`)。 |
-| `map_file_path` | `""` | マップファイル名またはパス（相対パスは `map/` 内を探索）。 |
-| `esdf.resolution` | `0.05` | 3D ESDF グリッドのセル解像度 [m]。 |
-| `esdf.max_dist` | `0.50` | ESDF 距離場の最大打ち切り距離 [m]。 |
-| `esdf.crop_enabled` | `true` | ESDF 生成時に指定境界ボックスでクロップ（CAD マップは外側へ ± `esdf.max_dist` パディングを自動付与し `240×260×104`、クロップ済 PCD はパディングなしで `220×240×84`）。 |
-| `esdf.crop_min_x` / `crop_max_x` | `-5.5` / `5.5` | ESDF クロップ範囲の X 下限/上限 [m]。 |
-| `esdf.crop_min_y` / `crop_max_y` | `-6.0` / `6.0` | ESDF クロップ範囲の Y 下限/上限 [m]。 |
-| `esdf.min_z` / `max_z` | `-0.20` / `4.00` | ESDF クロップ範囲の Z 下限/上限 [m]。 |
-| `scan_accumulation.window_s` | `0.10` | 3D LiDAR 点群の蓄積時間窓 [s]（スキャン末尾時刻へ運動補正）。 |
+| `map_source_type` / `map_file_path` | `"json"` / `""` | マップ形式（`json`, `pcd`, `esdf`, `ros2_param`）とパス（相対パスは `map/` 内を探索）。 |
+| `esdf.resolution` / `max_dist` | `0.05` / `0.50` | 3D EDF グリッド解像度 [m] と打ち切り距離上限 [m]。 |
+| `esdf.crop_enabled` | `true` | 指定境界ボックス（`crop_min/max_x,y`, `min/max_z`）でクロップ（CAD は $\pm d_{\max}$ パディング付与、クロップ済 PCD はなし）。 |
+| `scan_accumulation.window_s` | `0.10` | 3D LiDAR スライディング蓄積窓 [s]。 |
+| `filter_params.voxel_size` | `0.08` | GPU ハッシュボクセル重心均一化の辺長 [m]（`<= 0` で無効）。 |
 | `filter_params.ground_z_thresh` | `0.06` | `base_link` 基準の床面除去高さ閾値 [m]。 |
-| `filter_params.voxel_size` | `0.08` | GPU 3D Voxel 重心均等化のボクセル辺長 [m]（近距離 $1/r^2$ 密度バイアスを除去、`<= 0` で無効化）。 |
-| `filter_params.robot_radius` | `0.80` | 自己機体除外半径 [m]（XY 平面）。 |
-| `filter_params.robot_height_min` / `max` | `0.0` / `1.2` | 自己機体除外の高さ範囲 [m]（Z 方向）。 |
-| `filter_params.max_range` | `12.0` | センサの最大有効距離 [m]。 |
-| `matching_params.search_range_xy` | `0.30` | ローカル追従時の XY 探索半径 [m]。 |
-| `matching_params.search_step_xy` | `0.05` | ローカル粗探索の XY グリッド刻み幅 [m]。 |
-| `matching_params.search_range_yaw` | `0.15` | ローカル粗探索の基本 Yaw 探索半径 [rad]。 |
-| `matching_params.search_step_yaw` | `0.03` | ローカル粗探索の Yaw 刻み幅 [rad]（約 $1.7^\circ$）。 |
-| `matching_params.fine_refine` / `levels` | `true` / `2` | 2 段の $5 \times 5 \times 5$ サブボクセル精密探索（`0.05 m` $\to$ `0.002 m`）。 |
-| `matching_params.max_dist_thresh` | `0.25` | マッチング評価時の点ごとの ESDF 残差打ち切り距離 [m]。 |
-| `matching_params.dynamic_dist_thresh` | `0.15` | `/dynamic_cloud` として抽出するマップ表面からの距離閾値 [m]。 |
-| `matching_params.cost_threshold_3d` | `0.23` | ローカル追従時の 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.23\text{ m}$)。 |
-| `matching_params.cost_threshold_2d` | `0.04` | 2D LiDAR 独立残差合格しきい値 [m] ($C_{\text{2D}} < 0.04\text{ m}$、ヒステリシス切り離しは $2\times = 0.08\text{ m}$)。 |
-| `matching_params.inlier_dist_thresh` | `0.08` | マップ壁面から `0.08 m` (8 cm) 以内の点をインライアと判定（品質診断テレメトリ用）。 |
-| `matching_params.weight_2d_lidar` | `0.40` | Combined モード時の 2D LiDAR 独立残差項の基本重み係数 $w_{\text{2D,base}}$。 |
-| `matching_params.min_2d_points` / `target_2d_points` | `30` / `200` | 2D 残差有効化の最小点数と、100% 視野角重み付けとなる基準 2D 点数。 |
-| `matching_params.min_3d_points` | `50` | 最小 3D 障害物点数（これ未満の場合はフル探索窓の 2D 単独モード $w_{\text{2D}} = 1.0$ へ移行）。 |
-| `matching_params.dynamic_yaw_expansion` | `false` | 急旋回（$|\omega_z| > 0.50\text{ rad/s}$）時に Yaw 探索窓を最大 `0.60 rad` まで動的拡大（係数 `0.5`）。 |
-| `velocity_estimation.enable` | `true` | EMA 平滑化（$\alpha = 0.6$）つき並進速度推定と等速外挿の有効化（`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0`）。 |
-| `lidar_2d.enable` / `deskew` | `true` / `true` | Lakibeam 2D LiDAR の有効化と、回転・並進歪み補正および 3D 基準時刻への同期補正。 |
-| `lidar_2d.time_offset_sec` | `0.0` | 2D LiDAR タイムスタンプの静的オフセット [s]。 |
-| `global_search.range_yaw_diff` | `3.1415` | 方位事前情報がない場合のグローバル Yaw 全域探索半幅 [rad]。 |
-| `global_search.recovery_yaw_diff` | `0.40` | IMU 方位事前情報（最終マッチ後 `10.0 s` 以内または初期姿勢事前値）が有効な間の絞り込み Yaw 探索半幅 [rad]（初回失敗時は `range_yaw_diff` へ自動フォールバック）。 |
-| `global_search.top_k_candidates` | `4` | グローバル復帰探索時にNMSで抽出して精密化する上位候補数。 |
-| `global_search.uniqueness_ratio` | `0.960` | 曖昧なグローバル一致を棄却する Top-1/Top-2 コスト比上限 (`best_cost <= uniqueness_ratio * second_best_cost`、$180^\circ$ 点対称ツインを除外、`1.0` で無効化)。 |
-| `global_search.verify_frames` | `3` | グローバル復帰を確定して TF/推定姿勢の出力を再開するまでに要求する連続合格フレーム数（初回グローバル一致 1 フレーム＋続く 2 フレームの `1.5×` XY 窓ローカル試行）。 |
-| `global_search.cost_threshold_3d` | `0.202` | グローバル探索復帰および Trial 検証時に適用する厳格な 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.202\text{ m}$)。 |
-| `global_search.lost_count_thresh` | `25` | グローバル全域探索へ移行する連続失敗フレーム数。 |
+| `filter_params.robot_radius` / `max_range` | `0.80` / `12.0` | 自機円柱除外半径 [m]（`z` は `[0.0, 1.2]`）と最大有効距離 [m]。 |
+| `matching_params.search_range_xy` / `step_xy` | `0.30` / `0.05` | ローカル粗探索の XY 半幅と刻み幅 [m]。 |
+| `matching_params.search_range_yaw` / `step_yaw` | `0.15` / `0.03` | ローカル粗探索の Yaw 半幅と刻み幅 [rad]。 |
+| `matching_params.fine_refine` / `levels` | `true` / `2` | 2 段の $5 \times 5 \times 5$ 精密化（`0.05 m` $\to$ `0.002 m`, `0.0012 rad`）。 |
+| `matching_params.max_dist_thresh` | `0.25` | 点ごとの Clipped $L_1$ 残差上限 [m]。 |
+| `matching_params.cost_threshold_3d` / `2d` | `0.23` / `0.04` | 3D / 2D の独立平均残差合格閾値 [m]。 |
+| `matching_params.dynamic_dist_thresh` | `0.15` | `/dynamic_cloud` 抽出の距離閾値 [m]。 |
+| `matching_params.inlier_dist_thresh` | `0.08` | 壁面インライア距離閾値 [m]（品質診断テレメトリ専用）。 |
+| `lidar_2d.enable` / `deskew` | `true` / `true` | 補助 2D LiDAR 融合（`weight_2d_lidar: 0.40`, `min_2d_points: 30`）と歪み補正。 |
+| `velocity_estimation.enable` | `true` | EMA（$\alpha = 0.6$）並進速度予測（`window_sec: 0.20`, `max_linear_velocity: 4.0`）。 |
+| `global_search.range_yaw_diff` / `recovery_yaw_diff` | `3.1415` / `0.40` | 全周探索時 / IMU 方位事前値有効時の Yaw 探索半幅 [rad]。 |
+| `global_search.top_k_candidates` / `uniqueness_ratio` | `4` / `0.960` | NMS 上位候補数と Top-1/Top-2 比率ゲート（$180^\circ$ 点対称双子除外）。 |
+| `global_search.verify_frames` / `cost_threshold_3d` | `3` / `0.202` | 大域復帰確定に必要な連続合格フレーム数と 3D コスト閾値 [m]。 |
+| `global_search.lost_count_thresh` | `25` | グローバル探索発動までの連続棄却フレーム数。 |
 
-## 6. 設計図一覧
+## 6. 設計図
 
 ![処理の流れとパラメータの作用](docs/pipeline_flow_and_parameters_jp.png)
 
 ![マッチング時のコスト評価](docs/matching_cost_and_weighting_jp.png)
 
-## 7. クロスプラットフォーム・ベンチマーク要約 (`v1.2.3`/`v1.2.4`)
+## 7. ベンチマーク要約（`v1.4.0`、3D LiDAR + IMU、Clipped $L_1$）
 
-Desktop（Ryzen 7 5700X + NVIDIA RTX 4060）および組込み環境（NVIDIA Jetson Orin Nano, `25 W MAXN_SUPER`, `19 V / 2.37 A`, `tegrastats` 電力計測）での実測結果要約です（公開データセット S1・R1: https://doi.org/10.5281/zenodo.24369541 、再現手順は [`benchmarks/README.md`](./benchmarks/README.md) を参照してください）。
+Desktop（Ryzen 7 5700X + RTX 4060）および Jetson Orin Nano（`25 W` モード、`tegrastats` モジュール総入力 `VDD_IN`、アイドル `4.5 W`）での実測結果です。公開データセット（R1 アリーナ内・S1 Unity 6 物理真値）：<https://doi.org/10.5281/zenodo.24369541>、再現手順：[`benchmarks/README.md`](./benchmarks/README.md)。
 
-| 評価項目 | Desktop (RTX 4060) | Jetson Orin Nano (25 W) |
+| 評価項目 | Desktop (RTX 4060) | Jetson Orin Nano (`25 W`) |
 | :--- | :--- | :--- |
-| **CUDA `tex3D` マイクロベンチ** (`240x260x104`) | Glob8比 `1.75x-3.03x`（CPU 16T比 `50.6x-90.9x`） | Glob8比 `1.71x-2.23x`（CPU 6T比 `9.69x-31.3x`） |
-| **実機フル走行追従 (`20-280 s`, 3D+2D)** | 平均 `0.622 ms`（CPU `7.7%`, `lost 0`, ジッタ `6.1 mm`） | 平均 `5.874 ms`（`5.24 W`, `30.77 mJ/frame`, `lost 0`） |
-| **近接人物静止評価 (`40-65 s`, 参照不要)** | 位置SD `-97.8%` (`239.0 -> 5.3 mm`), 最大ドリフト `-98.3%` (`885.5 -> 15.4 mm`) | 位置SD `-97.8%` (`241.6 -> 5.3 mm`), 最大ドリフト `-98.0%` (`770.2 -> 15.5 mm`, `5.19 W`) |
-| **Unity 6 物理真値（CAD / スキャン `.pcd`）** | 平均 `19.0 mm` / `11.9 mm`（`>0.10 m` 0件） | 平均 `19.0 mm` / `11.9 mm`（`5.80 ms`, `5.18 W`） |
-| **大域復帰（Unity `N=8` / 実機 `N=21`）** | `8/8` (`5.30 ms`) / `15/16` (`1x`), `16/16` (`4x`), 誤ジャンプ `0`（棄却 `75/75`） | `8/8` (`38.75 ms`) / `15/16` (`1x`), 誤ジャンプ `0`（棄却 `74/74`） |
-| **公開 `hdl_501`（手持ち上下動・IMUなし）** | `0.80 ms`（3-DoF RMSE `0.352 m`, 6-DoF NDT-OMPは `0.046 m`） | `6.46 ms`（`4.90 W`, NDT-OMPの `3.8x`, DLLの `7.6x` 高速） |
+| **EDF 参照マイクロベンチ（`240×260×104`）** | `tex3D` Glob8 比 `1.80×–3.38×`（解析的 SDF 比 `4.62×–8.65×`） | `tex3D` Glob8 比 `1.76×–3.44×`（解析的 SDF 比 `5.16×–11.5×`） |
+| **R1 近接人物静止評価（`40–65 s`, 参照不要）** | $\sigma_{xy}$ `242.3 → 5.3 mm`（`-97.8%`）, 最大 `16.1 mm`, ジャンプ `0`（`0.55 ms`） | $\sigma_{xy}$ `238.5 → 5.2 mm`（`-97.8%`）, 最大 `16.9 mm`, ジャンプ `0`（`5.15 ms`, `5.09 W`） |
+| **R1 フル走行（`20–280 s`, `50 Hz`）** | 平均/p95 `0.56 / 0.65 ms`（ロスト `0`, インライア残差 `25.0 mm`, ジッタ `5.9 mm`） | 平均/p95 `5.37 / 6.63 ms`（`5.09 W`, ロスト `0`, インライア残差 `25.0 mm`） |
+| **S1 Unity 6 物理真値（`50 Hz` PCD / CAD）** | 平均 `12.7` / `18.8 mm`（RMSE `15.4` / `20.8 mm`, `0.58–0.59 ms`） | 平均 `13.4` / `18.6 mm`（RMSE `15.9` / `20.6 mm`, `5.43–5.90 ms`, `5.1 W`） |
+| **大域再位置推定（S1 `N=8` / R1 `8+2`）** | S1 `8/8`（`5.15 ms`, `16.9 mm`）；R1 `7/8`（`6.99 ms`）, 負例 `2/2` 棄却（誤ジャンプ `0`） | S1 `8/8`（`34.8 ms`, `14.5 mm`）；R1 `7/8`（`60.8 ms`）, 負例 `2/2` 棄却（誤ジャンプ `0`） |
+| **P1 公開 `hdl_501`（手持ち 6-DoF・IMU なし）** | `0.79 ms`（3-DoF RMSE `0.348 m` vs. 6-DoF NDT-OMP `0.045 m`） | `6.42 ms`（`4.79 W`, NDT/DLL/GICP 比 `3.9×–23.0×` 高速） |
 
-**適用限界・トレードオフ**: 平面3-DoF $(x, y, \psi)$ 仮定のため、IMUなしの手持ち上下動データ（`hdl_501`）では6-DoF手法に精度で劣ります。また、2D LiDARスキャン面を動的障害物が横切る際に一時スパイクが生じ得る点（3D単独で回避可能）、およびCPU手法より大きいホストメモリ消費（`168-221 MiB`）とNVIDIA CUDA GPU必須が制約となります。
+**適用範囲・制約**：
+- 平面 3-DoF $(x, y, \psi)$ 前提のため、IMU なしの手持ち上下動（`hdl_501`）では 6-DoF 手法に精度で劣ります。
+- 密な 3D CUDA Array はマップ体積 $V$ に対し $O(V / r_{\text{grid}}^3)$ の VRAM を消費するため、数十メートル規模の静的屋内空間を対象とします。
+- NVIDIA CUDA GPU が必須で、ホスト RSS は `168–223 MiB` 消費します。
 
 ## 8. ライセンス
 
-本リポジトリは [Apache 2.0 LICENSE](./LICENSE) のもとで公開されています。
+[Apache 2.0 License](./LICENSE) のもとで公開されています。

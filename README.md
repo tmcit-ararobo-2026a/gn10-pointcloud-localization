@@ -1,162 +1,118 @@
 # gn10-pointcloud-localization
 
-[Japanese](./README_jp.md)
+[日本語](./README_jp.md)
 
-Real-time LiDAR self-localization using ESDF, GPU 3D Texture Memory, Jetson Orin Nano, and Livox Mid-360S.
-Estimates the robot's pose from LiDAR point clouds without requiring wheel odometry or prior initial pose inputs via fast and lightweight static map matching.
-Successfully deployed for autonomous navigation and positioning in NHK Robocon 2026.
+Planar 3-DoF $(x, y, \psi)$ LiDAR--IMU localization on static prior maps using CUDA 3D Texture Memory (`tex3D`) for ROS 2 Humble.
+Estimates robot pose directly against a precomputed 3D distance field without wheel odometry or a prior initial pose.
+Used for autonomous navigation and positioning in KOSEN Robocon 2026.
 
-<img width="814" height="562" alt="image" src="https://github.com/user-attachments/assets/4254e8ba-a133-42b7-86b6-07034116f0f9" />
+<img width="814" height="562" alt="RViz2 EDF visualization" src="https://github.com/user-attachments/assets/4254e8ba-a133-42b7-86b6-07034116f0f9" />
 
-## 1. Overview & Key Features
+## 1. Key Features
 
-- GPU-accelerated self-localization optimized for Jetson Orin Nano.
-- Matches point clouds against a continuous 3D Truncated Unsigned Surface Euclidean Distance Field (EDF; referred to as `ESDF` in parameter and file names) rather than point-to-point, providing clean extensibility and low computational overhead.
-- Evaluates distance queries in $\mathcal{O}(1)$ time per point via GPU 3D Texture Memory and hardware trilinear interpolation.
-- Supports automatic map generation from `.pcd` point clouds and `.json` CAD geometric definitions via a dedicated `.esdf` binary format (stores raw IEEE 754 `float32` voxels capable of signed storage, while map generation and scan-matching evaluation use non-negative surface distances $d \in [0, d_{\max}]$ so solid obstacles do not pull points inward and thin walls `< resolution` or raw `.pcd` maps avoid sign-aliasing).
-- Built for ROS 2 Humble for straightforward integration across robotic projects.
-- Features real-time dynamic obstacle filtering that separates non-map objects and publishes them to `/dynamic_cloud`.
-- Instead of relying on odometry, the system performs high-speed matching against a static map; this minimizes systematic error bias and enables real-time position estimation within that static map.
+- **Hardware-interpolated 3D EDF (`tex3D`)**: Compiles `.json` CAD definitions or `.pcd` point clouds offline into a Truncated Unsigned Surface Euclidean Distance Field ($d \in [0, d_{\max}]$; stored in `.esdf` float32 binary files) and binds it to read-only CUDA 3D Texture Memory for $O(1)$ hardware trilinear lookup.
+- **GPU Preprocessing & Voxel Equalization**: Accumulates `0.10 s` of 3D LiDAR packets with IMU yaw + EMA planar velocity deskewing, removes chassis/ground returns, and runs a fixed-memory GPU spatial hash table (`262,144` slots, `6.00 MiB` VRAM, `0.08 m` voxels) to equalize near-field $1/r^2$ density bias.
+- **Direct Clipped $L_1$ Matching**: Coarse-to-fine planar 3-DoF grid search down to `2 mm` / `0.0012 rad` using pure Clipped $L_1$ (`max_dist_thresh = 0.25 m`) and independent threshold gating (`cost_3d < 0.23 m`). Optional rear 2D LiDAR fusion/fallback is also supported.
+- **GPU Global Relocalization**: Reuses the same `tex3D` EDF volume on cold start or after `25` consecutive rejected frames (Top-4 3D NMS, antipodal-aware ratio gating `0.960`, and 3-frame trial verification at `cost_3d < 0.202 m`).
+- **Dynamic Obstacle Extraction**: Publishes unmapped non-static points ($d \ge 0.15\,\text{m}$) on `/dynamic_cloud`.
 
 https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
 
-## 2. System Architecture & Localization Algorithm
+## 2. Pipeline Overview
 
-```
-[3D LiDAR (Livox Mid-360S)] ──> [ScanAccumulator (0.10s Deskew)] ──> [GroundFilter + VoxelEqualization (CUDA)] ──> [3D Obstacle Cloud]
-                                                                                                                  │
-[2D LiDAR (Lakibeam 1)]   ──> [LaserScanDeskew (Rot + Trans + Time Sync)] ──────────────────────────────> [2D Obstacle Cloud]
-                                                                                                                  │
-[IMU + EMA Velocity Extrapolation] ─────────────────────────────────────────────────────────────────────>         ▼
-                                                                                     [EDF Matcher (CUDA 3D Texture + Clipped L1)]
-[3D Distance Map (GPU Texture)] ────────────────────────────────────────────────────────────────────────>         │
-      │                                                                                              ▼
-      ▼ (Transient Local)                                                   [Anti-Oscillation 3D/2D Fallback & Gating]
-[ESDF Cloud (/esdf_map)]                                                                             │
-                                                                          ┌──────────────────────────┴──────────────────────────┐
-                                                                          ▼ (Accepted)                                          ▼ (Rejected)
-                                                         [Publish TF (map -> base_link)]                       [Halt TF & Pose Output Immediately]
-                                                         [/platform_constraint & /dynamic_cloud]                [localization_success = false]
-                                                         [localization_success = true]                          [Trigger GlobalSearch after 25 frames]
-                                                                                                                [(IMU Yaw Window + Uniqueness + Trial Verify)]
+```text
+[3D LiDAR (50 Hz)] ──> [0.10 s IMU Deskew & Filter] ──> [GPU Hash Voxel Equalizer (0.08 m)] ──┐
+[2D LiDAR (opt.) ] ──> [Per-Beam Deskew & Time Sync] ─────────────────────────────────────────┤
+[IMU + EMA Vel.  ] ──> [Pose Prediction] ─────────────────────────────────────────────────────▼
+[Static 3D EDF   ] ──> [CUDA 3D Texture (tex3D)] ──> [Coarse-to-Fine Clipped L1 Matcher (2 mm)]
+                                                                   │
+                                        ┌──────────────────────────┴──────────────────────────┐
+                                        ▼ (cost_3d < 0.23 m)                                  ▼ (Rejected)
+                       [Publish TF (map -> base_link)]                       [Halt TF & Pose Output]
+                       [/platform_constraint & /dynamic_cloud]               [After 25 frames -> GPU Global Search]
+                                                                             [(Top-4 NMS + Ratio Gate + 3-Frame Verify)]
 ```
 
-## 3. Build Environment & Dependencies
+## 3. Requirements & Build
 
-- **OS**: Ubuntu 22.04 LTS
-- **ROS**: ROS 2 Humble
-- **GPU**: NVIDIA GPU (Compute Capability 8.7 / 8.9: Jetson Orin Nano / AGX Orin / RTX 40 series, etc.)
-- **CUDA Toolkit**: 12.0 or higher
-
-### Installing Dependencies & Building
+- **OS / ROS**: Ubuntu 22.04 LTS, ROS 2 Humble
+- **GPU / CUDA**: NVIDIA GPU (Compute Capability 8.7 / 8.9, e.g., Jetson Orin Nano, RTX 4060), CUDA Toolkit 12.0+
 
 ```bash
-sudo apt update
-sudo apt install -y \
-  libeigen3-dev \
-  nlohmann-json3-dev \
-  libpcl-dev \
-  libopenmpi-dev \
-  ros-humble-pcl-conversions
+sudo apt update && sudo apt install -y \
+  libeigen3-dev nlohmann-json3-dev libpcl-dev libopenmpi-dev ros-humble-pcl-conversions
 
 cd ~/ros2_ws
 colcon build --symlink-install --packages-select gn10_pointcloud_localization
 source install/setup.bash
 
-# Unit tests (requires ROS 2 + workspace setup sourced in environment)
+# Run unit tests
 ctest --test-dir build/gn10_pointcloud_localization --output-on-failure -V
 ```
 
 ## 4. Usage
 
-### Placing Map Files
-Place map files (`.pcd`, `.esdf`, `.json`) into the package's `map/` directory. They can then be referenced by file name in the YAML configuration.
+Place `.json`, `.pcd`, or `.esdf` map files inside `map/`. When loading a `.pcd` map (`map_source_type: "pcd"`), a binary cache is automatically saved to `map/cache/<name>.esdf`.
 
-### Pre-converting PCD to ESDF
 ```bash
-# Usage: pcd_to_esdf_converter <input.pcd> <output.esdf> <resolution_m> [max_dist_m] [min_x max_x min_y max_y min_z max_z]
+# Optional: pre-convert .pcd to .esdf
 ros2 run gn10_pointcloud_localization pcd_to_esdf_converter \
-  ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.pcd \
-  ~/ros2_ws/src/gn10-pointcloud-localization/map/my_field.esdf \
-  0.05 0.50 -5.5 5.5 -6.0 6.0 -0.2 4.0
-```
-When running with `map_source_type: "pcd"`, a binary cache is automatically generated at `map/cache/<filename>.esdf` on first startup for faster subsequent loads.
+  map/my_field.pcd map/my_field.esdf 0.05 0.50 -5.5 5.5 -6.0 6.0 -0.2 4.0
 
-### Launch
-```bash
-# Standard launch (common_params.yaml + localization_params.yaml)
+# Launch (live or rosbag playback)
 ros2 launch gn10_pointcloud_localization localization.launch.py
-
-# Launch using simulation time (e.g. for rosbag playback)
 ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=true
 ```
 
-## 5. Parameter Reference
+## 5. Key Parameters (`config/common_params.yaml`)
 
-Common parameters are defined in [`config/common_params.yaml`](./config/common_params.yaml).
-
-| Parameter Name | Default (`common_params.yaml`) | Description & Mechanism |
+| Parameter | Default | Description |
 | :--- | :---: | :--- |
-| `map_source_type` | `"json"` | Map format (`json`, `pcd`, `esdf`, `ros2_param`). |
-| `map_file_path` | `""` | Map file name or path (relative paths search within `map/`). |
-| `esdf.resolution` | `0.05` | 3D ESDF voxel grid cell resolution [m]. |
-| `esdf.max_dist` | `0.50` | Maximum Euclidean distance truncation limit in ESDF voxels [m]. |
-| `esdf.crop_enabled` | `true` | Restrict ESDF grid generation to the specified 3D bounding box (CAD maps add ± `esdf.max_dist` padding $\to$ 240×260×104; cropped PCD maps omit padding $\to$ 220×240×84). |
-| `esdf.crop_min_x` / `crop_max_x` | `-5.5` / `5.5` | ESDF crop minimum/maximum X coordinate [m]. |
-| `esdf.crop_min_y` / `crop_max_y` | `-6.0` / `6.0` | ESDF crop minimum/maximum Y coordinate [m]. |
-| `esdf.min_z` / `max_z` | `-0.20` / `4.00` | ESDF crop minimum/maximum Z coordinate [m]. |
-| `scan_accumulation.window_s` | `0.10` | 3D LiDAR accumulation window [s] (deskewed to newest point timestamp). |
-| `filter_params.ground_z_thresh` | `0.06` | Floor plane removal height threshold [m] relative to `base_link`. |
-| `filter_params.voxel_size` | `0.08` | GPU 3D voxel centroid equalization edge length [m] (eliminates near-field $1/r^2$ density bias; `<= 0` disables). |
-| `filter_params.robot_radius` | `0.80` | Robot chassis self-exclusion radius [m] (XY plane). |
-| `filter_params.robot_height_min` / `max` | `0.0` / `1.2` | Robot chassis self-exclusion height range [m] (Z direction). |
-| `filter_params.max_range` | `12.0` | Maximum effective detection range [m]. |
-| `matching_params.search_range_xy` | `0.30` | Local tracking XY search half-window [m]. |
-| `matching_params.search_step_xy` | `0.05` | Local coarse search XY grid step [m]. |
-| `matching_params.search_range_yaw` | `0.15` | Local coarse search yaw half-window [rad]. |
-| `matching_params.search_step_yaw` | `0.03` | Local coarse search yaw grid step [rad] (~$1.7^\circ$). |
-| `matching_params.fine_refine` / `levels` | `true` / `2` | 2-stage $5 \times 5 \times 5$ sub-voxel refinement (`0.05 m` $\to$ `0.002 m`). |
-| `matching_params.max_dist_thresh` | `0.25` | Per-point Clipped L1 residual distance ceiling [m]. |
-| `matching_params.dynamic_dist_thresh` | `0.15` | Distance threshold [m] above which points are extracted as `/dynamic_cloud`. |
-| `matching_params.cost_threshold_3d` | `0.23` | Independent 3D LiDAR mean residual acceptance threshold [m] for local tracking ($C_{\text{3D}} < 0.23\text{ m}$). |
-| `matching_params.cost_threshold_2d` | `0.04` | Independent 2D LiDAR mean residual acceptance threshold [m] ($C_{\text{2D}} < 0.04\text{ m}$, hysteresis detachment at $2\times = 0.08\text{ m}$). |
-| `matching_params.inlier_dist_thresh` | `0.08` | Distance threshold [m] to classify an obstacle point as a wall inlier (diagnostic telemetry). |
-| `matching_params.weight_2d_lidar` | `0.40` | Base weight $w_{\text{2D,base}}$ of 2D LiDAR residual term in Combined mode. |
-| `matching_params.min_2d_points` / `target_2d_points` | `30` / `200` | Minimum 2D point threshold and reference point count for 100% FoV scaling. |
-| `matching_params.min_3d_points` | `50` | Minimum 3D obstacle points (falls back to full-window 2D-only mode $w_{\text{2D}} = 1.0$ if fewer). |
-| `matching_params.dynamic_yaw_expansion` | `false` | Dynamically widens yaw search window up to `0.60 rad` during fast turns ($|\omega_z| > 0.50\text{ rad/s}$, factor `0.5`). |
-| `velocity_estimation.enable` | `true` | Enables linear velocity estimation with EMA smoothing ($\alpha = 0.6$) and constant-velocity extrapolation (`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0`). |
-| `lidar_2d.enable` / `deskew` | `true` / `true` | Enables Lakibeam 2D LiDAR, rotational/translational deskew, and time synchronization to 3D reference timestamp. |
-| `lidar_2d.time_offset_sec` | `0.0` | Static timestamp offset [s] added to 2D LiDAR scan timestamps. |
-| `global_search.range_yaw_diff` | `3.1415` | Full yaw search half-range [rad] when no valid heading prior is available. |
-| `global_search.recovery_yaw_diff` | `0.40` | Restricted yaw search half-range [rad] when IMU heading prior is valid (`< 10.0 s` since last match or initial heading prior; automatically falls back to `range_yaw_diff` on initial failure). |
-| `global_search.top_k_candidates` | `4` | Number of Top-K spatially distinct local minima refined via NMS during global recovery. |
-| `global_search.uniqueness_ratio` | `0.960` | Top-1/Top-2 cost margin threshold (`best_cost <= uniqueness_ratio * second_best_cost`, excluding $180^\circ$ antipodal symmetry twin) to reject ambiguous global matches (`1.0` disables). |
-| `global_search.verify_frames` | `3` | Total consecutive accepted frames (initial global match + 2 subsequent local trial frames at $1.5\times$ XY window) required before committing global recovery and resuming TF/pose output. |
-| `global_search.cost_threshold_3d` | `0.202` | Independent 3D LiDAR mean residual threshold [m] enforced during Global Search recovery and trial verification ($C_{\text{3D}} < 0.202\text{ m}$). |
-| `global_search.lost_count_thresh` | `25` | Consecutive failed frame threshold before triggering full-field global search. |
+| `map_source_type` / `map_file_path` | `"json"` / `""` | Map format (`json`, `pcd`, `esdf`, `ros2_param`) and path (relative paths search `map/`). |
+| `esdf.resolution` / `max_dist` | `0.05` / `0.50` | 3D EDF voxel size [m] and truncation ceiling [m]. |
+| `esdf.crop_enabled` | `true` | Crop grid to bounding box (`crop_min/max_x,y`, `min/max_z`). CAD adds $\pm d_{\max}$ padding; cropped PCD omits padding. |
+| `scan_accumulation.window_s` | `0.10` | 3D LiDAR sliding-window accumulation duration [s]. |
+| `filter_params.voxel_size` | `0.08` | GPU hash voxel centroid size [m] (`<= 0` disables). |
+| `filter_params.ground_z_thresh` | `0.06` | Floor removal height threshold [m] in `base_link`. |
+| `filter_params.robot_radius` / `max_range` | `0.80` / `12.0` | Self-chassis cylinder exclusion radius [m] (`z` in `[0.0, 1.2]`) and max range [m]. |
+| `matching_params.search_range_xy` / `step_xy` | `0.30` / `0.05` | Local coarse XY search half-window and grid step [m]. |
+| `matching_params.search_range_yaw` / `step_yaw` | `0.15` / `0.03` | Local coarse yaw search half-window and grid step [rad]. |
+| `matching_params.fine_refine` / `levels` | `true` / `2` | Two $5 \times 5 \times 5$ refinement levels (`0.05 m` $\to$ `0.002 m`, `0.0012 rad`). |
+| `matching_params.max_dist_thresh` | `0.25` | Per-point Clipped $L_1$ residual ceiling [m]. |
+| `matching_params.cost_threshold_3d` / `2d` | `0.23` / `0.04` | Independent 3D / 2D mean residual acceptance thresholds [m]. |
+| `matching_params.dynamic_dist_thresh` | `0.15` | Distance threshold [m] for `/dynamic_cloud` extraction. |
+| `matching_params.inlier_dist_thresh` | `0.08` | Wall-inlier distance threshold [m] (diagnostic telemetry only). |
+| `lidar_2d.enable` / `deskew` | `true` / `true` | Optional 2D LiDAR fusion (`weight_2d_lidar: 0.40`, `min_2d_points: 30`) and per-beam deskew. |
+| `velocity_estimation.enable` | `true` | EMA ($\alpha = 0.6$) planar velocity prediction (`window_sec: 0.20`, `max_linear_velocity: 4.0`). |
+| `global_search.range_yaw_diff` / `recovery_yaw_diff` | `3.1415` / `0.40` | Full-yaw vs. IMU-prior-bounded yaw search half-range [rad]. |
+| `global_search.top_k_candidates` / `uniqueness_ratio` | `4` / `0.960` | Top-K NMS peaks and Top-1/Top-2 ratio gate (excluding $180^\circ$ antipodal twin). |
+| `global_search.verify_frames` / `cost_threshold_3d` | `3` / `0.202` | Consecutive passing frames and strict 3D cost threshold [m] required for recovery. |
+| `global_search.lost_count_thresh` | `25` | Consecutive rejected frames before triggering global search. |
 
-## 6. Diagrams
+## 6. Architecture Diagrams
 
 ![Pipeline Flow and Parameter Mechanics](docs/pipeline_flow_and_parameters.png)
 
 ![Matching Cost Evaluation and Weighting](docs/matching_cost_and_weighting.png)
 
-## 7. Cross-Platform Benchmark Summary (`v1.2.3`/`v1.2.4`)
+## 7. Benchmark Summary (`v1.4.0`, 3D LiDAR + IMU, Clipped $L_1$)
 
-Verified Desktop (Ryzen 7 5700X + NVIDIA RTX 4060) and Embedded (NVIDIA Jetson Orin Nano, `25 W MAXN_SUPER`, `19 V / 2.37 A`, `tegrastats` power logging) benchmark results (public S1 & R1 datasets: https://doi.org/10.5281/zenodo.24369541; see [`benchmarks/README.md`](./benchmarks/README.md) for reproduction commands):
+Measured on Desktop (Ryzen 7 5700X + RTX 4060) and Jetson Orin Nano (`25 W` mode, `tegrastats` total module `VDD_IN`, `4.5 W` idle). Public datasets (Dataset R1 in-arena & Dataset S1 Unity 6 Physics GT): <https://doi.org/10.5281/zenodo.24369541>. Reproduction commands: [`benchmarks/README.md`](./benchmarks/README.md).
 
-| Evaluation | Desktop (RTX 4060) | Jetson Orin Nano (25 W) |
+| Benchmark | Desktop (RTX 4060) | Jetson Orin Nano (`25 W`) |
 | :--- | :--- | :--- |
-| **CUDA `tex3D` Micro-Benchmark** (`240x260x104`) | `1.75x-3.03x` vs. Glob8 (`50.6x-90.9x` vs. CPU 16T) | `1.71x-2.23x` vs. Glob8 (`9.69x-31.3x` vs. CPU 6T) |
-| **Full Arena Tracking (`20-280 s`, 3D+2D)** | `0.622 ms` mean (`7.7%` CPU, `0 lost`, `6.1 mm` jitter) | `5.874 ms` mean (`5.24 W`, `30.77 mJ/frame`, `0 lost`) |
-| **Close-Human Stationary (`40-65 s`, Ref-Free)** | `-97.8%` std (`239.0 -> 5.3 mm`), `-98.3%` max (`885.5 -> 15.4 mm`) | `-97.8%` std (`241.6 -> 5.3 mm`), `-98.0%` max (`770.2 -> 15.5 mm`, `5.19 W`) |
-| **Unity 6 Physics GT (CAD / Scanned `.pcd`)** | `19.0 mm` / `11.9 mm` mean (`0` frames `>0.10 m`) | `19.0 mm` / `11.9 mm` mean (`5.80 ms`, `5.18 W`) |
-| **Global Relocalization (`N=8` Unity / `N=21` Real)** | `8/8` (`5.30 ms`); `15/16` (`1x`) / `16/16` (`4x`), `0` FJ (`75/75` reject) | `8/8` (`38.75 ms`); `15/16` (`1x`), `0` FJ (`74/74` reject) |
-| **Public `hdl_501` (Handheld 6-DoF, No IMU)** | `0.80 ms` (`0.352 m` 3-DoF RMSE vs. `0.046 m` 6-DoF NDT-OMP) | `6.46 ms` (`4.90 W`, `3.8x` faster than NDT-OMP, `7.6x` vs. DLL) |
+| **EDF Lookup Micro-Bench (`240×260×104`)** | `tex3D` `1.80×–3.38×` vs. Glob8 (`4.62×–8.65×` vs. Analytic) | `tex3D` `1.76×–3.44×` vs. Glob8 (`5.16×–11.5×` vs. Analytic) |
+| **R1 Close-Human Stationary (`40–65 s`, Ref-Free)** | $\sigma_{xy}$ `242.3 → 5.3 mm` (`-97.8%`), max `16.1 mm`, `0` jumps (`0.55 ms`) | $\sigma_{xy}$ `238.5 → 5.2 mm` (`-97.8%`), max `16.9 mm`, `0` jumps (`5.15 ms`, `5.09 W`) |
+| **R1 Full Arena Run (`20–280 s`, `50 Hz`)** | `0.56 / 0.65 ms` mean/p95 (`0` lost, `25.0 mm` inlier res., `5.9 mm` jitter) | `5.37 / 6.63 ms` mean/p95 (`5.09 W`, `0` lost, `25.0 mm` inlier res.) |
+| **S1 Unity 6 Physics GT (`50 Hz` PCD / CAD)** | `12.7` / `18.8 mm` mean (`15.4` / `20.8 mm` RMSE, `0.58–0.59 ms`) | `13.4` / `18.6 mm` mean (`15.9` / `20.6 mm` RMSE, `5.43–5.90 ms`, `5.1 W`) |
+| **Global Relocalization (S1 `N=8` / R1 `8+2`)** | S1 `8/8` (`5.15 ms`, `16.9 mm`); R1 `7/8` (`6.99 ms`), `2/2` neg. rejected (`0` FP) | S1 `8/8` (`34.8 ms`, `14.5 mm`); R1 `7/8` (`60.8 ms`), `2/2` neg. rejected (`0` FP) |
+| **P1 Public `hdl_501` (Handheld 6-DoF, No IMU)** | `0.79 ms` (`0.348 m` 3-DoF RMSE vs. `0.045 m` 6-DoF NDT-OMP) | `6.42 ms` (`4.79 W`, `3.9×–23.0×` faster than NDT/DLL/GICP) |
 
-**Known Scope & Limitations**: The planar 3-DoF $(x, y, \psi)$ formulation assumes near-level motion and incurs horizontal drift under unconstrained vertical walking oscillation without IMU (`hdl_501`); 2D fusion can exhibit transient spikes when dynamic obstacles cross the 2D scan plane (3D-only eliminates them); and resident CUDA buffers consume `168-221 MiB` host RSS while requiring an NVIDIA CUDA GPU.
+**Scope & Trade-offs**:
+- Planar 3-DoF $(x, y, \psi)$ assumes near-level motion; under handheld vertical walking motion without IMU (`hdl_501`), 6-DoF methods achieve higher accuracy.
+- Dense 3D CUDA Arrays scale as $O(V / r_{\text{grid}}^3)$ in map volume $V$, targeting medium-scale static indoor spaces (tens of meters).
+- Requires an NVIDIA CUDA GPU and uses `168–223 MiB` host RSS.
 
 ## 8. License
 
-This repository is released under the [Apache 2.0 LICENSE](./LICENSE).
+Licensed under the [Apache 2.0 License](./LICENSE).
