@@ -123,8 +123,6 @@ tracking_suites:
         params:
           lidar_2d.enable: false
           filter_params.voxel_size: 0.08
-          matching_params.robust_loss_type: 1
-          matching_params.robust_loss_sigma: 0.08
       - label: "lidar_loc_ndt_omp"
         type: "lidar_loc"
         map_file: "~/external_datasets/hdl_501_map.pcd"

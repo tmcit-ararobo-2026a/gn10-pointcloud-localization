@@ -34,20 +34,6 @@ inline void cudaCheck(cudaError_t err, const char* what)
     }
 }
 
-__device__ inline float evaluateWelschOrL1(
-    float distance_m, float max_dist_thresh, int loss_type, float sigma
-)
-{
-    if (distance_m >= max_dist_thresh) {
-        return max_dist_thresh;
-    }
-    if (loss_type == 1 && sigma > 1e-5f) {
-        const float ratio = distance_m / sigma;
-        return max_dist_thresh * (1.0f - expf(-0.5f * ratio * ratio));
-    }
-    return distance_m;
-}
-
 __device__ inline float queryTex3D(
     cudaTextureObject_t tex, const ESDFHeader& header, float wx, float wy, float wz
 )
@@ -193,9 +179,7 @@ __global__ void benchLookupKernel(
     float field_min_x,
     float field_max_x,
     float field_min_y,
-    float field_max_y,
-    int loss_type,
-    float sigma
+    float field_max_y
 )
 {
     const int pose_idx = blockIdx.x;
@@ -239,7 +223,7 @@ __global__ void benchLookupKernel(
             } else if constexpr (kBackend == LookupBackend::kAnalyticPrimitives) {
                 d = queryAnalyticFieldSDF(num_objects, wx, wy, wz, max_dist_thresh);
             }
-            cost_i = evaluateWelschOrL1(d, max_dist_thresh, loss_type, sigma);
+            cost_i = fminf(d, max_dist_thresh);
         }
         s_sum[tid] += cost_i;
     }
@@ -272,8 +256,6 @@ float timeGpuBackend(
     float field_max_x,
     float field_min_y,
     float field_max_y,
-    int loss_type,
-    float sigma,
     int warmup,
     int iters
 )
@@ -297,9 +279,7 @@ float timeGpuBackend(
                     field_min_x,
                     field_max_x,
                     field_min_y,
-                    field_max_y,
-                    loss_type,
-                    sigma
+                    field_max_y
                 );
                 break;
             case LookupBackend::kGlobalTrilinear:
@@ -316,9 +296,7 @@ float timeGpuBackend(
                     field_min_x,
                     field_max_x,
                     field_min_y,
-                    field_max_y,
-                    loss_type,
-                    sigma
+                    field_max_y
                 );
                 break;
             case LookupBackend::kGlobalNearest:
@@ -335,9 +313,7 @@ float timeGpuBackend(
                     field_min_x,
                     field_max_x,
                     field_min_y,
-                    field_max_y,
-                    loss_type,
-                    sigma
+                    field_max_y
                 );
                 break;
             case LookupBackend::kAnalyticPrimitives:
@@ -354,9 +330,7 @@ float timeGpuBackend(
                     field_min_x,
                     field_max_x,
                     field_min_y,
-                    field_max_y,
-                    loss_type,
-                    sigma
+                    field_max_y
                 );
                 break;
         }
@@ -398,8 +372,6 @@ double timeCpuTrilinear(
     float field_max_x,
     float field_min_y,
     float field_max_y,
-    int loss_type,
-    float sigma,
     int cpu_iters
 )
 {
@@ -423,14 +395,7 @@ double timeCpuTrilinear(
                 if (wx >= field_min_x && wx <= field_max_x && wy >= field_min_y &&
                     wy <= field_max_y) {
                     const float d = esdf_map.getDistance(wx, wy, lz);
-                    if (d < max_dist_thresh) {
-                        if (loss_type == 1 && sigma > 1e-5f) {
-                            const float ratio = d / sigma;
-                            cost_i = max_dist_thresh * (1.0f - std::exp(-0.5f * ratio * ratio));
-                        } else {
-                            cost_i = d;
-                        }
-                    }
+                    cost_i        = std::min(d, max_dist_thresh);
                 }
                 sum += cost_i;
             }
@@ -523,7 +488,6 @@ struct WorkloadSpec
     float range_yaw;
     float step_yaw;
     int num_points;
-    int loss_type;
 };
 
 void printUsage(const char* prog)
@@ -686,11 +650,11 @@ int main(int argc, char** argv)
     );
 
     const std::vector<WorkloadSpec> workloads = {
-        {"Local_Fine_5x5x5", 0.010f, 0.010f, 0.005f, 0.0024f, 0.0012f, 2146, 1},
-        {"Local_Coarse_Voxelized", 0.30f, 0.30f, 0.05f, 0.15f, 0.03f, 1073, 1},
-        {"Local_Coarse_RawDense", 0.30f, 0.30f, 0.05f, 0.15f, 0.03f, 4013, 1},
-        {"Global_Search_IMU_Window", 5.25f, 5.70f, 0.30f, 0.40f, 0.30f, 1073, 0},
-        {"Global_Search_Full_Yaw", 5.25f, 5.70f, 0.30f, 3.1415f, 0.30f, 1073, 0},
+        {"Local_Fine_5x5x5", 0.010f, 0.010f, 0.005f, 0.0024f, 0.0012f, 2146},
+        {"Local_Coarse_Voxelized", 0.30f, 0.30f, 0.05f, 0.15f, 0.03f, 1073},
+        {"Local_Coarse_RawDense", 0.30f, 0.30f, 0.05f, 0.15f, 0.03f, 4013},
+        {"Global_Search_IMU_Window", 5.25f, 5.70f, 0.30f, 0.40f, 0.30f, 1073},
+        {"Global_Search_Full_Yaw", 5.25f, 5.70f, 0.30f, 3.1415f, 0.30f, 1073},
     };
 
     const std::vector<float> h_cloud = has_analytic
@@ -768,8 +732,6 @@ int main(int argc, char** argv)
             field_max_x,
             field_min_y,
             field_max_y,
-            w.loss_type,
-            0.06f,
             warmup,
             gpu_iters
         );
@@ -788,8 +750,6 @@ int main(int argc, char** argv)
             field_max_x,
             field_min_y,
             field_max_y,
-            w.loss_type,
-            0.06f,
             warmup,
             gpu_iters
         );
@@ -808,8 +768,6 @@ int main(int argc, char** argv)
             field_max_x,
             field_min_y,
             field_max_y,
-            w.loss_type,
-            0.06f,
             warmup,
             gpu_iters
         );
@@ -830,8 +788,6 @@ int main(int argc, char** argv)
                       field_max_x,
                       field_min_y,
                       field_max_y,
-                      w.loss_type,
-                      0.06f,
                       warmup,
                       gpu_iters
                   )
@@ -849,8 +805,6 @@ int main(int argc, char** argv)
                 field_max_x,
                 field_min_y,
                 field_max_y,
-                w.loss_type,
-                0.06f,
                 cpu_iters
             );
         }

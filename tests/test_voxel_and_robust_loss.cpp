@@ -87,9 +87,9 @@ void testVoxelCentroidEqualization()
               << std::endl;
 }
 
-void testRobustLossOutlierSuppression()
+void testVoxelEqualizationWithClippedL1()
 {
-    std::cout << "[Test] testRobustLossOutlierSuppression starting..." << std::endl;
+    std::cout << "[Test] testVoxelEqualizationWithClippedL1 starting..." << std::endl;
 
     // Build an ESDF map with a wall at x = 2.0 m
     std::vector<float> map_pts;
@@ -120,66 +120,70 @@ void testRobustLossOutlierSuppression()
         0.0f, 0.0f, 1.0f, 0.0f
     };
 
-    // 100 true wall points at x = 2.0 m + 120 unmapped near-wall outlier points at x = 2.18 m.
-    // Within search_range_xy = 0.10 m, Clipped L1 gets pulled toward -0.10 m to shrink the
-    // 120 outliers' linear distance, whereas Welsch ignores the outliers and stays near x = 0.0 m.
+    // 80 spaced true wall points at x = 2.0 m (two rows at z = 0.40, 0.70 m -> 80 distinct 0.08 m voxels >= min_3d_points)
+    // + 300 dense unmapped near-wall outlier points concentrated inside a compact 0.06 m cluster at x = 2.18 m.
+    // Without voxel equalization, Clipped L1 is pulled toward -0.10 m by the dense outlier cluster;
+    // with 0.08 m GPU hash voxel equalization, the dense cluster collapses to 1 centroid and Clipped L1 stays locked at x = 0.0 m.
     std::vector<float> scan;
-    for (int i = 0; i < 100; ++i) {
-        scan.push_back(2.0f);
-        scan.push_back(-1.0f + 2.0f * static_cast<float>(i) / 99.0f);
-        scan.push_back(0.50f);
+    for (int iz = 0; iz < 2; ++iz) {
+        const float pz = 0.40f + 0.30f * static_cast<float>(iz);
+        for (int i = 0; i < 40; ++i) {
+            scan.push_back(2.0f);
+            scan.push_back(-2.0f + 4.0f * static_cast<float>(i) / 39.0f);
+            scan.push_back(pz);
+        }
     }
-    for (int i = 0; i < 120; ++i) {
-        scan.push_back(2.18f);
-        scan.push_back(-0.5f + 1.0f * static_cast<float>(i) / 119.0f);
-        scan.push_back(0.60f);
+    for (int i = 0; i < 300; ++i) {
+        scan.push_back(2.18f + 0.02f * static_cast<float>(i % 3) / 2.0f);
+        scan.push_back(-0.02f + 0.04f * static_cast<float>((i / 3) % 10) / 9.0f);
+        scan.push_back(0.58f + 0.04f * static_cast<float>(i / 30) / 9.0f);
     }
 
-    GroundFilterParams gf_params;
-    gf_params.range_max       = 12.0f;
-    gf_params.robot_radius    = 0.5f;
-    gf_params.ground_z_thresh = 0.05f;
-    gf_params.voxel_size      = 0.0f;
+    GroundFilterParams gf_raw;
+    gf_raw.range_max       = 12.0f;
+    gf_raw.robot_radius    = 0.5f;
+    gf_raw.ground_z_thresh = 0.05f;
+    gf_raw.voxel_size      = 0.0f;
 
     MatchingParams l1_params;
-    l1_params.range_xy          = 0.10f;
-    l1_params.step_xy           = 0.02f;
-    l1_params.range_yaw         = 0.0f;
-    l1_params.step_yaw          = 0.02f;
-    l1_params.fine_refine       = true;
+    l1_params.range_xy           = 0.10f;
+    l1_params.step_xy            = 0.02f;
+    l1_params.range_yaw          = 0.0f;
+    l1_params.step_yaw           = 0.02f;
+    l1_params.fine_refine        = true;
     l1_params.fine_refine_levels = 2;
-    l1_params.max_dist_thresh   = 0.25f;
-    l1_params.robust_loss_type  = 0;
+    l1_params.max_dist_thresh    = 0.25f;
     l1_params.useESDFBounds(esdf.header());
 
     PoseCandidate base_pose{0.0f, 0.0f, 0.0f};
-    PoseCandidate l1_pose{};
-    float l1_cost = 0.0f;
+    PoseCandidate raw_pose{};
+    float raw_cost = 0.0f;
     std::vector<float> dyn;
 
-    const bool ok_l1 = solver.processPointCloud(
-        scan, identity_tf, gf_params, l1_params, base_pose, dyn, l1_pose, l1_cost,
+    const bool ok_raw = solver.processPointCloud(
+        scan, identity_tf, gf_raw, l1_params, base_pose, dyn, raw_pose, raw_cost,
         nullptr, nullptr, nullptr, false
     );
-    assert(ok_l1);
-    std::cout << "  Clipped L1 solved x = " << l1_pose.x << " m (pulled by outliers)" << std::endl;
-    assert(l1_pose.x < -0.05f);
+    assert(ok_raw);
+    std::cout << "  No Voxel + Clipped L1 solved x = " << raw_pose.x << " m (pulled by dense outliers)"
+              << std::endl;
+    assert(raw_pose.x < -0.05f);
 
-    MatchingParams welsch_params    = l1_params;
-    welsch_params.robust_loss_type  = 1;
-    welsch_params.robust_loss_sigma = 0.05f;
+    GroundFilterParams gf_voxel = gf_raw;
+    gf_voxel.voxel_size         = 0.08f;
 
-    PoseCandidate welsch_pose{};
-    float welsch_cost = 0.0f;
-    const bool ok_welsch = solver.processPointCloud(
-        scan, identity_tf, gf_params, welsch_params, base_pose, dyn, welsch_pose, welsch_cost,
+    PoseCandidate eq_pose{};
+    float eq_cost = 0.0f;
+    const bool ok_eq = solver.processPointCloud(
+        scan, identity_tf, gf_voxel, l1_params, base_pose, dyn, eq_pose, eq_cost,
         nullptr, nullptr, nullptr, false
     );
-    assert(ok_welsch);
-    std::cout << "  Welsch solved x = " << welsch_pose.x << " m (locked on true wall)" << std::endl;
-    assert(std::abs(welsch_pose.x) < 0.03f);
+    assert(ok_eq);
+    std::cout << "  Voxel 0.08 + Clipped L1 solved x = " << eq_pose.x << " m (locked on true wall)"
+              << std::endl;
+    assert(std::abs(eq_pose.x) < 0.03f);
 
-    std::cout << "[Test] testRobustLossOutlierSuppression PASSED!" << std::endl;
+    std::cout << "[Test] testVoxelEqualizationWithClippedL1 PASSED!" << std::endl;
 }
 
 }  // namespace
@@ -193,7 +197,7 @@ int main()
     }
 
     testVoxelCentroidEqualization();
-    testRobustLossOutlierSuppression();
-    std::cout << "All voxel equalization and robust loss tests PASSED!" << std::endl;
+    testVoxelEqualizationWithClippedL1();
+    std::cout << "All voxel equalization and Clipped L1 tests PASSED!" << std::endl;
     return 0;
 }

@@ -28,7 +28,7 @@ https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
 [2D LiDAR (Lakibeam 1)]   ──> [LaserScanDeskew (回転+並進+時刻同期)] ───────────────────────────────────> [2D 障害物点群]
                                                                                                                │
 [IMU + EMA 並進速度外挿]  ──────────────────────────────────────────────────────────────────────────────>      ▼
-                                                                                    [EDF Matcher (CUDA 3D Texture + Welsch 損失)]
+                                                                                    [EDF Matcher (CUDA 3D Texture + Clipped L1)]
 [3D 距離場 Map (GPU Texture)] ──────────────────────────────────────────────────────────────────────────>      │
       │                                                                                            ▼
       ▼ (Transient Local)                                                   [3D/2D 振動防止フォールバック & 合格判定]
@@ -128,8 +128,6 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `matching_params.weight_2d_lidar` | `0.40` | Combined モード時の 2D LiDAR 独立残差項の基本重み係数 $w_{\text{2D,base}}$。 |
 | `matching_params.min_2d_points` / `target_2d_points` | `30` / `200` | 2D 残差有効化の最小点数と、100% 視野角重み付けとなる基準 2D 点数。 |
 | `matching_params.min_3d_points` | `50` | 最小 3D 障害物点数（これ未満の場合はフル探索窓の 2D 単独モード $w_{\text{2D}} = 1.0$ へ移行）。 |
-| `matching_params.robust_loss_type` | `1` | ローカル追従時の点単位 ESDF ロバスト損失（`0`: Clipped L1, `1`: Welsch, `2`: Cauchy。Global Search・Trial 検証は `0` を使用）。 |
-| `matching_params.robust_loss_sigma` | `0.06` | Welsch / Cauchy ロバスト損失のスケールパラメータ $\sigma$ [m]（未マップ動的物体・人の寄与を減衰）。 |
 | `matching_params.dynamic_yaw_expansion` | `false` | 急旋回（$|\omega_z| > 0.50\text{ rad/s}$）時に Yaw 探索窓を最大 `0.60 rad` まで動的拡大（係数 `0.5`）。 |
 | `velocity_estimation.enable` | `true` | EMA 平滑化（$\alpha = 0.6$）つき並進速度推定と等速外挿の有効化（`window_sec: 0.20`, `min_dt_sec: 0.15`, `max_dt_sec: 0.50`, `max_linear_velocity: 4.0`）。 |
 | `lidar_2d.enable` / `deskew` | `true` / `true` | Lakibeam 2D LiDAR の有効化と、回転・並進歪み補正および 3D 基準時刻への同期補正。 |

@@ -138,8 +138,6 @@ void LocalizationNode::declareAndGetParameters()
     this->declare_parameter("matching_params.min_inlier_ratio", 0.30);
     this->declare_parameter("matching_params.max_inlier_accept_cost", 0.22);
     this->declare_parameter("matching_params.weight_2d_lidar", 0.40);
-    this->declare_parameter("matching_params.robust_loss_type", 1);
-    this->declare_parameter("matching_params.robust_loss_sigma", 0.08);
     this->declare_parameter("matching_params.min_2d_points", 30);
     this->declare_parameter("matching_params.target_2d_points", 200);
     this->declare_parameter("matching_params.min_3d_points", 50);
@@ -252,11 +250,6 @@ void LocalizationNode::declareAndGetParameters()
     match_params_.target_2d_points =
         this->get_parameter("matching_params.target_2d_points").as_int();
     match_params_.min_3d_points = this->get_parameter("matching_params.min_3d_points").as_int();
-    match_params_.robust_loss_type =
-        static_cast<int>(this->get_parameter("matching_params.robust_loss_type").as_int());
-    match_params_.robust_loss_sigma = static_cast<float>(
-        this->get_parameter("matching_params.robust_loss_sigma").as_double()
-    );
     dynamic_yaw_expansion_ = this->get_parameter("matching_params.dynamic_yaw_expansion").as_bool();
     dynamic_yaw_omega_thresh_ = static_cast<float>(
         this->get_parameter("matching_params.dynamic_yaw_omega_thresh").as_double()
@@ -1196,7 +1189,6 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
             }
             MatchingParams trial_match_params  = active_match_params;
             trial_match_params.cost_threshold_3d = global_cost_threshold_3d_;
-            trial_match_params.robust_loss_type  = 0;
             trial_match_params.range_xy *= 1.5f;
 
             const bool trial_matched = solver_->processPointCloud(
@@ -1276,7 +1268,6 @@ void LocalizationNode::cloudCallback(const sensor_msgs::msg::PointCloud2::Shared
 
         MatchingParams gs_match_params  = active_match_params;
         gs_match_params.cost_threshold_3d = global_cost_threshold_3d_;
-        gs_match_params.robust_loss_type  = 0;
 
         best_pose = global_searcher_->search(
             *solver_,
@@ -2271,20 +2262,6 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
                 result.reason     = "global_search.recovery_yaw_diff must be in (0.0, pi]";
                 return result;
             }
-        } else if (name == "matching_params.robust_loss_type") {
-            const int loss_type = static_cast<int>(param.as_int());
-            if (loss_type < 0 || loss_type > 2) {
-                result.successful = false;
-                result.reason     = "matching_params.robust_loss_type must be in [0, 2]";
-                return result;
-            }
-        } else if (name == "matching_params.robust_loss_sigma") {
-            const double val = param.as_double();
-            if (!std::isfinite(val) || val <= 0.0) {
-                result.successful = false;
-                result.reason     = "matching_params.robust_loss_sigma must be > 0";
-                return result;
-            }
         } else if (name == "filter_params.voxel_size") {
             const double val = param.as_double();
             if (!std::isfinite(val) || val < 0.0) {
@@ -2358,10 +2335,6 @@ rcl_interfaces::msg::SetParametersResult LocalizationNode::onParametersChange(
             match_params_.target_2d_points = static_cast<int>(param.as_int());
         } else if (name == "matching_params.min_3d_points") {
             match_params_.min_3d_points = static_cast<int>(param.as_int());
-        } else if (name == "matching_params.robust_loss_type") {
-            match_params_.robust_loss_type = static_cast<int>(param.as_int());
-        } else if (name == "matching_params.robust_loss_sigma") {
-            match_params_.robust_loss_sigma = static_cast<float>(param.as_double());
         } else if (name == "matching_params.dynamic_yaw_expansion") {
             dynamic_yaw_expansion_ = param.as_bool();
         } else if (name == "matching_params.dynamic_yaw_omega_thresh") {
