@@ -13,7 +13,7 @@ Used for autonomous navigation and positioning in KOSEN Robocon 2026.
 - **Hardware-interpolated 3D EDF (`tex3D`)**: Compiles `.json` CAD definitions or `.pcd` point clouds offline into a Truncated Unsigned Surface Euclidean Distance Field ($d \in [0, d_{\max}]$; stored in `.esdf` float32 binary files) and binds it to read-only CUDA 3D Texture Memory for $O(1)$ hardware trilinear lookup.
 - **GPU Preprocessing & Voxel Equalization**: Accumulates `0.10 s` of 3D LiDAR packets with IMU yaw + EMA planar velocity deskewing, removes chassis/ground returns, and runs a fixed-memory GPU spatial hash table (`262,144` slots, `6.00 MiB` VRAM, `0.08 m` voxels) to equalize near-field $1/r^2$ density bias.
 - **Direct Clipped $L_1$ Matching**: Coarse-to-fine planar 3-DoF grid search down to `2 mm` / `0.0012 rad` using pure Clipped $L_1$ (`max_dist_thresh = 0.25 m`) and independent threshold gating (`cost_3d < 0.23 m`). Optional rear 2D LiDAR fusion/fallback is also supported.
-- **GPU Global Relocalization**: Reuses the same `tex3D` EDF volume on cold start or after `25` consecutive rejected frames (Top-4 3D NMS, antipodal-aware ratio gating `0.960`, and 3-frame trial verification at `cost_3d < 0.202 m`).
+- **GPU Global Relocalization**: Reuses the same `tex3D` EDF volume on cold start or after `25` consecutive rejected frames (Top-4 3D NMS, Top-1/Top-2 ratio gating `0.950`, and 3-frame trial verification at `cost_3d < 0.202 m`).
 - **Dynamic Obstacle Extraction**: Publishes unmapped non-static points ($d \ge 0.15\,\text{m}$) on `/dynamic_cloud`.
 
 https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
@@ -85,7 +85,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `lidar_2d.enable` / `deskew` | `true` / `true` | Optional 2D LiDAR fusion (`weight_2d_lidar: 0.40`, `min_2d_points: 30`) and per-beam deskew. |
 | `velocity_estimation.enable` | `true` | EMA ($\alpha = 0.6$) planar velocity prediction (`window_sec: 0.20`, `max_linear_velocity: 4.0`). |
 | `global_search.range_yaw_diff` / `recovery_yaw_diff` | `3.1415` / `0.40` | Full-yaw vs. IMU-prior-bounded yaw search half-range [rad]. |
-| `global_search.top_k_candidates` / `uniqueness_ratio` | `4` / `0.960` | Top-K NMS peaks and Top-1/Top-2 ratio gate (excluding $180^\circ$ antipodal twin). |
+| `global_search.top_k_candidates` / `uniqueness_ratio` | `4` / `0.950` | Top-K NMS peaks and Top-1/Top-2 ratio gate across distinct pose modes. |
 | `global_search.verify_frames` / `cost_threshold_3d` | `3` / `0.202` | Consecutive passing frames and strict 3D cost threshold [m] required for recovery. |
 | `global_search.lost_count_thresh` | `25` | Consecutive rejected frames before triggering global search. |
 

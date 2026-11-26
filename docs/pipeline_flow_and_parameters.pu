@@ -109,7 +109,7 @@ if (Is Robot Lost? (`is_lost_ == true` and no fresh prior)) then (YES: Global Re
         :Select yaw search half-range: `recovery_yaw_diff` (`0.40 rad`) while IMU heading prior\nis valid (`< 10.0 s` since last match or initial prior); widen to `range_yaw_diff` (`3.1415 rad`) once no valid prior remains;
         :Stage 1: Evaluate coarse 3D grid across field bounds (`step_xy`, `step_yaw`)\non voxel-equalized 3D obstacles (`Clipped L1`) & select **Top-K (`top_k_candidates`)** via **3D NMS**;
         :Stage 2: Run `matchObstacleCloud` (`Clipped L1`) around each Top-K peak\n(**3D LiDAR primacy**: normalize failed-2D / 2D-only fallback costs back to `cost_3d` scale when `N_3d >= min_3d_points`);
-        :Stage 3: **Top-1/Top-2 Uniqueness Check**: reject if `best.cost > uniqueness_ratio * second_best_cost`\n(excluding 180 deg antipodal symmetry twin);
+        :Stage 3: **Top-1/Top-2 Uniqueness Check**: reject if `best.cost > uniqueness_ratio * second_best_cost`\n(across distinct pose modes);
         :Stage 4: **Multi-Frame Trial Verification**: require `verify_frames` (`3`) consecutive accepted frames\n(initial global match + 2 local trial frames at `1.5x` XY window) passing `is_global_recovery_accepted` before clearing `is_lost_`;
         note right
             **Global Search Parameters (`global_search.*`)**
@@ -118,7 +118,7 @@ if (Is Robot Lost? (`is_lost_ == true` and no fresh prior)) then (YES: Global Re
             * `recovery_yaw_diff`: **0.40 rad** (IMU heading prior yaw half-range)
             * `step_xy` / `step_yaw`: **0.30 m** / **0.3 rad**
             * `top_k_candidates`: **4**
-            * `uniqueness_ratio`: **0.960** (1.0 disables)
+            * `uniqueness_ratio`: **0.950** (1.0 disables)
             * `verify_frames`: **3** (1 global match + 2 trial frames)
             * `cost_threshold_3d`: **0.202 m** (strict 3D recovery threshold)
             * `lost_count_thresh`: **25** (interval: 0.5 s)

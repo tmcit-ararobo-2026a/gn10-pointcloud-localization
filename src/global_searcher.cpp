@@ -332,25 +332,8 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
         });
 
         if (is_accepted) {
-            if (best_idx < 0) {
+            if (best_idx < 0 || cand_cost < refined_candidates[best_idx].cost) {
                 best_idx = static_cast<int>(refined_candidates.size()) - 1;
-            } else {
-                const auto& cur_best = refined_candidates[best_idx];
-                const bool is_antipodal =
-                    (std::hypot(cand_pose.x + cur_best.pose.x, cand_pose.y + cur_best.pose.y) <
-                     0.80f) &&
-                    (std::abs(normalizeAngle(
-                         cand_pose.yaw - (cur_best.pose.yaw + static_cast<float>(M_PI))
-                     )) < 0.40f);
-                const bool nearly_equal_antipodal =
-                    is_antipodal && (std::abs(cand_cost - cur_best.cost) < 0.005f) &&
-                    (std::abs(normalizeAngle(cand_pose.yaw - prior_yaw)) <
-                     std::abs(normalizeAngle(cur_best.pose.yaw - prior_yaw)));
-                if (cand_cost < cur_best.cost - 0.005f ||
-                    (!is_antipodal && cand_cost < cur_best.cost) ||
-                    nearly_equal_antipodal) {
-                    best_idx = static_cast<int>(refined_candidates.size()) - 1;
-                }
             }
         }
     }
@@ -382,8 +365,7 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
 
     const RefinedCandidate& best = refined_candidates[best_idx];
 
-    // Check Top-1 vs Top-2 uniqueness margin (excluding the 180-deg antipodal symmetry twin)
-    // and minimum 3D inlier ratio for borderline matches.
+    // Check Top-1 vs Top-2 uniqueness margin across distinct pose modes.
     float second_best_cost = std::numeric_limits<float>::infinity();
     for (size_t i = 0; i < refined_candidates.size(); ++i) {
         if (i == static_cast<size_t>(best_idx)) {
@@ -392,11 +374,7 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
         const auto& cand    = refined_candidates[i];
         const float dist_xy = std::hypot(cand.pose.x - best.pose.x, cand.pose.y - best.pose.y);
         const float dyaw    = std::abs(normalizeAngle(cand.pose.yaw - best.pose.yaw));
-        const bool is_antipodal_twin =
-            (std::hypot(cand.pose.x + best.pose.x, cand.pose.y + best.pose.y) < 0.80f) &&
-            (std::abs(normalizeAngle(cand.pose.yaw - (best.pose.yaw + static_cast<float>(M_PI)))) <
-             0.40f);
-        if (!is_antipodal_twin && (dist_xy > 0.30f || dyaw > 0.25f)) {
+        if (dist_xy > 0.30f || dyaw > 0.25f) {
             second_best_cost = std::min(second_best_cost, cand.cost);
         }
     }

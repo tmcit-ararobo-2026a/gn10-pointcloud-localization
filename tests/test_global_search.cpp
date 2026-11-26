@@ -117,7 +117,7 @@ void testGlobalSearchUniquenessCheck()
 {
     std::cout << "[Test] testGlobalSearchUniquenessCheck starting..." << std::endl;
 
-    // Case A: Two identical walls at (0, -2) and (1, +2) (same yaw, non-antipodal > 1m apart).
+    // Case A: Two identical walls at (0, -2) and (1, +2) (same yaw, > 1m apart).
     // Wall z_max = 0.50m so points at z = 1.00m stay exactly 0.50m from the wall regardless of pose.
     FieldObject wall1{};
     wall1.type     = ObjectType::BOX;

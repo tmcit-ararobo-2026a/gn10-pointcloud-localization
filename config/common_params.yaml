@@ -131,7 +131,7 @@
       step_xy: 0.30                     # Global coarse XY grid step [m]
       step_yaw: 0.3                     # Global coarse yaw grid step [rad]
       top_k_candidates: 4               # Number of spatially separated Top-K coarse peaks to fine-refine
-      uniqueness_ratio: 0.960           # Top-1/Top-2 margin threshold for borderline global matches (1.0 disables)
+      uniqueness_ratio: 0.950           # Top-1/Top-2 margin threshold across distinct pose modes (1.0 disables)
       verify_frames: 3                  # Consecutive frames required to confirm borderline global recovery candidates
       cost_threshold_3d: 0.202          # Independent 3D LiDAR mean residual threshold for global recovery & trial verification [m]
       lost_count_thresh: 25             # Consecutive failed frames before entering LOST state & triggering global search
