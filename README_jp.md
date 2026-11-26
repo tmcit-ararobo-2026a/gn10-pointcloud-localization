@@ -120,11 +120,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `matching_params.dynamic_dist_thresh` | `0.15` | `/dynamic_cloud` として抽出するマップ表面からの距離閾値 [m]。 |
 | `matching_params.cost_threshold_3d` | `0.23` | ローカル追従時の 3D LiDAR 独立残差合格しきい値 [m] ($C_{\text{3D}} < 0.23\text{ m}$)。 |
 | `matching_params.cost_threshold_2d` | `0.04` | 2D LiDAR 独立残差合格しきい値 [m] ($C_{\text{2D}} < 0.04\text{ m}$、ヒステリシス切り離しは $2\times = 0.08\text{ m}$)。 |
-| `matching_params.inlier_dist_thresh` | `0.08` | マップ壁面から `0.08 m` (8 cm) 以内の点をインライアと判定。 |
-| `matching_params.min_inliers` | `350` | インライア合格判定に必要な最小インライア点数 ($N_{\text{inlier}} \ge 350$)。 |
-| `matching_params.inlier_cost_thresh` | `0.040` | インライア合格判定に必要な平均インライア残差上限 [m] ($C_{\text{inlier}} < 0.040\text{ m}$)。 |
-| `matching_params.min_inlier_ratio` | `0.20` | 3D 障害物点に対する最小インライア比率 ($N_{\text{inlier}} / N_{\text{3D}} \ge 0.20$)。 |
-| `matching_params.max_inlier_accept_cost` | `0.230` | インライア合格判定時の 3D 残差コスト上限ガード [m] ($C_{\text{3D}} < 0.230\text{ m}$)。 |
+| `matching_params.inlier_dist_thresh` | `0.08` | マップ壁面から `0.08 m` (8 cm) 以内の点をインライアと判定（品質診断テレメトリ用）。 |
 | `matching_params.weight_2d_lidar` | `0.40` | Combined モード時の 2D LiDAR 独立残差項の基本重み係数 $w_{\text{2D,base}}$。 |
 | `matching_params.min_2d_points` / `target_2d_points` | `30` / `200` | 2D 残差有効化の最小点数と、100% 視野角重み付けとなる基準 2D 点数。 |
 | `matching_params.min_3d_points` | `50` | 最小 3D 障害物点数（これ未満の場合はフル探索窓の 2D 単独モード $w_{\text{2D}} = 1.0$ へ移行）。 |

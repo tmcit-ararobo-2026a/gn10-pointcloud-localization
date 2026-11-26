@@ -312,17 +312,13 @@ PoseCandidate GlobalSearcher::runCoarseAndRefineSearch(
                       solver.lastCost3D(),
                       std::numeric_limits<float>::max(),
                       solver.obstacleCount3D(),
-                      0,
-                      cand_inliers,
-                      cand_inlier_cost
+                      0
                   )
                 : match_params.isMatchAccepted(
                       solver.lastCost3D(),
                       solver.lastCost2D(),
                       solver.obstacleCount3D(),
-                      solver.obstacleCount2D(),
-                      cand_inliers,
-                      cand_inlier_cost
+                      solver.obstacleCount2D()
                   );
 
         refined_candidates.push_back({

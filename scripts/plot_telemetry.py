@@ -63,12 +63,8 @@ except ImportError:
 def get_default_thresholds():
     """Returns baseline threshold dictionary matching C++ struct defaults."""
     return {
-        "cost_threshold_3d": 0.22,
-        "cost_threshold_2d": 0.08,
-        "max_inlier_accept_cost": 0.22,
-        "min_inlier_ratio": 0.28,
-        "inlier_cost_thresh": 0.035,
-        "min_inliers": 400,
+        "cost_threshold_3d": 0.23,
+        "cost_threshold_2d": 0.04,
         "min_3d_points": 50,
         "min_2d_points": 30,
     }
@@ -122,14 +118,6 @@ def load_thresholds_from_yaml(yaml_path, thresholds=None):
                 thresholds["cost_threshold_3d"] = float(mp["cost_threshold_3d"])
             if "cost_threshold_2d" in mp:
                 thresholds["cost_threshold_2d"] = float(mp["cost_threshold_2d"])
-            if "max_inlier_accept_cost" in mp:
-                thresholds["max_inlier_accept_cost"] = float(mp["max_inlier_accept_cost"])
-            if "min_inlier_ratio" in mp:
-                thresholds["min_inlier_ratio"] = float(mp["min_inlier_ratio"])
-            if "inlier_cost_thresh" in mp:
-                thresholds["inlier_cost_thresh"] = float(mp["inlier_cost_thresh"])
-            if "min_inliers" in mp:
-                thresholds["min_inliers"] = int(mp["min_inliers"])
             if "min_3d_points" in mp:
                 thresholds["min_3d_points"] = int(mp["min_3d_points"])
             if "min_2d_points" in mp:
@@ -189,10 +177,6 @@ def plot_static(records, thresholds=None, save_path=None, title="Localization Te
 
     th_3d = thresholds["cost_threshold_3d"]
     th_2d = thresholds["cost_threshold_2d"]
-    th_max_inlier_cost = thresholds["max_inlier_accept_cost"]
-    th_inlier_ratio_pct = thresholds["min_inlier_ratio"] * 100.0
-    th_inlier_cost = thresholds["inlier_cost_thresh"]
-    th_min_inliers = thresholds["min_inliers"]
 
     fig, axes = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
     fig.suptitle(title, fontsize=14, fontweight="bold")
@@ -204,13 +188,6 @@ def plot_static(records, thresholds=None, save_path=None, title="Localization Te
     ax0.plot(t, c_2d, label="2D Cost", color="tab:orange", linestyle="--", alpha=0.8)
     ax0.axhline(th_3d, color="tab:red", linestyle=":", label=f"cost_threshold_3d ({th_3d:.3f}m)")
     ax0.axhline(th_2d, color="tab:brown", linestyle=":", label=f"cost_threshold_2d ({th_2d:.3f}m)")
-    ax0.axhline(
-        th_max_inlier_cost,
-        color="tab:purple",
-        linestyle="-.",
-        alpha=0.7,
-        label=f"max_inlier_accept_cost ({th_max_inlier_cost:.3f}m)",
-    )
     ax0.set_ylabel("Cost [m]")
     ax0.set_title("Matching Cost Components & Thresholds")
     ax0.grid(True, linestyle="--", alpha=0.6)
@@ -219,32 +196,20 @@ def plot_static(records, thresholds=None, save_path=None, title="Localization Te
     max_c = max(0.40, min(5.0, float(np.max(valid_costs)) * 1.15)) if len(valid_costs) > 0 else 0.40
     ax0.set_ylim(0.0, max_c)
 
-    # 2. Inlier Metrics
+    # 2. Inlier Metrics (diagnostic)
     ax1 = axes[1]
     ax1_twin = ax1.twinx()
     l1 = ax1.plot(t, i_ratio, label="Inlier Ratio (%)", color="tab:green", linewidth=1.5)
-    l_th_ratio = ax1.axhline(
-        th_inlier_ratio_pct,
-        color="darkgreen",
-        linestyle=":",
-        label=f"min_inlier_ratio ({th_inlier_ratio_pct:.1f}%)",
-    )
     l2 = ax1_twin.plot(t, i_cost, label="Inlier Cost [m]", color="tab:olive", linestyle="-.", alpha=0.9)
-    l_th_icost = ax1_twin.axhline(
-        th_inlier_cost,
-        color="gray",
-        linestyle=":",
-        label=f"inlier_cost_thresh ({th_inlier_cost:.3f}m)",
-    )
     ax1.set_ylabel("Inlier Ratio [%]")
     ax1_twin.set_ylabel("Inlier Cost [m]")
-    ax1.set_title("Inlier Ratio & Inlier Cost")
+    ax1.set_title("Wall Inlier Ratio & Residual (Diagnostic)")
     ax1.grid(True, linestyle="--", alpha=0.6)
     ax1.set_ylim(0.0, 100.0)
     valid_ic = i_cost[np.isfinite(i_cost)]
     max_ic = max(0.08, min(1.0, float(np.max(valid_ic)) * 1.15)) if len(valid_ic) > 0 else 0.08
     ax1_twin.set_ylim(0.0, max_ic)
-    all_lines = l1 + [l_th_ratio] + l2 + [l_th_icost]
+    all_lines = l1 + l2
     all_labels = [line.get_label() for line in all_lines]
     ax1.legend(all_lines, all_labels, loc="upper right", ncol=2, fontsize=8)
 
@@ -264,18 +229,11 @@ def plot_static(records, thresholds=None, save_path=None, title="Localization Te
     ax3.plot(t, o_3d, label="3D Obstacles", color="tab:cyan", linestyle="--", alpha=0.7)
     ax3.plot(t, o_2d, label="2D Obstacles", color="tab:orange", linestyle="--", alpha=0.7)
     ax3.plot(t, i_cnt, label="Inliers", color="tab:green", linewidth=1.2)
-    ax3.axhline(
-        th_min_inliers,
-        color="darkgreen",
-        linestyle=":",
-        alpha=0.8,
-        label=f"min_inliers ({th_min_inliers})",
-    )
     ax3.set_xlabel("Time [s]")
     ax3.set_ylabel("Points")
     ax3.set_title("Obstacle & Inlier Point Counts")
     ax3.grid(True, linestyle="--", alpha=0.6)
-    ax3.legend(loc="upper right", ncol=5, fontsize=8)
+    ax3.legend(loc="upper right", ncol=4, fontsize=8)
     max_pts = max(50.0, float(np.max(o_tot)) * 1.15) if len(o_tot) > 0 else 100.0
     ax3.set_ylim(0.0, max_pts)
 
@@ -372,10 +330,6 @@ def run_live_node(topic, thresholds, buffer_len=500, save_path=None, window_sec=
     param_names = [
         "matching_params.cost_threshold_3d",
         "matching_params.cost_threshold_2d",
-        "matching_params.max_inlier_accept_cost",
-        "matching_params.min_inlier_ratio",
-        "matching_params.inlier_cost_thresh",
-        "matching_params.min_inliers",
         "matching_params.min_3d_points",
         "matching_params.min_2d_points",
     ]
@@ -404,10 +358,7 @@ def run_live_node(topic, thresholds, buffer_len=500, save_path=None, window_sec=
             self.get_logger().info(
                 f"Subscribed to {topic}. Initial thresholds: "
                 f"3D={thresholds['cost_threshold_3d']:.3f}m, "
-                f"2D={thresholds['cost_threshold_2d']:.3f}m, "
-                f"max_inlier_cost={thresholds['max_inlier_accept_cost']:.3f}m, "
-                f"min_inliers={thresholds['min_inliers']} ({thresholds['min_inlier_ratio']*100:.0f}%), "
-                f"inlier_cost_th={thresholds['inlier_cost_thresh']:.3f}m"
+                f"2D={thresholds['cost_threshold_2d']:.3f}m"
             )
 
         def try_sync_parameters(self):
@@ -443,10 +394,7 @@ def run_live_node(topic, thresholds, buffer_len=500, save_path=None, window_sec=
                     self.get_logger().info(
                         f"Synchronized active thresholds from {node_name}: "
                         f"3D={thresholds['cost_threshold_3d']:.3f}m, "
-                        f"2D={thresholds['cost_threshold_2d']:.3f}m, "
-                        f"max_inlier_cost={thresholds['max_inlier_accept_cost']:.3f}m, "
-                        f"min_inliers={thresholds['min_inliers']} ({thresholds['min_inlier_ratio']*100:.0f}%), "
-                        f"inlier_cost_th={thresholds['inlier_cost_thresh']:.3f}m"
+                        f"2D={thresholds['cost_threshold_2d']:.3f}m"
                     )
             except Exception as ex:
                 self.synced_from_node = False
@@ -527,41 +475,22 @@ def run_live_node(topic, thresholds, buffer_len=500, save_path=None, window_sec=
         linestyle=":",
         label=f"cost_threshold_2d ({thresholds['cost_threshold_2d']:.3f}m)",
     )
-    hline_max_inlier_cost = ax0.axhline(
-        thresholds["max_inlier_accept_cost"],
-        color="tab:purple",
-        linestyle="-.",
-        alpha=0.7,
-        label=f"max_inlier_accept_cost ({thresholds['max_inlier_accept_cost']:.3f}m)",
-    )
     ax0.set_ylabel("Cost [m]")
     ax0.grid(True, linestyle="--", alpha=0.5)
     ax0.legend(loc="upper right", ncol=3, fontsize=8)
     ax0.set_ylim(0.0, 0.40)
 
-    # 2. Inlier Metrics
+    # 2. Inlier Metrics (diagnostic)
     ax1 = axes[1]
     ax1_twin = ax1.twinx()
     line_inlier_ratio, = ax1.plot([], [], label="Inlier Ratio (%)", color="tab:green", linewidth=1.5)
-    hline_inlier_ratio = ax1.axhline(
-        thresholds["min_inlier_ratio"] * 100.0,
-        color="darkgreen",
-        linestyle=":",
-        label=f"min_inlier_ratio ({thresholds['min_inlier_ratio']*100.0:.1f}%)",
-    )
     line_inlier_cost, = ax1_twin.plot([], [], label="Inlier Cost [m]", color="tab:olive", linestyle="-.", alpha=0.9)
-    hline_inlier_cost = ax1_twin.axhline(
-        thresholds["inlier_cost_thresh"],
-        color="gray",
-        linestyle=":",
-        label=f"inlier_cost_thresh ({thresholds['inlier_cost_thresh']:.3f}m)",
-    )
     ax1.set_ylabel("Inlier Ratio [%]")
     ax1_twin.set_ylabel("Inlier Cost [m]")
     ax1.grid(True, linestyle="--", alpha=0.5)
     ax1.set_ylim(0.0, 100.0)
     ax1_twin.set_ylim(0.0, 0.08)
-    ax1_lines = [line_inlier_ratio, hline_inlier_ratio, line_inlier_cost, hline_inlier_cost]
+    ax1_lines = [line_inlier_ratio, line_inlier_cost]
     ax1.legend(ax1_lines, [l.get_label() for l in ax1_lines], loc="upper right", ncol=2, fontsize=8)
 
     # 3. Kinematics & Search Windows
@@ -580,17 +509,10 @@ def run_live_node(topic, thresholds, buffer_len=500, save_path=None, window_sec=
     line_obs_3d, = ax3.plot([], [], label="3D Obstacles", color="tab:cyan", linestyle="--", alpha=0.7)
     line_obs_2d, = ax3.plot([], [], label="2D Obstacles", color="tab:orange", linestyle="--", alpha=0.7)
     line_inliers, = ax3.plot([], [], label="Inliers", color="tab:green", linewidth=1.2)
-    hline_min_inliers = ax3.axhline(
-        thresholds["min_inliers"],
-        color="darkgreen",
-        linestyle=":",
-        alpha=0.8,
-        label=f"min_inliers ({thresholds['min_inliers']})",
-    )
     ax3.set_xlabel("Time [s]")
     ax3.set_ylabel("Points")
     ax3.grid(True, linestyle="--", alpha=0.5)
-    ax3.legend(loc="upper right", ncol=5, fontsize=8)
+    ax3.legend(loc="upper right", ncol=4, fontsize=8)
 
     plt.tight_layout()
 
@@ -605,28 +527,12 @@ def run_live_node(topic, thresholds, buffer_len=500, save_path=None, window_sec=
                 if thresholds_dirty[0]:
                     th_3d = thresholds["cost_threshold_3d"]
                     th_2d = thresholds["cost_threshold_2d"]
-                    th_max_ic = thresholds["max_inlier_accept_cost"]
-                    th_ir_pct = thresholds["min_inlier_ratio"] * 100.0
-                    th_ic = thresholds["inlier_cost_thresh"]
-                    th_min_inl = thresholds["min_inliers"]
 
                     hline_th_3d.set_ydata([th_3d, th_3d])
                     hline_th_3d.set_label(f"cost_threshold_3d ({th_3d:.3f}m)")
                     hline_th_2d.set_ydata([th_2d, th_2d])
                     hline_th_2d.set_label(f"cost_threshold_2d ({th_2d:.3f}m)")
-                    hline_max_inlier_cost.set_ydata([th_max_ic, th_max_ic])
-                    hline_max_inlier_cost.set_label(f"max_inlier_accept_cost ({th_max_ic:.3f}m)")
                     ax0.legend(loc="upper right", ncol=3, fontsize=8)
-
-                    hline_inlier_ratio.set_ydata([th_ir_pct, th_ir_pct])
-                    hline_inlier_ratio.set_label(f"min_inlier_ratio ({th_ir_pct:.1f}%)")
-                    hline_inlier_cost.set_ydata([th_ic, th_ic])
-                    hline_inlier_cost.set_label(f"inlier_cost_thresh ({th_ic:.3f}m)")
-                    ax1.legend(ax1_lines, [l.get_label() for l in ax1_lines], loc="upper right", ncol=2, fontsize=8)
-
-                    hline_min_inliers.set_ydata([th_min_inl, th_min_inl])
-                    hline_min_inliers.set_label(f"min_inliers ({th_min_inl})")
-                    ax3.legend(loc="upper right", ncol=5, fontsize=8)
 
                     thresholds_dirty[0] = False
 

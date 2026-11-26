@@ -87,11 +87,7 @@
       field_min_y: -6.0                 # Field Y lower boundary [m]
       field_max_y: 6.0                  # Field Y upper boundary [m]
       use_map_bounds: true              # Automatically adopt field boundaries from the loaded ESDF map header
-      inlier_dist_thresh: 0.08          # Distance threshold [m] to count a 3D obstacle point as a wall inlier
-      min_inliers: 350                  # Minimum 3D inlier point count for inlier-based acceptance
-      inlier_cost_thresh: 0.040         # Maximum mean residual [m] of inlier points for inlier-based acceptance
-      min_inlier_ratio: 0.20            # Minimum ratio (inliers / 3D obstacles) for inlier-based acceptance
-      max_inlier_accept_cost: 0.230     # Hard upper bound on 3D cost [m] even when inliers pass (set > cost_threshold_3d to enable inlier rescue)
+      inlier_dist_thresh: 0.08          # Distance threshold [m] to count a 3D obstacle point as a wall inlier (diagnostic telemetry)
       weight_2d_lidar: 0.40             # Base weight w_2d (0.0..1.0) of 2D LiDAR in composite ESDF cost
       min_2d_points: 30                 # Minimum valid 2D LiDAR points required to activate 2D matching
       target_2d_points: 200             # Reference 2D point count for full FoV scaling (fov_scale = min(1, N_2d/200))

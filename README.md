@@ -120,11 +120,7 @@ Common parameters are defined in [`config/common_params.yaml`](./config/common_p
 | `matching_params.dynamic_dist_thresh` | `0.15` | Distance threshold [m] above which points are extracted as `/dynamic_cloud`. |
 | `matching_params.cost_threshold_3d` | `0.23` | Independent 3D LiDAR mean residual acceptance threshold [m] for local tracking ($C_{\text{3D}} < 0.23\text{ m}$). |
 | `matching_params.cost_threshold_2d` | `0.04` | Independent 2D LiDAR mean residual acceptance threshold [m] ($C_{\text{2D}} < 0.04\text{ m}$, hysteresis detachment at $2\times = 0.08\text{ m}$). |
-| `matching_params.inlier_dist_thresh` | `0.08` | Distance threshold [m] to classify an obstacle point as a wall inlier. |
-| `matching_params.min_inliers` | `350` | Minimum inlier point count for inlier-based acceptance ($N_{\text{inlier}} \ge 350$). |
-| `matching_params.inlier_cost_thresh` | `0.040` | Maximum mean residual of inlier points for inlier acceptance [m] ($C_{\text{inlier}} < 0.040\text{ m}$). |
-| `matching_params.min_inlier_ratio` | `0.20` | Minimum inlier ratio against 3D obstacle points ($N_{\text{inlier}} / N_{\text{3D}} \ge 0.20$). |
-| `matching_params.max_inlier_accept_cost` | `0.230` | 3D residual cost upper bound guard for inlier acceptance [m] ($C_{\text{3D}} < 0.230\text{ m}$). |
+| `matching_params.inlier_dist_thresh` | `0.08` | Distance threshold [m] to classify an obstacle point as a wall inlier (diagnostic telemetry). |
 | `matching_params.weight_2d_lidar` | `0.40` | Base weight $w_{\text{2D,base}}$ of 2D LiDAR residual term in Combined mode. |
 | `matching_params.min_2d_points` / `target_2d_points` | `30` / `200` | Minimum 2D point threshold and reference point count for 100% FoV scaling. |
 | `matching_params.min_3d_points` | `50` | Minimum 3D obstacle points (falls back to full-window 2D-only mode $w_{\text{2D}} = 1.0$ if fewer). |
