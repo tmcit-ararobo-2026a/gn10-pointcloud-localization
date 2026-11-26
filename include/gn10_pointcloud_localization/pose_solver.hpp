@@ -60,8 +60,6 @@ struct MatchingParams {
     int min_2d_points{30};
     int target_2d_points{200};
     int min_3d_points{50};
-    int robust_loss_type{0};  // 0: Clipped L1, 1: Welsch, 2: Cauchy
-    float robust_loss_sigma{0.08f};
 
     /**
      * @brief Evaluates whether 3D and 2D LiDAR matching satisfies independent cost thresholds and

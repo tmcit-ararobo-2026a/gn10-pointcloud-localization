@@ -193,8 +193,17 @@ def _build_concat_and_deskewed_msgs(
     tfs: dict[str, np.ndarray],
     imu_orient: ImuOrientator,
     ts: Any,
+    min_lidar_range: float = 0.15,
+    robot_radius: float = 0.80,
+    robot_z_min: float = 0.0,
+    robot_z_max: float = 1.2,
 ) -> tuple[Any, Any, int, int]:
-    """Combine consecutive packets into raw (/livox/lidar) and IMU-deskewed (/livox/lidar_deskewed)."""
+    """Combine consecutive packets into raw (/livox/lidar) and IMU-deskewed (/livox/lidar_deskewed).
+
+    Removes Livox (0,0,0) non-return sentinel points (||p_lidar||_2 < min_lidar_range) before
+    extrinsic transformation and applies the same base_link self-filter cylinder as gn10
+    (r_xy <= robot_radius, z in [robot_z_min, robot_z_max]).
+    """
     PointCloud2 = ts.types["sensor_msgs/msg/PointCloud2"]
     Header = ts.types["std_msgs/msg/Header"]
     Time = ts.types["builtin_interfaces/msg/Time"]
@@ -214,9 +223,32 @@ def _build_concat_and_deskewed_msgs(
 
     combined = np.vstack(raw_chunks)
     all_ts_ns = np.concatenate(pt_stamps)
-    total_pts = combined.shape[0]
     t_start_ns = int(first_msg.header.stamp.sec) * 10**9 + int(first_msg.header.stamp.nanosec)
     t_end_ns = int(all_ts_ns.max()) if len(all_ts_ns) else t_start_ns
+
+    xyz_all = np.frombuffer(combined[:, :12].tobytes(), dtype=np.float32).reshape(-1, 3).astype(np.float64)
+    keep_mask = np.isfinite(xyz_all).all(axis=1)
+    if min_lidar_range > 0.0:
+        keep_mask &= np.linalg.norm(xyz_all, axis=1) >= min_lidar_range
+
+    frame_id = first_msg.header.frame_id.lstrip("/")
+    T_bl = tfs.get(frame_id, np.eye(4, dtype=np.float64)) if frame_id != "base_link" else np.eye(4, dtype=np.float64)
+    T_lb = np.linalg.inv(T_bl)
+
+    if robot_radius > 0.0 and keep_mask.any():
+        pts_base_check = (T_bl[:3, :3] @ xyz_all[keep_mask].T).T + T_bl[:3, 3]
+        r_xy = np.hypot(pts_base_check[:, 0], pts_base_check[:, 1])
+        in_chassis = (
+            (r_xy <= robot_radius)
+            & (pts_base_check[:, 2] >= robot_z_min)
+            & (pts_base_check[:, 2] <= robot_z_max)
+        )
+        valid_indices = np.flatnonzero(keep_mask)
+        keep_mask[valid_indices[in_chassis]] = False
+
+    combined = np.ascontiguousarray(combined[keep_mask])
+    all_ts_ns = all_ts_ns[keep_mask]
+    total_pts = combined.shape[0]
 
     # Raw 0.10 s scan keeps start timestamp to match Livox + lidar_localization_ros2 convention.
     raw_hdr = Header(
@@ -232,25 +264,19 @@ def _build_concat_and_deskewed_msgs(
         point_step=point_step,
         row_step=total_pts * point_step,
         data=np.ascontiguousarray(combined.reshape(-1)),
-        is_dense=first_msg.is_dense,
+        is_dense=True,
     )
 
     # Deskewed 0.10 s scan applies per-point SO(3) IMU gyro motion removal to t_end_ns in base_link,
     # transforms back to the lidar frame so external pipelines apply their own T_base_lidar TF once,
     # and stamps at t_end_ns.
     deskew_arr = combined.copy()
-    xyz = np.frombuffer(deskew_arr[:, :12].tobytes(), dtype=np.float32).reshape(total_pts, 3).astype(np.float64)
-    finite_mask = np.isfinite(xyz).all(axis=1)
-    frame_id = first_msg.header.frame_id.lstrip("/")
-    T_bl = tfs.get(frame_id, np.eye(4, dtype=np.float64)) if frame_id != "base_link" else np.eye(4, dtype=np.float64)
-    T_lb = np.linalg.inv(T_bl)
-
-    if len(imu_orient.stamps_ns) >= 2 and finite_mask.any():
-        pts_base = (T_bl[:3, :3] @ xyz[finite_mask].T).T + T_bl[:3, 3]
+    if total_pts > 0 and len(imu_orient.stamps_ns) >= 2:
+        xyz = np.frombuffer(deskew_arr[:, :12].tobytes(), dtype=np.float32).reshape(total_pts, 3).astype(np.float64)
+        pts_base = (T_bl[:3, :3] @ xyz.T).T + T_bl[:3, 3]
         R_ref_T = imu_orient.rotation_at(t_end_ns).T
-        # Sample IMU rotation per unique packet or 1 ms bucket for fast, accurate interpolation.
-        ts_valid = all_ts_ns[finite_mask]
-        ts_buckets = (ts_valid // 500_000) * 500_000  # 0.5 ms resolution
+        # Sample IMU rotation per 0.5 ms bucket for fast, accurate interpolation.
+        ts_buckets = (all_ts_ns // 500_000) * 500_000
         uniq_buckets, inv_idx = np.unique(ts_buckets, return_inverse=True)
         rel_rots = np.empty((len(uniq_buckets), 3, 3), dtype=np.float64)
         for bi, b_ns in enumerate(uniq_buckets):
@@ -258,7 +284,7 @@ def _build_concat_and_deskewed_msgs(
         rot_per_pt = rel_rots[inv_idx]
         pts_deskew_base = np.einsum("nij,nj->ni", rot_per_pt, pts_base)
         pts_deskew_lidar = (T_lb[:3, :3] @ pts_deskew_base.T).T + T_lb[:3, 3]
-        deskew_arr[finite_mask, :12] = np.frombuffer(
+        deskew_arr[:, :12] = np.frombuffer(
             pts_deskew_lidar.astype(np.float32).tobytes(), dtype=np.uint8
         ).reshape(-1, 12)
 
@@ -275,7 +301,7 @@ def _build_concat_and_deskewed_msgs(
         point_step=point_step,
         row_step=total_pts * point_step,
         data=np.ascontiguousarray(deskew_arr.reshape(-1)),
-        is_dense=first_msg.is_dense,
+        is_dense=True,
     )
     return raw_cloud, deskew_cloud, t_start_ns, t_end_ns
 
@@ -287,6 +313,11 @@ def accumulate_bag(
     imu_topic: str,
     packets_per_scan: int,
     overwrite: bool,
+    min_lidar_range: float = 0.15,
+    robot_radius: float = 0.80,
+    robot_z_min: float = 0.0,
+    robot_z_max: float = 1.2,
+    sliding: bool = False,
 ) -> dict[str, int]:
     if dst_bag.exists():
         if not overwrite:
@@ -348,7 +379,14 @@ def accumulate_bag(
                     msgs = [m for _, m in packet_buf]
                     last_bag_t = packet_buf[-1][0]
                     raw_cloud, deskew_cloud, _, _ = _build_concat_and_deskewed_msgs(
-                        msgs, tfs, imu_orient, ts
+                        msgs,
+                        tfs,
+                        imu_orient,
+                        ts,
+                        min_lidar_range=min_lidar_range,
+                        robot_radius=robot_radius,
+                        robot_z_min=robot_z_min,
+                        robot_z_max=robot_z_max,
                     )
                     writer.write(
                         raw_out_conn,
@@ -361,7 +399,10 @@ def accumulate_bag(
                         ts.serialize_cdr(deskew_cloud, "sensor_msgs/msg/PointCloud2"),
                     )
                     counts["scans_emitted"] += 1
-                    packet_buf.clear()
+                    if sliding:
+                        packet_buf.pop(0)
+                    else:
+                        packet_buf.clear()
 
     return counts
 
@@ -373,6 +414,11 @@ def main() -> int:
     parser.add_argument("--cloud-topic", default="/livox/lidar")
     parser.add_argument("--imu-topic", default="/livox/imu")
     parser.add_argument("--packets-per-scan", type=int, default=5, help="Packets per scan (5 -> 10 Hz for 50 Hz bags)")
+    parser.add_argument("--min-lidar-range", type=float, default=0.15, help="Drop sensor-origin non-returns below this radius [m]")
+    parser.add_argument("--robot-radius", type=float, default=0.80, help="base_link self-filter cylinder radius [m] (<=0 disables)")
+    parser.add_argument("--robot-z-min", type=float, default=0.0, help="base_link self-filter cylinder min Z [m]")
+    parser.add_argument("--robot-z-max", type=float, default=1.2, help="base_link self-filter cylinder max Z [m]")
+    parser.add_argument("--sliding", action="store_true", help="Emit sliding-window clouds at native packet rate (50 Hz)")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -383,6 +429,11 @@ def main() -> int:
         args.imu_topic,
         args.packets_per_scan,
         args.overwrite,
+        min_lidar_range=args.min_lidar_range,
+        robot_radius=args.robot_radius,
+        robot_z_min=args.robot_z_min,
+        robot_z_max=args.robot_z_max,
+        sliding=args.sliding,
     )
     print(f"[accumulate] done: {stats}", flush=True)
     return 0

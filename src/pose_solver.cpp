@@ -295,9 +295,7 @@ bool PoseSolver::matchObstacleCloud(
                     (!match_params.fine_refine) ? out_c3d : nullptr,
                     (!match_params.fine_refine) ? out_c2d : nullptr,
                     nullptr,
-                    coarse_point_stride,
-                    match_params.robust_loss_type,
-                    match_params.robust_loss_sigma
+                    coarse_point_stride
                 );
             } else {
                 matched = launchFieldSDFMatcher(
@@ -372,9 +370,7 @@ bool PoseSolver::matchObstacleCloud(
                             is_final_level ? out_c3d : nullptr,
                             is_final_level ? out_c2d : nullptr,
                             nullptr,
-                            1,
-                            match_params.robust_loss_type,
-                            match_params.robust_loss_sigma
+                            1
                         );
                     } else {
                         matched = launchFieldSDFMatcher(
@@ -874,9 +870,7 @@ bool PoseSolver::evaluateGlobalSDF(
             nullptr,
             nullptr,
             &all_costs,
-            coarse_point_stride,
-            0,
-            match_params.robust_loss_sigma
+            coarse_point_stride
         );
     } else {
         ok = launchFieldSDFMatcher(
@@ -1010,9 +1004,7 @@ bool PoseSolver::evaluateGlobalSDF(
             nullptr,
             nullptr,
             nullptr,
-            coarse_point_stride,
-            0,
-            match_params.robust_loss_sigma
+            coarse_point_stride
         );
     }
 
