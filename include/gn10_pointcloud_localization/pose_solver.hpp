@@ -52,66 +52,32 @@ struct MatchingParams {
     float field_min_y{-6.0f};
     float field_max_y{6.0f};
     float inlier_dist_thresh{0.08f};
-    int min_inliers{60};
-    float inlier_cost_thresh{0.040f};
-    float min_inlier_ratio{0.30f};
-    float max_inlier_accept_cost{0.22f};
     float weight_2d_lidar{0.40f};
     int min_2d_points{30};
     int target_2d_points{200};
     int min_3d_points{50};
 
     /**
-     * @brief Evaluates whether 3D and 2D LiDAR matching satisfies independent cost thresholds and
-     * inlier criteria.
+     * @brief Evaluates whether 3D and 2D LiDAR matching satisfies independent cost thresholds.
      */
     bool isMatchAccepted(
         float cost_3d,
         float cost_2d,
         int count_3d,
-        int count_2d,
-        int inlier_count,
-        float inlier_cost
+        int count_2d
     ) const
     {
         bool pass_3d = false;
         if (count_3d >= min_3d_points) {
-            const bool inlier_accepted =
-                (inlier_count >= min_inliers) && (inlier_cost < inlier_cost_thresh) &&
-                (static_cast<float>(inlier_count) / static_cast<float>(count_3d) >=
-                 min_inlier_ratio) &&
-                (cost_3d < max_inlier_accept_cost);
-            pass_3d = (cost_3d < cost_threshold_3d) || inlier_accepted;
+            pass_3d = std::isfinite(cost_3d) && (cost_3d < cost_threshold_3d);
         }
 
         bool pass_2d = false;
         if (count_2d >= min_2d_points) {
-            pass_2d = (cost_2d < cost_threshold_2d);
+            pass_2d = std::isfinite(cost_2d) && (cost_2d < cost_threshold_2d);
         }
 
         return pass_3d || pass_2d;
-    }
-
-    /**
-     * @brief Backward-compatible overload evaluating composite cost against cost_threshold.
-     */
-    bool isMatchAccepted(
-        float best_cost, int inlier_count, float inlier_cost, int total_obstacle_count
-    ) const
-    {
-        if (!std::isfinite(best_cost)) {
-            return false;
-        }
-        if (best_cost < cost_threshold_3d) {
-            return true;
-        }
-        if (total_obstacle_count <= 0) {
-            return false;
-        }
-        const float inlier_ratio =
-            static_cast<float>(inlier_count) / static_cast<float>(total_obstacle_count);
-        return (inlier_count >= min_inliers) && (inlier_cost < inlier_cost_thresh) &&
-               (inlier_ratio >= min_inlier_ratio) && (best_cost < max_inlier_accept_cost);
     }
 
     void useESDFBounds(const ESDFHeader& header)

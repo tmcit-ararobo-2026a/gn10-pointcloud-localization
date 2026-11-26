@@ -413,17 +413,9 @@ bool PoseSolver::matchObstacleCloud(
             return matched;
         };
 
-        auto is_3d_passed = [&](float c3d, int inliers, float inlier_c) -> bool {
-            if (num_3d_obstacles_ < match_params.min_3d_points) {
-                return false;
-            }
-            const bool inlier_ok =
-                (inliers >= match_params.min_inliers) &&
-                (inlier_c < match_params.inlier_cost_thresh) &&
-                (static_cast<float>(inliers) / static_cast<float>(num_3d_obstacles_) >=
-                 match_params.min_inlier_ratio) &&
-                (c3d < match_params.max_inlier_accept_cost);
-            return (c3d < match_params.cost_threshold_3d) || inlier_ok;
+        auto is_3d_passed = [&](float c3d) -> bool {
+            return (num_3d_obstacles_ >= match_params.min_3d_points) &&
+                   std::isfinite(c3d) && (c3d < match_params.cost_threshold_3d);
         };
 
         if (num_3d_obstacles_ >= match_params.min_3d_points) {
@@ -441,7 +433,7 @@ bool PoseSolver::matchObstacleCloud(
 
             if (use_esdf_ && pose_matched && effective_weight_2d > 0.0f &&
                 num_2d_obstacles_ >= match_params.min_2d_points) {
-                bool pass_3d = is_3d_passed(last_cost_3d_, local_inliers, local_inlier_cost);
+                bool pass_3d = is_3d_passed(last_cost_3d_);
                 // Anti-oscillation deadband (Guard 1):
                 // When the combined match already satisfies 3D acceptance (pass_3d == true),
                 // do not detach 2D at the normal acceptance threshold (cost_threshold_2d).
@@ -464,8 +456,7 @@ bool PoseSolver::matchObstacleCloud(
                         &last_cost_3d_,
                         nullptr
                     );
-                    pass_3d = pose_matched &&
-                              is_3d_passed(last_cost_3d_, local_inliers, local_inlier_cost);
+                    pass_3d = pose_matched && is_3d_passed(last_cost_3d_);
                 }
 
                 if (!pass_3d) {

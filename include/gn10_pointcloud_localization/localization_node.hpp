@@ -68,9 +68,7 @@ private:
         const sensor_msgs::msg::PointCloud2& msg, const float transform[12], int64_t& end_ns
     );
     void updateLostState(bool matched, float best_cost);
-    bool isPoseMatchAccepted(
-        const MatchingParams& params, int inlier_count, float inlier_cost
-    ) const;
+    bool isPoseMatchAccepted(const MatchingParams& params) const;
     void publishPoseAndTransform(
         const rclcpp::Time& stamp, const PoseCandidate& pose, bool is_predicted = false
     );

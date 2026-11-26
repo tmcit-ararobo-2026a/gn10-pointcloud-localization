@@ -211,39 +211,28 @@ void testESDFMatcherWeightedResidual()
     assert(ok_stride);
     assert(std::abs(stride_cost - best_cost) < 1e-3f);
 
-    // Test strict inlier acceptance criteria (Task 1)
+    // Test independent 3D and 2D threshold acceptance criteria (pass_3d || pass_2d)
     MatchingParams accept_params;
     accept_params.cost_threshold = 0.185f;
     accept_params.cost_threshold_3d = 0.185f;
     accept_params.cost_threshold_2d = 0.080f;
-    accept_params.min_inliers = 60;
-    accept_params.inlier_cost_thresh = 0.05f;
-    accept_params.min_inlier_ratio = 0.35f;
-    accept_params.max_inlier_accept_cost = 0.22f;
 
-    // Test legacy overload:
-    // Rejected when only 60 out of 1000 points are inliers (ratio = 0.06 < 0.35) and cost >= threshold (0.19 >= 0.185)
-    assert(!accept_params.isMatchAccepted(0.19f, 60, 0.03f, 1000));
-    // Rejected when best_cost >= max_inlier_accept_cost (0.25 >= 0.22)
-    assert(!accept_params.isMatchAccepted(0.25f, 500, 0.03f, 1000));
-    // Accepted when inlier count, inlier cost, inlier ratio (>= 0.35), and max_inlier_accept_cost (< 0.22) all pass
-    assert(accept_params.isMatchAccepted(0.19f, 400, 0.03f, 1000));
-
-    // Test independent 3D and 2D thresholds (pass_3d || pass_2d with inactive-sensor guards):
     // Case A: 3D cost passes (< 0.185), 2D cost passes (< 0.080) -> Accepted
-    assert(accept_params.isMatchAccepted(0.175f, 0.020f, 500, 100, 200, 0.03f));
+    assert(accept_params.isMatchAccepted(0.175f, 0.020f, 500, 100));
     // Case B: 3D cost passes (< 0.185), 2D is absent (count < 30) -> Accepted (3D alone passes)
-    assert(accept_params.isMatchAccepted(0.175f, 0.0f, 500, 0, 200, 0.03f));
-    // Case C: 3D cost fails (> 0.185 and inliers low), 2D is absent (count < 30) -> Rejected
-    assert(!accept_params.isMatchAccepted(0.240f, 0.0f, 500, 0, 10, 0.07f));
+    assert(accept_params.isMatchAccepted(0.175f, 0.0f, 500, 0));
+    // Case C: 3D cost fails (>= 0.185), 2D is absent (count < 30) -> Rejected
+    assert(!accept_params.isMatchAccepted(0.190f, 0.0f, 500, 0));
     // Case D: Both 3D and 2D fail their thresholds -> Rejected
-    assert(!accept_params.isMatchAccepted(0.240f, 0.120f, 500, 100, 10, 0.07f));
+    assert(!accept_params.isMatchAccepted(0.240f, 0.120f, 500, 100));
     // Case E: 3D cost passes (< 0.185) while 2D spikes (> 0.080) -> Accepted via 3D fallback
-    assert(accept_params.isMatchAccepted(0.175f, 0.120f, 500, 100, 200, 0.03f));
+    assert(accept_params.isMatchAccepted(0.175f, 0.120f, 500, 100));
     // Case F: 3D is insufficient (< 50 pts) and 2D fails (> 0.080) -> Rejected
-    assert(!accept_params.isMatchAccepted(0.0f, 0.120f, 10, 100, 0, 1.0f));
-    // Case G: 3D fails (> 0.185 and inliers low), 2D passes (< 0.080) -> Accepted via 2D fallback
-    assert(accept_params.isMatchAccepted(0.240f, 0.020f, 500, 100, 10, 0.07f));
+    assert(!accept_params.isMatchAccepted(0.0f, 0.120f, 10, 100));
+    // Case G: 3D fails (>= 0.185), 2D passes (< 0.080) -> Accepted via 2D fallback
+    assert(accept_params.isMatchAccepted(0.240f, 0.020f, 500, 100));
+    // Case H: Non-finite cost is rejected even when point counts are sufficient
+    assert(!accept_params.isMatchAccepted(std::numeric_limits<float>::quiet_NaN(), 0.120f, 500, 100));
 
     // Test PoseSolver symmetric fallback: 3D-only when 2D fails, and 2D-only when 3D fails
     PoseSolver solver(10000);
@@ -305,9 +294,7 @@ void testESDFMatcherWeightedResidual()
         solver.lastCost3D(),
         solver.lastCost2D(),
         solver.obstacleCount3D(),
-        solver.obstacleCount2D(),
-        solved_inliers,
-        solved_inlier_cost
+        solver.obstacleCount2D()
     ));
 
     // 2) Bad 3D (at x = 0.80m -> cost_3d ~ 0.50) + Good 2D (at x = 0.0m -> cost_2d < 0.08):
@@ -345,9 +332,7 @@ void testESDFMatcherWeightedResidual()
         solver.lastCost3D(),
         solver.lastCost2D(),
         solver.obstacleCount3D(),
-        solver.obstacleCount2D(),
-        solved_inliers,
-        solved_inlier_cost
+        solver.obstacleCount2D()
     ));
 
     // 3) Empty 3D (0 points) + Good 2D (at x = 0.0m):
@@ -376,9 +361,7 @@ void testESDFMatcherWeightedResidual()
         solver.lastCost3D(),
         solver.lastCost2D(),
         solver.obstacleCount3D(),
-        solver.obstacleCount2D(),
-        solved_inliers,
-        solved_inlier_cost
+        solver.obstacleCount2D()
     ));
 
     // 4) Anti-oscillation Guard 1 (Hysteresis deadband near cost_threshold_2d):
@@ -439,9 +422,7 @@ void testESDFMatcherWeightedResidual()
         solver.lastCost3D(),
         solver.lastCost2D(),
         solver.obstacleCount3D(),
-        solver.obstacleCount2D(),
-        solved_inliers,
-        solved_inlier_cost
+        solver.obstacleCount2D()
     ));
 
     // 5b) When 3D has points (num_3d = 200 >= 50) but fails, and 2D is shifted by 0.15m
@@ -473,9 +454,7 @@ void testESDFMatcherWeightedResidual()
         solver.lastCost3D(),
         solver.lastCost2D(),
         solver.obstacleCount3D(),
-        solver.obstacleCount2D(),
-        solved_inliers,
-        solved_inlier_cost
+        solver.obstacleCount2D()
     ));
 
     // 5c) When 2D has a distant false wall at x = 0.40m (outside range_xy = 0.25m),
@@ -507,9 +486,7 @@ void testESDFMatcherWeightedResidual()
         solver.lastCost3D(),
         solver.lastCost2D(),
         solver.obstacleCount3D(),
-        solver.obstacleCount2D(),
-        solved_inliers,
-        solved_inlier_cost
+        solver.obstacleCount2D()
     ));
 
     cudaFree(d_cloud);
@@ -575,7 +552,6 @@ void testFieldSDFCostPopulation()
     solver_params.max_dist_thresh   = 0.50f;
     solver_params.cost_threshold_3d = 0.15f;
     solver_params.min_3d_points     = 50;
-    solver_params.min_inliers       = 50;
     solver_params.fine_refine       = true;
     solver_params.fine_refine_levels = 1;
     solver_params.field_min_x       = -2.0f;
@@ -625,9 +601,7 @@ void testFieldSDFCostPopulation()
         solver.lastCost3D(),
         solver.lastCost2D(),
         solver.obstacleCount3D(),
-        solver.obstacleCount2D(),
-        solved_inliers,
-        solved_inlier_cost
+        solver.obstacleCount2D()
     ));
 
     std::cout << "[Test] testFieldSDFCostPopulation PASSED!" << std::endl;

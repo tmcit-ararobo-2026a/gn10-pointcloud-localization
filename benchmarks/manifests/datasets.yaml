@@ -63,7 +63,6 @@ datasets:
       filter_params.robot_radius: 0.40
       filter_params.ground_z_thresh: 0.15
       matching_params.cost_threshold_3d: 0.30
-      matching_params.max_inlier_accept_cost: 0.30
       global_search.range_min_x: -18.0
       global_search.range_max_x: 18.0
       global_search.range_min_y: -18.0
