@@ -109,7 +109,7 @@ if (ロスト状態か？ (`is_lost_ == true` かつ外部 Prior なし)) then (
         :IMU 方位事前情報の有効性に応じた Yaw 探索半幅を選択: 有効時 (`< 10.0 s` または初期事前値) は `recovery_yaw_diff` (`0.40 rad`),\n事前情報失効後の次回以降探索で `range_yaw_diff` (`3.1415 rad`) へ拡大;
         :Stage 1: Voxel 均等化済み 3D 障害物点群でフィールド全域を粗探索 (`step_xy`, `step_yaw`, `Clipped L1`) し\n**3D NMS** で上位 **Top-K (`top_k_candidates`)** 候補を抽出;
         :Stage 2: 各 Top-K 候補の周囲で `matchObstacleCloud` (`Clipped L1`) を実行\n(**3D LiDAR 優先**: `N_3d >= min_3d_points` のとき 2D 不合格・2D単独フォールバックのコストを `cost_3d` 尺度へ正規化);
-        :Stage 3: **Top-1/Top-2 Uniqueness 判定**: `best.cost > uniqueness_ratio * second_best_cost` なら曖昧候補として棄却\n(180° 点対称ツインを除外して比較);
+        :Stage 3: **Top-1/Top-2 Uniqueness 判定**: `best.cost > uniqueness_ratio * second_best_cost` なら曖昧候補として棄却\n(異なる姿勢モード間で比較);
         :Stage 4: **複数フレーム Trial 検証**: 初回大域一致 (1フレーム目) + 続く2フレームの局所試行 (`1.5` 倍 XY 窓) の計 `verify_frames` (`3`) 連続フレーム\n`is_global_recovery_accepted` を満たした後に `is_lost_` を解除;
         note right
             **グローバル探索パラメータ (`global_search.*`)**
@@ -118,7 +118,7 @@ if (ロスト状態か？ (`is_lost_ == true` かつ外部 Prior なし)) then (
             * `recovery_yaw_diff`: **0.40 rad** (IMU 方位事前情報有効時)
             * `step_xy` / `step_yaw`: **0.30 m** / **0.3 rad**
             * `top_k_candidates`: **4**
-            * `uniqueness_ratio`: **0.960** (1.0 で無効化)
+            * `uniqueness_ratio`: **0.950** (1.0 で無効化)
             * `verify_frames`: **3** (初回大域一致 1 + Trial 2)
             * `cost_threshold_3d`: **0.202 m** (グローバル復帰・検証用 3D しきい値)
             * `lost_count_thresh`: **25** (interval: 0.5 s)

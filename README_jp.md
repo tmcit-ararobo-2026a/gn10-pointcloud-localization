@@ -13,7 +13,7 @@ NHK 高専ロボコン 2026 の自律移動・位置合わせに使用しまし�
 - **ハードウェア補間 3D EDF（`tex3D`）**：`.json` CAD 定義または `.pcd` 点群をオフラインで打ち切り非負表面ユークリッド距離場（$d \in [0, d_{\max}]$、`.esdf` float32 バイナリ保存）へ変換し、読み取り専用 CUDA 3D Texture Memory 上で $O(1)$ のハードウェア三線形補間を実行します。
 - **GPU 前処理・ハッシュボクセル均一化**：`0.10 s` 蓄積した 3D LiDAR 点群を IMU ヨー角＋EMA 並進速度で歪み補正し、床面・自機を除去した上で、固定メモリ GPU 空間ハッシュ表（`262,144` スロット、`6.00 MiB` VRAM、`0.08 m` ボクセル）により近距離の $1/r^2$ 点密度偏りを抑えます。
 - **Clipped $L_1$ 直接照合**：純粋な Clipped $L_1$ 残差（上限 `0.25 m`）を用いた粗密グリッド探索（最終 `2 mm` / `0.0012 rad`）と独立コスト閾値判定（`cost_3d < 0.23 m`）で姿勢を推定します。補助 2D LiDAR 融合・フォールバックにも対応します。
-- **GPU グローバル再位置推定**：起動時や連続 `25` フレーム棄却時に同一の `tex3D` EDF を再利用して全域探索します（Top-4 3D NMS・$180^\circ$ 点対称双子除外付き比率ゲート `0.960`・`cost_3d < 0.202 m` による 3 フレーム連続検証）。
+- **GPU グローバル再位置推定**：起動時や連続 `25` フレーム棄却時に同一の `tex3D` EDF を再利用して全域探索します（Top-4 3D NMS・Top-1/Top-2 比率ゲート `0.950`・`cost_3d < 0.202 m` による 3 フレーム連続検証）。
 - **動的障害物分離**：事前マップに存在しない点群（$d \ge 0.15\,\text{m}$）を `/dynamic_cloud` として配信します。
 
 https://github.com/user-attachments/assets/c095bf62-cfac-403c-aa1b-679e0ed4c053
@@ -85,7 +85,7 @@ ros2 launch gn10_pointcloud_localization localization.launch.py use_sim_time:=tr
 | `lidar_2d.enable` / `deskew` | `true` / `true` | 補助 2D LiDAR 融合（`weight_2d_lidar: 0.40`, `min_2d_points: 30`）と歪み補正。 |
 | `velocity_estimation.enable` | `true` | EMA（$\alpha = 0.6$）並進速度予測（`window_sec: 0.20`, `max_linear_velocity: 4.0`）。 |
 | `global_search.range_yaw_diff` / `recovery_yaw_diff` | `3.1415` / `0.40` | 全周探索時 / IMU 方位事前値有効時の Yaw 探索半幅 [rad]。 |
-| `global_search.top_k_candidates` / `uniqueness_ratio` | `4` / `0.960` | NMS 上位候補数と Top-1/Top-2 比率ゲート（$180^\circ$ 点対称双子除外）。 |
+| `global_search.top_k_candidates` / `uniqueness_ratio` | `4` / `0.950` | NMS 上位候補数と異なる姿勢モード間の Top-1/Top-2 比率ゲート。 |
 | `global_search.verify_frames` / `cost_threshold_3d` | `3` / `0.202` | 大域復帰確定に必要な連続合格フレーム数と 3D コスト閾値 [m]。 |
 | `global_search.lost_count_thresh` | `25` | グローバル探索発動までの連続棄却フレーム数。 |
 

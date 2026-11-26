@@ -60,7 +60,7 @@ package "3. 振動防止・双方向フォールバック状態遷移 (`PoseSolv
 COMP_EQ -down-> STEP_A
 
 package "4. 最終マッチング合否判定 (`MatchingParams::isMatchAccepted`)" #FCE4EC {
-    rectangle "**ローカル追従時 `pass_3d || pass_2d` が成立するとき合格 (`true`)**:\n* **`pass_3d`** (N_3d >= min_3d_points):\n  cost_3d < cost_threshold_3d (追従 0.23 m / 大域復帰 0.202 m)\n* **`pass_2d`** (N_2d >= min_2d_points):\n  cost_2d < cost_threshold_2d (0.04 m)\n\n**グローバル探索復帰時の追加制約 (`N_3d >= min_3d_points`)**:\n* `global_search.cost_threshold_3d` (`0.202 m`)・3D 合格 (`pass_3d` / `is_global_recovery_accepted`) を必須化し、2D 不合格・2D 単独フォールバックを `cost_3d` 尺度へ正規化\n* Top-1/Top-2 Uniqueness 判定 (`best.cost <= uniqueness_ratio * second_best_cost`, `0.960`, 180° 点対称ツイン除外)\n* 初回大域一致 (1) + 続く Trial 検証 (2) の計 `verify_frames` (`3`) 連続合格後に `is_lost_` を解除" as FINAL_ACCEPT
+    rectangle "**ローカル追従時 `pass_3d || pass_2d` が成立するとき合格 (`true`)**:\n* **`pass_3d`** (N_3d >= min_3d_points):\n  cost_3d < cost_threshold_3d (追従 0.23 m / 大域復帰 0.202 m)\n* **`pass_2d`** (N_2d >= min_2d_points):\n  cost_2d < cost_threshold_2d (0.04 m)\n\n**グローバル探索復帰時の追加制約 (`N_3d >= min_3d_points`)**:\n* `global_search.cost_threshold_3d` (`0.202 m`)・3D 合格 (`pass_3d` / `is_global_recovery_accepted`) を必須化し、2D 不合格・2D 単独フォールバックを `cost_3d` 尺度へ正規化\n* Top-1/Top-2 Uniqueness 判定 (`best.cost <= uniqueness_ratio * second_best_cost`, `0.950`, 異なる姿勢モード間で比較)\n* 初回大域一致 (1) + 続く Trial 検証 (2) の計 `verify_frames` (`3`) 連続合格後に `is_lost_` を解除" as FINAL_ACCEPT
 }
 
 STEP_A -down-> FINAL_ACCEPT : 通常時 (`pass_3d` かつ 2D スパイクなし)
