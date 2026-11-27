@@ -113,6 +113,10 @@ Measured on Desktop (Ryzen 7 5700X + RTX 4060) and Jetson Orin Nano (`25 W` mode
 - Dense 3D CUDA Arrays scale as $O(V / r_{\text{grid}}^3)$ in map volume $V$, targeting medium-scale static indoor spaces (tens of meters).
 - Requires an NVIDIA CUDA GPU and uses `168–223 MiB` host RSS.
 
+**S1 Unity 6 Physics GT:**
+
+https://github.com/user-attachments/assets/490dc752-1bef-429f-99ad-afc3ba2bac26
+
 ## 8. License
 
 Licensed under the [Apache 2.0 License](./LICENSE).
